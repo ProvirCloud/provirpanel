@@ -1,0 +1,56 @@
+version: "3.9"
+
+services:
+  cloudpainel:
+    image: node:18-alpine
+    container_name: cloudpainel
+    working_dir: /app
+    volumes:
+      - ./:/app
+    command: sh -c "npm install && npm run start"
+    environment:
+      NODE_ENV: production
+      PORT: ${APP_PORT}
+      DATABASE_URL: postgres://${POSTGRES_USER}:${POSTGRES_PASSWORD}@postgresql:5432/${POSTGRES_DB}
+      DATABASE_SSL: "false"
+      JWT_SECRET: ${JWT_SECRET}
+      JWT_EXPIRES_IN: ${JWT_EXPIRES_IN}
+    depends_on:
+      - postgresql
+    networks:
+      - cloudpainel_net
+
+  postgresql:
+    image: postgres:16-alpine
+    container_name: cloudpainel_postgres
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+      POSTGRES_DB: ${POSTGRES_DB}
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    networks:
+      - cloudpainel_net
+
+  nginx:
+    image: nginx:1.25-alpine
+    container_name: cloudpainel_nginx
+    restart: unless-stopped
+    ports:
+      - "80:80"
+      - "443:443"
+    volumes:
+      - ./nginx/conf.d:/etc/nginx/conf.d:ro
+      - ./nginx/certs:/etc/nginx/certs:ro
+    depends_on:
+      - cloudpainel
+    networks:
+      - cloudpainel_net
+
+volumes:
+  postgres_data:
+
+networks:
+  cloudpainel_net:
+    driver: bridge

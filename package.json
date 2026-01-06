@@ -1,0 +1,29 @@
+{
+  "name": "provirpanel",
+  "version": "1.0.0",
+  "description": "Provir Cloud Panel backend",
+  "main": "backend/src/server.js",
+  "scripts": {
+    "start": "node backend/src/server.js",
+    "dev": "nodemon backend/src/server.js",
+    "pm2:start": "pm2 start backend/src/server.js --name provirpanel"
+  },
+  "dependencies": {
+    "cors": "^2.8.5",
+    "docker-sdk": "^0.1.0",
+    "dockerode": "^4.0.0",
+    "dotenv": "^16.4.5",
+    "express": "^4.19.2",
+    "helmet": "^7.1.0",
+    "jsonwebtoken": "^9.0.2",
+    "multer": "^1.4.5-lts.1",
+    "pg": "^8.11.5",
+    "socket.io": "^4.7.5",
+    "bcrypt": "^5.1.1",
+    "tar-fs": "^3.0.4",
+    "axios": "^1.6.0"
+  },
+  "devDependencies": {
+    "pm2": "^5.4.2"
+  }
+}
