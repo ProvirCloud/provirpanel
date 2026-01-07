@@ -4,6 +4,7 @@ import { Terminal as TerminalIcon } from 'lucide-react'
 import { Terminal as XTerm } from 'xterm'
 import 'xterm/css/xterm.css'
 import { createTerminalSocket } from '../services/socket.js'
+import api from '../services/api.js'
 
 // Polyfill para crypto.randomUUID
 const generateUUID = () => {
@@ -656,15 +657,10 @@ const FileEditorModal = ({ filename, cwd, onClose }) => {
     const loadFile = async () => {
       try {
         const path = filename.startsWith('/') ? filename : `${cwd}/${filename}`
-        const response = await fetch(`/api/storage/file?path=${encodeURIComponent(path)}`)
-        if (response.ok) {
-          const text = await response.text()
-          setContent(text)
-        } else {
-          setContent('// Arquivo não encontrado ou erro ao carregar')
-        }
+        const response = await api.get(`/storage/file?path=${encodeURIComponent(path)}`)
+        setContent(response.data)
       } catch (error) {
-        setContent('// Erro ao carregar arquivo')
+        setContent('// Arquivo não encontrado ou erro ao carregar')
       } finally {
         setLoading(false)
       }
@@ -676,10 +672,8 @@ const FileEditorModal = ({ filename, cwd, onClose }) => {
     setSaving(true)
     try {
       const path = filename.startsWith('/') ? filename : `${cwd}/${filename}`
-      await fetch(`/api/storage/file?path=${encodeURIComponent(path)}`, {
-        method: 'PUT',
-        headers: { 'Content-Type': 'text/plain' },
-        body: content
+      await api.put(`/storage/file?path=${encodeURIComponent(path)}`, content, {
+        headers: { 'Content-Type': 'text/plain' }
       })
     } catch (error) {
       console.error('Erro ao salvar:', error)
