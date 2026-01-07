@@ -42,14 +42,49 @@ app.get('/logs', authMiddleware, (req, res) => {
     ]
   });
 });
-app.get('/health', authMiddleware, (req, res) => {
-  res.json({ 
-    services: {
-      database: { status: 'healthy', message: 'PostgreSQL conectado' },
-      docker: { status: 'healthy', message: 'Docker funcionando' },
-      nginx: { status: 'healthy', message: 'Nginx OK' }
+app.get('/health', authMiddleware, async (req, res) => {
+  const services = {};
+  
+  // Verificar PostgreSQL
+  try {
+    await pool.query('SELECT 1');
+    services.database = { status: 'healthy', message: 'PostgreSQL conectado' };
+  } catch (error) {
+    services.database = { status: 'error', message: 'Erro: ' + error.message };
+  }
+  
+  // Verificar Docker
+  try {
+    const dockerManager = new DockerManager();
+    await dockerManager.listContainers();
+    services.docker = { status: 'healthy', message: 'Docker funcionando' };
+  } catch (error) {
+    services.docker = { status: 'error', message: 'Docker não disponível' };
+  }
+  
+  // Verificar Nginx
+  try {
+    require('child_process').execSync('nginx -t', { stdio: 'ignore' });
+    services.nginx = { status: 'healthy', message: 'Nginx OK' };
+  } catch (error) {
+    services.nginx = { status: 'warning', message: 'Problema no Nginx' };
+  }
+  
+  // Verificar PM2
+  try {
+    const pm2List = require('child_process').execSync('pm2 jlist', { encoding: 'utf8' });
+    const processes = JSON.parse(pm2List);
+    const backend = processes.find(p => p.name === 'provirpanel-backend');
+    if (backend && backend.pm2_env.status === 'online') {
+      services.pm2 = { status: 'healthy', message: 'Backend online' };
+    } else {
+      services.pm2 = { status: 'warning', message: 'Backend offline' };
     }
-  });
+  } catch (error) {
+    services.pm2 = { status: 'error', message: 'PM2 não disponível' };
+  }
+  
+  res.json({ services });
 });
 app.use('/terminal', authMiddleware, terminalRoutes.router);
 app.use('/docker', authMiddleware, dockerRoutes.router);
