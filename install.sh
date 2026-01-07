@@ -149,6 +149,7 @@ clone_repo() {
   else
     log "Repository found, checking for updates"
     cd "${INSTALL_DIR}"
+    git config --global --add safe.directory "${INSTALL_DIR}"
     git fetch origin
     if ! git diff --quiet HEAD origin/main; then
       log "Updates found, pulling latest changes"
