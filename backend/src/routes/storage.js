@@ -149,8 +149,28 @@ router.get('/media', async (req, res, next) => {
 
 router.get('/file', async (req, res, next) => {
   try {
-    const content = await storageManager.readFile(req.query.path);
-    res.json({ content });
+    const targetPath = req.query.path;
+    let content;
+    
+    // Se o path começa com /, tenta ler do diretório do projeto
+    if (targetPath && targetPath.startsWith('/') && !targetPath.startsWith('/home')) {
+      const projectRoot = path.resolve(process.cwd());
+      const absolutePath = path.join(projectRoot, targetPath);
+      
+      // Verificar se o arquivo está dentro do projeto
+      if (absolutePath.startsWith(projectRoot)) {
+        try {
+          content = await require('fs').promises.readFile(absolutePath, 'utf8');
+          return res.send(content);
+        } catch (err) {
+          // Se não encontrar, tenta no storage normal
+        }
+      }
+    }
+    
+    // Fallback para o storage normal
+    content = await storageManager.readFile(targetPath);
+    res.send(content);
   } catch (err) {
     next(err);
   }
@@ -158,11 +178,31 @@ router.get('/file', async (req, res, next) => {
 
 router.put('/file', async (req, res, next) => {
   try {
-    const { path: targetPath, content } = req.body || {};
+    const targetPath = req.query.path || req.body.path;
+    const content = req.body.content || req.body;
+    
     if (!targetPath) {
       return res.status(400).json({ message: 'path is required' });
     }
-    await storageManager.writeFile(targetPath, content ?? '');
+    
+    // Se o path começa com /, tenta salvar no diretório do projeto
+    if (targetPath.startsWith('/') && !targetPath.startsWith('/home')) {
+      const projectRoot = path.resolve(process.cwd());
+      const absolutePath = path.join(projectRoot, targetPath);
+      
+      // Verificar se o arquivo está dentro do projeto
+      if (absolutePath.startsWith(projectRoot)) {
+        try {
+          await require('fs').promises.writeFile(absolutePath, typeof content === 'string' ? content : JSON.stringify(content), 'utf8');
+          return res.json({ status: 'saved' });
+        } catch (err) {
+          // Se não conseguir, tenta no storage normal
+        }
+      }
+    }
+    
+    // Fallback para o storage normal
+    await storageManager.writeFile(targetPath, typeof content === 'string' ? content : JSON.stringify(content));
     res.json({ status: 'saved' });
   } catch (err) {
     next(err);

@@ -1,5 +1,5 @@
 import { NavLink } from 'react-router-dom'
-import { Activity, Boxes, Files, Terminal, Globe, Users } from 'lucide-react'
+import { Activity, Boxes, Files, Terminal, Globe, Users, FileText } from 'lucide-react'
 
 const linkBase =
   'flex items-center gap-3 rounded-xl px-4 py-3 text-sm font-medium transition hover:bg-slate-800/70'
@@ -67,6 +67,15 @@ const Sidebar = () => {
         >
           <Users className="h-4 w-4" />
           Usuários
+        </NavLink>
+        <NavLink
+          to="/logs"
+          className={({ isActive }) =>
+            `${linkBase} ${isActive ? 'bg-emerald-500/15 text-emerald-200' : ''}`
+          }
+        >
+          <FileText className="h-4 w-4" />
+          Logs
         </NavLink>
       </nav>
       <div className="mt-auto rounded-2xl border border-slate-800 bg-slate-900/60 p-4 text-xs text-slate-400">

@@ -8,6 +8,7 @@ import DockerPanel from './components/DockerPanel.jsx'
 import FileManager from './components/FileManager.jsx'
 import DomainsPanel from './components/DomainsPanel.jsx'
 import UsersPanel from './components/UsersPanel.jsx'
+import LogsPanel from './components/LogsPanel.jsx'
 import api from './services/api.js'
 
 const App = () => {
@@ -101,6 +102,7 @@ const App = () => {
           <Route path="domains" element={<DomainsPanel />} />
           <Route path="files" element={<FileManager />} />
           <Route path="users" element={<UsersPanel />} />
+          <Route path="logs" element={<LogsPanel />} />
         </Route>
         <Route path="*" element={<Navigate to="/" replace />} />
       </Routes>
