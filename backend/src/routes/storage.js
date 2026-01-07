@@ -150,17 +150,28 @@ router.get('/media', async (req, res, next) => {
 router.get('/file', async (req, res, next) => {
   try {
     const targetPath = req.query.path;
-    let content;
+    
+    // Se o arquivo não tem extensão de diretório, tenta na raiz do projeto primeiro
+    if (targetPath && !targetPath.includes('/')) {
+      const projectRoot = path.resolve(process.cwd());
+      const absolutePath = path.join(projectRoot, targetPath);
+      
+      try {
+        const content = await require('fs').promises.readFile(absolutePath, 'utf8');
+        return res.send(content);
+      } catch (err) {
+        // Se não encontrar na raiz, tenta no storage
+      }
+    }
     
     // Se o path começa com /, tenta ler do diretório do projeto
     if (targetPath && targetPath.startsWith('/') && !targetPath.startsWith('/home')) {
       const projectRoot = path.resolve(process.cwd());
       const absolutePath = path.join(projectRoot, targetPath);
       
-      // Verificar se o arquivo está dentro do projeto
       if (absolutePath.startsWith(projectRoot)) {
         try {
-          content = await require('fs').promises.readFile(absolutePath, 'utf8');
+          const content = await require('fs').promises.readFile(absolutePath, 'utf8');
           return res.send(content);
         } catch (err) {
           // Se não encontrar, tenta no storage normal
@@ -170,7 +181,7 @@ router.get('/file', async (req, res, next) => {
     
     // Fallback para o storage normal
     try {
-      content = await storageManager.readFile(targetPath);
+      const content = await storageManager.readFile(targetPath);
       res.send(content);
     } catch (err) {
       res.status(404).json({ message: 'Arquivo não encontrado' });
@@ -189,12 +200,24 @@ router.put('/file', async (req, res, next) => {
       return res.status(400).json({ message: 'path is required' });
     }
     
+    // Se o arquivo não tem extensão de diretório, tenta salvar na raiz do projeto primeiro
+    if (targetPath && !targetPath.includes('/')) {
+      const projectRoot = path.resolve(process.cwd());
+      const absolutePath = path.join(projectRoot, targetPath);
+      
+      try {
+        await require('fs').promises.writeFile(absolutePath, typeof content === 'string' ? content : JSON.stringify(content), 'utf8');
+        return res.json({ status: 'saved' });
+      } catch (err) {
+        // Se não conseguir, tenta no storage
+      }
+    }
+    
     // Se o path começa com /, tenta salvar no diretório do projeto
     if (targetPath.startsWith('/') && !targetPath.startsWith('/home')) {
       const projectRoot = path.resolve(process.cwd());
       const absolutePath = path.join(projectRoot, targetPath);
       
-      // Verificar se o arquivo está dentro do projeto
       if (absolutePath.startsWith(projectRoot)) {
         try {
           await require('fs').promises.writeFile(absolutePath, typeof content === 'string' ? content : JSON.stringify(content), 'utf8');
