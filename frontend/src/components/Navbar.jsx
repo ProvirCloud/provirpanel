@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState } from 'react'
 import { Bell, CircleUser, Shield, LogOut, KeyRound, UserPlus, ChevronDown } from 'lucide-react'
+import logoImg from '../assets/logo.png'
 
 const Navbar = ({ onLogout, onChangePassword, onCreateUser, username = 'admin' }) => {
   const [open, setOpen] = useState(false)
@@ -19,7 +20,7 @@ const Navbar = ({ onLogout, onChangePassword, onCreateUser, username = 'admin' }
     <header className="flex items-center justify-between border-b border-slate-800 bg-slate-900/60 px-6 py-4 backdrop-blur">
       <div className="flex items-center gap-4">
         <div className="flex h-11 w-11 items-center justify-center rounded-2xl bg-gradient-to-br from-emerald-400/20 to-blue-500/20 border border-emerald-400/30">
-          <img src="/src/assets/logo.png" alt="Provir" className="h-7 w-7" />
+          <img src={logoImg} alt="Provir" className="h-7 w-7" />
         </div>
         <div>
           <p className="text-xs uppercase tracking-[0.2em] text-emerald-200/80 font-medium">Provir Cloud Panel</p>

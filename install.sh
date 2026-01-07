@@ -279,7 +279,7 @@ server {
     # Admin Panel - servir arquivos estáticos
     location /admin/ {
         alias /var/www/panel/;
-        try_files $uri $uri/ /admin/index.html;
+        try_files \$uri \$uri/ /admin/index.html;
         index index.html;
     }
     

@@ -1,6 +1,7 @@
 import { useState } from 'react'
 import { useNavigate } from 'react-router-dom'
 import api from '../services/api.js'
+import logoImg from '../assets/logo.png'
 
 const LoginPage = () => {
   const navigate = useNavigate()
@@ -26,7 +27,7 @@ const LoginPage = () => {
       <div className="mx-auto max-w-lg rounded-3xl border border-slate-800 bg-slate-900/70 p-10 shadow-2xl shadow-emerald-500/10">
         <div className="flex items-center gap-4 mb-6">
           <div className="flex h-12 w-12 items-center justify-center rounded-2xl bg-gradient-to-br from-emerald-400/20 to-blue-500/20 border border-emerald-400/30">
-            <img src="/src/assets/logo.png" alt="Provir" className="h-8 w-8" />
+            <img src={logoImg} alt="Provir" className="h-8 w-8" />
           </div>
           <div>
             <p className="text-xs uppercase tracking-[0.3em] text-emerald-200/70 font-medium">Provir Cloud Panel</p>
