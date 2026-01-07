@@ -28,10 +28,6 @@ app.use(helmet());
 app.use(cors());
 app.use(express.json());
 
-app.get('/health', (req, res) => {
-  res.json({ status: 'ok' });
-});
-
 app.use('/auth', authRoutes);
 app.use('/api/metrics', authMiddleware, metricsRoutes);
 app.get('/logs', authMiddleware, (req, res) => {
