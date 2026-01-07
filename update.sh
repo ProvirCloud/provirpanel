@@ -44,5 +44,6 @@ sudo chmod -R 755 /var/www/panel
 # Reiniciar backend
 log "Reiniciando backend"
 pm2 restart provirpanel-backend
+pm2 save
 
 log "Atualização concluída"
