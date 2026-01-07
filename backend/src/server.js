@@ -16,7 +16,6 @@ const dockerRoutes = require('./routes/docker');
 const storageRoutes = require('./routes/storage');
 const cicdRoutes = require('./routes/ci-cd');
 const domainsRoutes = require('./routes/domains');
-const logsRoutes = require('./routes/logs');
 const authMiddleware = require('./middleware/auth');
 const errorHandler = require('./middleware/errorHandler');
 const MetricsCollector = require('./services/MetricsCollector');
@@ -35,7 +34,6 @@ app.get('/health', (req, res) => {
 
 app.use('/auth', authRoutes);
 app.use('/api/metrics', authMiddleware, metricsRoutes);
-app.use('/api', authMiddleware, logsRoutes);
 app.use('/terminal', authMiddleware, terminalRoutes.router);
 app.use('/docker', authMiddleware, dockerRoutes.router);
 app.use('/storage', authMiddleware, storageRoutes);
