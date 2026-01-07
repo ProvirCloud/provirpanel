@@ -25,6 +25,7 @@ const LogsPanel = () => {
   const loadHealth = async () => {
     try {
       const response = await api.get('/health')
+      console.log('Health response:', response.data)
       setHealth(response.data)
     } catch (error) {
       console.error('Erro ao carregar health:', error)
