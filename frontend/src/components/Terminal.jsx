@@ -5,6 +5,18 @@ import { Terminal as XTerm } from 'xterm'
 import 'xterm/css/xterm.css'
 import { createTerminalSocket } from '../services/socket.js'
 
+// Polyfill para crypto.randomUUID
+const generateUUID = () => {
+  if (typeof crypto !== 'undefined' && crypto.randomUUID) {
+    return crypto.randomUUID()
+  }
+  return 'xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx'.replace(/[xy]/g, function(c) {
+    const r = Math.random() * 16 | 0
+    const v = c === 'x' ? r : (r & 0x3 | 0x8)
+    return v.toString(16)
+  })
+}
+
 const formatPrompt = (cwd) => {
   const display = cwd || '~'
   return `\x1b[1;34mcloud\x1b[0m@\x1b[1;34mpainel\x1b[0m:\x1b[1;32m${display}\x1b[0m$ `
@@ -95,7 +107,7 @@ const writePrompt = (terminal, cwd, newLine = true) => {
 
 const Terminal = () => {
   const [tabs, setTabs] = useState(() => [
-    { id: crypto.randomUUID(), title: 'Terminal 1', status: 'disconnected' }
+    { id: generateUUID(), title: 'Terminal 1', status: 'disconnected' }
   ])
   const [activeId, setActiveId] = useState(() => tabs[0].id)
   const historyRef = useRef(loadHistory())
@@ -434,7 +446,7 @@ const Terminal = () => {
   }, [])
 
   const addTab = () => {
-    const id = crypto.randomUUID()
+    const id = generateUUID()
     setTabs((prev) => [
       ...prev,
       { id, title: `Terminal ${prev.length + 1}`, status: 'disconnected' }
