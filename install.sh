@@ -147,7 +147,16 @@ clone_repo() {
     }
     chown -R provirpanel:provirpanel "${INSTALL_DIR}"
   else
-    log "Repository found, continuing installation"
+    log "Repository found, checking for updates"
+    cd "${INSTALL_DIR}"
+    git fetch origin
+    if ! git diff --quiet HEAD origin/main; then
+      log "Updates found, pulling latest changes"
+      git reset --hard origin/main
+      chown -R provirpanel:provirpanel "${INSTALL_DIR}"
+    else
+      log "Repository is up to date"
+    fi
   fi
 }
 
@@ -228,14 +237,26 @@ ENV
 configure_nginx() {
   log "Configuring Nginx"
   
+  # Remover site padrão primeiro
+  rm -f /etc/nginx/sites-enabled/default
+  
+  # Criar diretório para arquivos estáticos
+  mkdir -p /var/www/panel
+  
+  # Copiar arquivos do frontend para www-data
+  cp -r "${INSTALL_DIR}/frontend/dist/"* /var/www/panel/
+  chown -R www-data:www-data /var/www/panel
+  chmod -R 755 /var/www/panel
+  
   cat <<NGINX > /etc/nginx/sites-available/provirpanel
 server {
-    listen 80;
+    listen 80 default_server;
+    listen [::]:80 default_server;
     server_name _;
     
     # API Backend
     location /api/ {
-        proxy_pass http://localhost:${PANEL_PORT};
+        proxy_pass http://localhost:${PANEL_PORT}/;
         proxy_set_header Host \$host;
         proxy_set_header X-Real-IP \$remote_addr;
         proxy_set_header X-Forwarded-For \$proxy_add_x_forwarded_for;
@@ -255,32 +276,32 @@ server {
     }
     
     # Admin Panel - servir arquivos estáticos
-    location /admin {
-        alias ${INSTALL_DIR}/frontend/dist;
-        try_files \$uri \$uri/ /index.html;
+    location /admin/ {
+        alias /var/www/panel/;
+        try_files \$uri \$uri/ @fallback;
         index index.html;
     }
     
+    location @fallback {
+        rewrite ^.*$ /admin/index.html last;
+    }
+    
     # Admin Panel assets
-    location /assets/ {
-        alias ${INSTALL_DIR}/frontend/dist/assets/;
+    location /admin/assets/ {
+        alias /var/www/panel/assets/;
         expires 1y;
         add_header Cache-Control "public, immutable";
     }
     
     # Default redirect to admin
     location = / {
-        return 301 /admin;
+        return 301 /admin/;
     }
 }
 NGINX
 
-  # Garantir permissões do diretório dist
-  chmod -R 755 "${INSTALL_DIR}/frontend/dist"
-  
   # Enable site
   ln -sf /etc/nginx/sites-available/provirpanel /etc/nginx/sites-enabled/
-  rm -f /etc/nginx/sites-enabled/default
   
   # Test and reload nginx
   nginx -t && systemctl reload nginx
