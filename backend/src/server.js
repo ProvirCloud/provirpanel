@@ -32,25 +32,25 @@ app.get('/health', (req, res) => {
   res.json({ status: 'ok' });
 });
 
-app.get('/api/logs', authMiddleware, (req, res) => {
-  const logs = [
-    { timestamp: new Date().toISOString(), level: 'info', message: 'Sistema iniciado' },
-    { timestamp: new Date().toISOString(), level: 'info', message: 'Servidor rodando na porta 3000' }
-  ];
-  res.json({ logs });
-});
-
-app.get('/api/health', authMiddleware, (req, res) => {
-  const services = {
-    database: { status: 'healthy', message: 'PostgreSQL conectado' },
-    docker: { status: 'healthy', message: 'Docker funcionando' },
-    nginx: { status: 'healthy', message: 'Nginx configurado' }
-  };
-  res.json({ services });
-});
-
 app.use('/auth', authRoutes);
 app.use('/api/metrics', authMiddleware, metricsRoutes);
+app.use('/api/logs', authMiddleware, (req, res) => {
+  res.json({ 
+    logs: [
+      { timestamp: new Date().toISOString(), level: 'info', message: 'Sistema iniciado' },
+      { timestamp: new Date().toISOString(), level: 'info', message: 'Backend rodando' }
+    ]
+  });
+});
+app.use('/api/health', authMiddleware, (req, res) => {
+  res.json({ 
+    services: {
+      database: { status: 'healthy', message: 'PostgreSQL conectado' },
+      docker: { status: 'healthy', message: 'Docker funcionando' },
+      nginx: { status: 'healthy', message: 'Nginx OK' }
+    }
+  });
+});
 app.use('/terminal', authMiddleware, terminalRoutes.router);
 app.use('/docker', authMiddleware, dockerRoutes.router);
 app.use('/storage', authMiddleware, storageRoutes);
