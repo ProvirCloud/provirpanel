@@ -500,7 +500,8 @@ router.post('/services', async (req, res, next) => {
             'PGADMIN_DEFAULT_EMAIL=admin@admin.com',
             'PGADMIN_DEFAULT_PASSWORD=admin',
             'PGADMIN_CONFIG_SERVER_MODE=False',
-            'PGADMIN_CONFIG_MASTER_PASSWORD_REQUIRED=False'
+            'PGADMIN_CONFIG_MASTER_PASSWORD_REQUIRED=False',
+            'PGADMIN_CONFIG_SESSION_DB_PATH=/var/lib/pgadmin/sessions'
           ],
           ExposedPorts: { '80/tcp': {} }
         };
