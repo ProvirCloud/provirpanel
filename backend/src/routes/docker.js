@@ -470,13 +470,22 @@ router.post('/services', async (req, res, next) => {
         }];
         
         const pgAdminDir = pgAdminVolumes[0].hostPath;
+        
+        if (fs.existsSync(pgAdminDir)) {
+          try {
+            require('child_process').execSync(`sudo rm -rf "${pgAdminDir}"`);
+          } catch (err) {
+            progress.push(`⚠️ Aviso ao remover diretório antigo: ${err.message}`);
+          }
+        }
+        
         fs.mkdirSync(pgAdminDir, { recursive: true });
         fs.mkdirSync(path.join(pgAdminDir, 'sessions'), { recursive: true });
         fs.mkdirSync(path.join(pgAdminDir, 'storage'), { recursive: true });
         
-        // Corrigir permissões (UID 5050 = pgadmin user)
         try {
           require('child_process').execSync(`sudo chown -R 5050:5050 "${pgAdminDir}"`);
+          require('child_process').execSync(`sudo chmod -R 755 "${pgAdminDir}"`);
         } catch (err) {
           progress.push(`⚠️ Aviso: Não foi possível ajustar permissões: ${err.message}`);
         }
