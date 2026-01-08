@@ -349,6 +349,18 @@ router.post('/services', async (req, res, next) => {
         .forEach((m) => {
           progress.push(`📂 Criando diretório: ${m.hostPath}`);
           fs.mkdirSync(path.resolve(m.hostPath), { recursive: true });
+          
+          // Fix PostgreSQL permissions
+          if (templateId === 'postgres-db') {
+            try {
+              const { execSync } = require('child_process');
+              execSync(`chown -R 999:999 "${m.hostPath}"`, { stdio: 'ignore' });
+              execSync(`chmod -R 700 "${m.hostPath}"`, { stdio: 'ignore' });
+              progress.push(`✅ Permissões PostgreSQL ajustadas`);
+            } catch (err) {
+              progress.push(`⚠️ Aviso: ${err.message}`);
+            }
+          }
         });
     } catch (err) {
       progress.push(`❌ Erro ao criar diretórios: ${err.message}`);
