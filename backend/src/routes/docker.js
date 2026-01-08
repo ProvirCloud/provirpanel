@@ -481,8 +481,8 @@ router.post('/services', async (req, res, next) => {
         
         try {
           const { execSync } = require('child_process');
-          execSync(`sudo chown -R 5050:0 "${pgAdminDir}"`, { stdio: 'ignore' });
-          execSync(`sudo chmod -R u+rwX,g+rwX "${pgAdminDir}"`, { stdio: 'ignore' });
+          execSync(`chown -R 5050:0 "${pgAdminDir}"`, { stdio: 'ignore' });
+          execSync(`chmod -R u+rwX,g+rwX "${pgAdminDir}"`, { stdio: 'ignore' });
         } catch (err) {
           progress.push(`⚠️ Aviso: Não foi possível ajustar permissões: ${err.message}`);
         }
