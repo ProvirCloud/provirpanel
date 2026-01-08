@@ -472,20 +472,17 @@ router.post('/services', async (req, res, next) => {
         const pgAdminDir = pgAdminVolumes[0].hostPath;
         
         if (fs.existsSync(pgAdminDir)) {
-          try {
-            require('child_process').execSync(`sudo rm -rf "${pgAdminDir}"`);
-          } catch (err) {
-            progress.push(`⚠️ Aviso ao remover diretório antigo: ${err.message}`);
-          }
+          fs.rmSync(pgAdminDir, { recursive: true, force: true });
         }
         
-        fs.mkdirSync(pgAdminDir, { recursive: true });
-        fs.mkdirSync(path.join(pgAdminDir, 'sessions'), { recursive: true });
-        fs.mkdirSync(path.join(pgAdminDir, 'storage'), { recursive: true });
+        fs.mkdirSync(pgAdminDir, { recursive: true, mode: 0o777 });
+        fs.mkdirSync(path.join(pgAdminDir, 'sessions'), { recursive: true, mode: 0o777 });
+        fs.mkdirSync(path.join(pgAdminDir, 'storage'), { recursive: true, mode: 0o777 });
         
         try {
-          require('child_process').execSync(`sudo chown -R 5050:5050 "${pgAdminDir}"`);
-          require('child_process').execSync(`sudo chmod -R 755 "${pgAdminDir}"`);
+          fs.chmodSync(pgAdminDir, 0o777);
+          fs.chmodSync(path.join(pgAdminDir, 'sessions'), 0o777);
+          fs.chmodSync(path.join(pgAdminDir, 'storage'), 0o777);
         } catch (err) {
           progress.push(`⚠️ Aviso: Não foi possível ajustar permissões: ${err.message}`);
         }
