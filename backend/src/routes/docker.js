@@ -489,6 +489,7 @@ router.post('/services', async (req, res, next) => {
         
         const pgAdminConfig = {
           name: `${name}-pgadmin`,
+          User: '0:0',
           HostConfig: {
             NetworkMode: networkName,
             PortBindings: {
