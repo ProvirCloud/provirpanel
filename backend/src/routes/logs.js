@@ -10,6 +10,7 @@ const pool = require('../config/database');
 const router = express.Router();
 const dockerManager = new DockerManager();
 const serviceLogsPath = path.join(process.cwd(), 'backend/logs/service-updates.log');
+const appLogsPath = path.join(process.cwd(), 'backend/logs/app.log');
 
 // Função para ler logs do PM2
 const getPM2Logs = () => {
@@ -80,6 +81,42 @@ const getServiceUpdateLogs = () => {
       timestamp: new Date().toISOString(),
       level: 'warn',
       message: 'Nao foi possivel ler logs de atualizacao: ' + error.message
+    }];
+  }
+};
+
+const getAppLogs = () => {
+  try {
+    if (!fs.existsSync(appLogsPath)) {
+      return [];
+    }
+    const content = fs.readFileSync(appLogsPath, 'utf8');
+    const lines = content.split('\n').filter((line) => line.trim());
+    const logs = lines
+      .map((line) => {
+        try {
+          const parsed = JSON.parse(line);
+          if (!parsed || !parsed.timestamp || !parsed.message) {
+            return null;
+          }
+          return {
+            timestamp: parsed.timestamp,
+            level: parsed.level || 'info',
+            source: parsed.source || 'backend',
+            message: parsed.message
+          };
+        } catch (err) {
+          return null;
+        }
+      })
+      .filter(Boolean);
+    return logs.slice(-200);
+  } catch (error) {
+    return [{
+      timestamp: new Date().toISOString(),
+      level: 'warn',
+      source: 'backend',
+      message: 'Nao foi possivel ler logs da aplicacao: ' + error.message
     }];
   }
 };
@@ -305,6 +342,7 @@ router.get('/logs', async (req, res, next) => {
   try {
     const logs = [
       ...getPM2Logs(),
+      ...getAppLogs(),
       ...getServiceUpdateLogs(),
       ...getDockerLogs(),
       ...getNginxLogs(),

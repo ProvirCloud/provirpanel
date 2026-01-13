@@ -134,11 +134,43 @@ const sanitizeServiceForClient = (service) => ({
   envVars: maskEnvVars(service.envVars || [])
 });
 
-const resolveNodeCommand = (volumes = []) => {
-  const projectRoot = volumes.find((m) => m.hostPath)?.hostPath;
-  if (!projectRoot) return null;
+const resolveProjectPathFromVolume = (volumes = []) => {
+  const volume = volumes.find((m) => m.hostPath && m.containerPath);
+  if (!volume) return null;
 
-  const packagePath = path.join(projectRoot, 'package.json');
+  const root = volume.hostPath;
+  const rootPackage = path.join(root, 'package.json');
+  if (fs.existsSync(rootPackage)) {
+    return { hostPath: root, containerPath: volume.containerPath };
+  }
+
+  try {
+    const entries = fs
+      .readdirSync(root, { withFileTypes: true })
+      .filter((entry) => entry.isDirectory())
+      .map((entry) => entry.name)
+      .sort();
+    for (const entry of entries) {
+      const candidate = path.join(root, entry, 'package.json');
+      if (fs.existsSync(candidate)) {
+        return {
+          hostPath: path.join(root, entry),
+          containerPath: path.posix.join(volume.containerPath, entry)
+        };
+      }
+    }
+  } catch (err) {
+    return null;
+  }
+
+  return null;
+};
+
+const resolveNodeCommand = (volumes = []) => {
+  const project = resolveProjectPathFromVolume(volumes);
+  if (!project?.hostPath) return null;
+
+  const packagePath = path.join(project.hostPath, 'package.json');
   if (!fs.existsSync(packagePath)) return null;
 
   try {
@@ -799,6 +831,10 @@ router.put('/services/:id', async (req, res, next) => {
     const template =
       SERVICE_TEMPLATES.find((t) => t.id === service.templateId) ||
       { env: [], workdir: null, command: null };
+    const projectPath = resolveProjectPathFromVolume(service.volumes);
+    const workdir = projectPath?.containerPath || template.workdir || null;
+    const projectPath = resolveProjectPathFromVolume(service.volumes);
+    const workdir = projectPath?.containerPath || template.workdir || null;
     const resolvedPort = newPort || service.hostPort;
     
     const resolvedEnvVars = mergeEnvVars(envVars, service.envVars || []);
@@ -816,6 +852,9 @@ router.put('/services/:id', async (req, res, next) => {
       'info',
       `Comando definido para ${service.name}: ${containerCmd ? containerCmd.join(' ') : 'padrao'}`
     );
+    if (workdir) {
+      appendServiceLog('info', `WorkingDir para ${service.name}: ${workdir}`);
+    }
 
     const containerConfig = {
       name: service.name,
@@ -837,8 +876,8 @@ router.put('/services/:id', async (req, res, next) => {
     if (containerCmd) {
       containerConfig.Cmd = containerCmd;
     }
-    if (template.workdir) {
-      containerConfig.WorkingDir = template.workdir;
+    if (workdir) {
+      containerConfig.WorkingDir = workdir;
     }
 
     // For Node.js with project, use npm install and start
@@ -916,6 +955,9 @@ router.post('/services/:id/project-upload', upload.single('archive'), async (req
     let containerCmd = service.command || template.command;
     containerCmd = resolveNodeCommand(service.volumes) || containerCmd;
     appendServiceLog('info', `Comando detectado para ${service.name}: ${containerCmd ? containerCmd.join(' ') : 'padrao'}`);
+    if (workdir) {
+      appendServiceLog('info', `WorkingDir para ${service.name}: ${workdir}`);
+    }
 
     if (service.containerId) {
       try {
@@ -948,8 +990,8 @@ router.post('/services/:id/project-upload', upload.single('archive'), async (req
     if (containerCmd) {
       containerConfig.Cmd = containerCmd;
     }
-    if (template.workdir) {
-      containerConfig.WorkingDir = template.workdir;
+    if (workdir) {
+      containerConfig.WorkingDir = workdir;
     }
 
     appendServiceLog('info', `Iniciando novo container para ${service.name}`);

@@ -1,9 +1,22 @@
 'use strict';
 
+const fs = require('fs');
+const path = require('path');
+
+const appLogsPath = path.join(process.cwd(), 'backend/logs/app.log');
+fs.mkdirSync(path.dirname(appLogsPath), { recursive: true });
+
 module.exports = (err, req, res, next) => {
-  // Basic error handler; expand with logging as needed.
   const status = err.status || 500;
+  const message = err.message || 'Internal server error';
+  const entry = {
+    timestamp: new Date().toISOString(),
+    level: 'error',
+    source: 'backend',
+    message: `${req.method} ${req.originalUrl} -> ${message}`
+  };
+  fs.appendFile(appLogsPath, `${JSON.stringify(entry)}\n`, () => {});
   res.status(status).json({
-    message: err.message || 'Internal server error'
+    message
   });
 };
