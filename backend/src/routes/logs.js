@@ -674,31 +674,49 @@ router.get('/logs', async (req, res, next) => {
     const dockerLogs = await getDockerLogsCached();
 
     const dockerEntries = Array.isArray(dockerLogs) ? dockerLogs : [];
+    const dockerSources = [...new Set(dockerEntries.map(l => l.source))];
+
+    // Log de debug para ver quantos logs Docker temos
+    console.log(`[LOGS API] Docker logs: ${dockerEntries.length} entries, sources: ${dockerSources.join(', ')}`);
+
     const hasDockerSource = dockerEntries.some((log) =>
       (log.source || '').startsWith('docker')
     );
     if (!hasDockerSource) {
       dockerEntries.push({
         timestamp: new Date().toISOString(),
-        level: 'info',
-        source: 'docker',
-        message: 'Logs do Docker indisponiveis ou vazios no momento.'
+        level: 'warn',
+        source: 'docker:system',
+        message: 'Nenhum log Docker coletado. Verifique se containers estao rodando e se ha permissao para acessar Docker socket.'
       });
     }
 
+    const pm2Logs = safeLogs('pm2', getPM2Logs);
+    const backendLogs = safeLogs('backend', getAppLogs);
+    const serviceUpdateLogs = safeLogs('service-update', getServiceUpdateLogs);
+    const nginxLogs = safeLogs('nginx', getNginxLogs);
+    const postgresLogs = safeLogs('postgres', getPostgresLogs);
+    const runtimeLogs = getRuntimeLogs();
+
+    console.log(`[LOGS API] Counts - PM2: ${pm2Logs.length}, Backend: ${backendLogs.length}, Service: ${serviceUpdateLogs.length}, Docker: ${dockerEntries.length}, Nginx: ${nginxLogs.length}, Postgres: ${postgresLogs.length}, Runtime: ${runtimeLogs.length}`);
+
     const logs = [
-      ...safeLogs('pm2', getPM2Logs),
-      ...safeLogs('backend', getAppLogs),
-      ...safeLogs('service-update', getServiceUpdateLogs),
+      ...pm2Logs,
+      ...backendLogs,
+      ...serviceUpdateLogs,
       ...dockerEntries,
-      ...safeLogs('nginx', getNginxLogs),
-      ...safeLogs('postgres', getPostgresLogs),
-      ...getRuntimeLogs()
+      ...nginxLogs,
+      ...postgresLogs,
+      ...runtimeLogs
     ]
       .sort((a, b) => new Date(a.timestamp) - new Date(b.timestamp))
-      .slice(-200);
+      .slice(-500); // Aumentado de 200 para 500
+
+    console.log(`[LOGS API] Total logs after slice: ${logs.length}, Docker logs in final: ${logs.filter(l => l.source?.startsWith('docker')).length}`);
+
     res.json({ logs });
   } catch (error) {
+    console.error('[LOGS API] Error:', error);
     res.json({
       logs: [{
         timestamp: new Date().toISOString(),
