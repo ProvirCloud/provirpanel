@@ -523,6 +523,28 @@ router.get('/logs', async (req, res, next) => {
   }
 });
 
+router.get('/logs/health', async (req, res, next) => {
+  try {
+    const logs = [
+      ...getRuntimeLogs(),
+      ...safeLogs('backend', getAppLogs),
+      ...safeLogs('service-update', getServiceUpdateLogs)
+    ]
+      .sort((a, b) => new Date(a.timestamp) - new Date(b.timestamp))
+      .slice(-200);
+    res.json({ logs });
+  } catch (error) {
+    res.json({
+      logs: [{
+        timestamp: new Date().toISOString(),
+        level: 'error',
+        source: 'logs',
+        message: `Falha ao coletar logs de health: ${error.message}`
+      }]
+    });
+  }
+});
+
 // Rota para health check
 router.get('/health', async (req, res, next) => {
   try {

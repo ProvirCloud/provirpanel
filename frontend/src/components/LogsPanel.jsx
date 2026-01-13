@@ -20,7 +20,13 @@ const LogsPanel = () => {
       const response = await api.get('/logs')
       setLogs(response.data.logs || [])
     } catch (error) {
-      console.error('Erro ao carregar logs:', error)
+      try {
+        const response = await api.get('/logs/health')
+        setLogs(response.data.logs || [])
+      } catch (fallbackErr) {
+        setLogs([])
+        console.error('Erro ao carregar logs:', error)
+      }
     }
   }
 
