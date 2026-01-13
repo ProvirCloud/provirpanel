@@ -212,6 +212,7 @@ const getPostgresLogs = () => {
 const getDockerLogs = () => {
   const logs = [];
   let services = [];
+  let containers = [];
   try {
     services = dockerManager.listServices();
   } catch (err) {
@@ -223,12 +224,23 @@ const getDockerLogs = () => {
     }];
   }
 
-  if (!services.length) {
+  try {
+    containers = dockerManager.listContainers();
+  } catch (err) {
+    logs.push({
+      timestamp: new Date().toISOString(),
+      level: 'warn',
+      source: 'docker',
+      message: `Nao foi possivel listar containers do Docker: ${err.message}`
+    });
+  }
+
+  if (!services.length && !containers.length) {
     logs.push({
       timestamp: new Date().toISOString(),
       level: 'info',
       source: 'docker',
-      message: 'Nenhum servico registrado para logs do Docker.'
+      message: 'Nenhum servico registrado ou container ativo para logs.'
     });
     return logs;
   }
@@ -271,6 +283,43 @@ const getDockerLogs = () => {
         level: 'warn',
         source: `docker:${service.name}`,
         message: `Nao foi possivel ler logs do container ${service.containerId}: ${err.message}`
+      });
+    }
+  });
+
+  containers.forEach((container) => {
+    const name = container.Names?.[0]?.replace('/', '') || container.Id.slice(0, 12);
+    if (services.some((service) => service.containerId === container.Id)) {
+      return;
+    }
+    try {
+      const output = execFileSync('docker', ['logs', '--tail', '50', container.Id], {
+        encoding: 'utf8'
+      });
+      const lines = output.split('\n').filter((line) => line.trim());
+      if (!lines.length) {
+        logs.push({
+          timestamp: new Date().toISOString(),
+          level: 'info',
+          source: `docker:${name}`,
+          message: 'Nenhum log recente do container.'
+        });
+      } else {
+        lines.forEach((line) => {
+          logs.push({
+            timestamp: new Date().toISOString(),
+            level: 'info',
+            source: `docker:${name}`,
+            message: line
+          });
+        });
+      }
+    } catch (err) {
+      logs.push({
+        timestamp: new Date().toISOString(),
+        level: 'warn',
+        source: `docker:${name}`,
+        message: `Nao foi possivel ler logs do container ${container.Id}: ${err.message}`
       });
     }
   });
