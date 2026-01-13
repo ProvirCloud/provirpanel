@@ -139,50 +139,85 @@ const readDockerContainerLogs = (containerId, timeoutMs = 2000) =>
   new Promise((resolve, reject) => {
     const container = dockerManager.docker.getContainer(containerId);
     let timeoutId = null;
-    container.logs({ stdout: true, stderr: true, tail: 50 }, (err, stream) => {
+
+    container.logs({ stdout: true, stderr: true, tail: 50 }, (err, data) => {
       if (err) {
         reject(err);
         return;
       }
-      timeoutId = setTimeout(() => {
-        try {
-          stream.destroy();
-        } catch {
-          // ignore
-        }
-        resolve('');
-      }, timeoutMs);
-      let buffer = Buffer.alloc(0);
-      stream.on('data', (chunk) => {
-        buffer = Buffer.concat([buffer, chunk]);
-      });
-      stream.on('end', () => {
-        if (timeoutId) clearTimeout(timeoutId);
+
+      // Se data já é um Buffer (dockerode retorna diretamente em algumas versões)
+      if (Buffer.isBuffer(data)) {
         try {
           const lines = [];
           let offset = 0;
-          while (offset + 8 <= buffer.length) {
-            const size = buffer.readUInt32BE(offset + 4);
+          while (offset + 8 <= data.length) {
+            const size = data.readUInt32BE(offset + 4);
             const start = offset + 8;
             const end = start + size;
-            if (end > buffer.length) break;
-            const payload = buffer.slice(start, end);
+            if (end > data.length) break;
+            const payload = data.slice(start, end);
             lines.push(payload.toString('utf8'));
             offset = end;
           }
           if (!lines.length) {
-            resolve(buffer.toString('utf8'));
+            resolve(data.toString('utf8'));
             return;
           }
           resolve(lines.join(''));
         } catch (parseErr) {
-          resolve(buffer.toString('utf8'));
+          resolve(data.toString('utf8'));
         }
-      });
-      stream.on('error', (streamErr) => {
-        if (timeoutId) clearTimeout(timeoutId);
-        reject(streamErr);
-      });
+        return;
+      }
+
+      // Se data é um stream (versão antiga do dockerode)
+      if (data && typeof data.on === 'function') {
+        timeoutId = setTimeout(() => {
+          try {
+            data.destroy();
+          } catch {
+            // ignore
+          }
+          resolve('');
+        }, timeoutMs);
+
+        let buffer = Buffer.alloc(0);
+        data.on('data', (chunk) => {
+          buffer = Buffer.concat([buffer, chunk]);
+        });
+        data.on('end', () => {
+          if (timeoutId) clearTimeout(timeoutId);
+          try {
+            const lines = [];
+            let offset = 0;
+            while (offset + 8 <= buffer.length) {
+              const size = buffer.readUInt32BE(offset + 4);
+              const start = offset + 8;
+              const end = start + size;
+              if (end > buffer.length) break;
+              const payload = buffer.slice(start, end);
+              lines.push(payload.toString('utf8'));
+              offset = end;
+            }
+            if (!lines.length) {
+              resolve(buffer.toString('utf8'));
+              return;
+            }
+            resolve(lines.join(''));
+          } catch (parseErr) {
+            resolve(buffer.toString('utf8'));
+          }
+        });
+        data.on('error', (streamErr) => {
+          if (timeoutId) clearTimeout(timeoutId);
+          reject(streamErr);
+        });
+        return;
+      }
+
+      // Fallback: data é string ou outro tipo
+      resolve(String(data || ''));
     });
   });
 
