@@ -287,6 +287,27 @@ const checkProjectFiles = (projectPath, files = []) => {
   return files.filter((file) => !fs.existsSync(path.join(projectPath.hostPath, file)));
 };
 
+const findPathCaseInsensitive = (rootDir, relativePath) => {
+  const parts = relativePath.split('/').filter(Boolean);
+  let current = rootDir;
+  const resolvedParts = [];
+  for (const part of parts) {
+    let entries = [];
+    try {
+      entries = fs.readdirSync(current);
+    } catch (err) {
+      return null;
+    }
+    const match = entries.find((entry) => entry.toLowerCase() === part.toLowerCase());
+    if (!match) {
+      return null;
+    }
+    resolvedParts.push(match);
+    current = path.join(current, match);
+  }
+  return resolvedParts.join('/');
+};
+
 const appendServiceLog = (level, message) => {
   const entry = {
     timestamp: new Date().toISOString(),
@@ -916,15 +937,22 @@ router.put('/services/:id', async (req, res, next) => {
     if (projectPath?.hostPath) {
       writeEnvFile(projectPath, resolvedEnvVars, template.env);
       appendServiceLog('info', `Arquivo .env atualizado em ${projectPath.hostPath}`);
-      const missing = checkProjectFiles(projectPath, [
+      const expectedFiles = [
         'package.json',
         'tsconfig.json',
         'app/v1/api/boleto/route.ts',
         'app/v1/api/pix/route.ts',
         'lib/db.ts'
-      ]);
+      ];
+      const missing = checkProjectFiles(projectPath, expectedFiles);
       if (missing.length) {
         appendServiceLog('warn', `Arquivos ausentes no projeto: ${missing.join(', ')}`);
+        missing.forEach((file) => {
+          const suggestion = findPathCaseInsensitive(projectPath.hostPath, file);
+          if (suggestion) {
+            appendServiceLog('warn', `Possivel diferenca de maiusculas: esperado ${file}, encontrado ${suggestion}`);
+          }
+        });
       }
     }
 
@@ -1045,15 +1073,22 @@ router.post('/services/:id/project-upload', upload.single('archive'), async (req
     if (projectPath?.hostPath) {
       writeEnvFile(projectPath, resolvedEnvVars, template.env);
       appendServiceLog('info', `Arquivo .env atualizado em ${projectPath.hostPath}`);
-      const missing = checkProjectFiles(projectPath, [
+      const expectedFiles = [
         'package.json',
         'tsconfig.json',
         'app/v1/api/boleto/route.ts',
         'app/v1/api/pix/route.ts',
         'lib/db.ts'
-      ]);
+      ];
+      const missing = checkProjectFiles(projectPath, expectedFiles);
       if (missing.length) {
         appendServiceLog('warn', `Arquivos ausentes no projeto: ${missing.join(', ')}`);
+        missing.forEach((file) => {
+          const suggestion = findPathCaseInsensitive(projectPath.hostPath, file);
+          if (suggestion) {
+            appendServiceLog('warn', `Possivel diferenca de maiusculas: esperado ${file}, encontrado ${suggestion}`);
+          }
+        });
       }
     }
 

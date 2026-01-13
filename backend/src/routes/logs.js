@@ -135,19 +135,29 @@ const getRuntimeLogs = () => ([
   }
 ]);
 
-const readDockerContainerLogs = (containerId) =>
+const readDockerContainerLogs = (containerId, timeoutMs = 2000) =>
   new Promise((resolve, reject) => {
     const container = dockerManager.docker.getContainer(containerId);
+    let timeoutId = null;
     container.logs({ stdout: true, stderr: true, tail: 50 }, (err, stream) => {
       if (err) {
         reject(err);
         return;
       }
+      timeoutId = setTimeout(() => {
+        try {
+          stream.destroy();
+        } catch {
+          // ignore
+        }
+        resolve('');
+      }, timeoutMs);
       let buffer = Buffer.alloc(0);
       stream.on('data', (chunk) => {
         buffer = Buffer.concat([buffer, chunk]);
       });
       stream.on('end', () => {
+        if (timeoutId) clearTimeout(timeoutId);
         try {
           const lines = [];
           let offset = 0;
@@ -169,7 +179,10 @@ const readDockerContainerLogs = (containerId) =>
           resolve(buffer.toString('utf8'));
         }
       });
-      stream.on('error', reject);
+      stream.on('error', (streamErr) => {
+        if (timeoutId) clearTimeout(timeoutId);
+        reject(streamErr);
+      });
     });
   });
 
@@ -344,6 +357,19 @@ const getDockerLogs = async () => {
   return logs;
 };
 
+const getDockerLogsSafe = async () => {
+  try {
+    return await getDockerLogs();
+  } catch (err) {
+    return [{
+      timestamp: new Date().toISOString(),
+      level: 'warn',
+      source: 'docker',
+      message: `Falha ao coletar logs do Docker: ${err.message}`
+    }];
+  }
+};
+
 // Função para verificar saúde dos serviços
 const checkHealth = async () => {
   const services = {};
@@ -454,7 +480,7 @@ router.get('/logs', async (req, res, next) => {
       ...getPM2Logs(),
       ...getAppLogs(),
       ...getServiceUpdateLogs(),
-      ...(await getDockerLogs()),
+      ...(await getDockerLogsSafe()),
       ...getNginxLogs(),
       ...getPostgresLogs(),
       ...getRuntimeLogs()
