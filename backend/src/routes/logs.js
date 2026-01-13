@@ -431,11 +431,21 @@ const getDockerLogs = async () => {
     }
   });
 
+  console.log(`[DOCKER LOGS] Tentando ler logs de ${containerMap.size} containers...`);
+
   for (const [containerId, name] of containerMap.entries()) {
     const info = containerInfo.get(containerId);
+    console.log(`[DOCKER LOGS] Lendo container: ${name} (${containerId.slice(0, 12)}), state: ${info?.state}`);
+
     try {
+      const startTime = Date.now();
       const output = await withTimeout(readDockerContainerLogs(containerId, 3000), 2500, '');
+      const duration = Date.now() - startTime;
+
+      console.log(`[DOCKER LOGS] Container ${name}: leitura levou ${duration}ms, output length: ${output?.length || 0}`);
+
       if (!output) {
+        console.warn(`[DOCKER LOGS] Container ${name}: timeout ou output vazio`);
         logs.push({
           timestamp: new Date().toISOString(),
           level: 'warn',
@@ -445,7 +455,10 @@ const getDockerLogs = async () => {
         });
         continue;
       }
+
       const lines = output.split('\n').filter((line) => line.trim());
+      console.log(`[DOCKER LOGS] Container ${name}: ${lines.length} linhas de log encontradas`);
+
       if (!lines.length) {
         logs.push({
           timestamp: new Date().toISOString(),
@@ -455,7 +468,10 @@ const getDockerLogs = async () => {
           metadata: { containerId: containerId.slice(0, 12), ...info }
         });
       } else {
-        lines.slice(-100).forEach((line) => {
+        const logLines = lines.slice(-100);
+        console.log(`[DOCKER LOGS] Container ${name}: processando ${logLines.length} linhas (slice -100)`);
+
+        logLines.forEach((line) => {
           const { timestamp, cleanMessage } = extractTimestamp(line);
           const detectedLevel = detectLogLevel(cleanMessage);
           logs.push({
@@ -472,6 +488,7 @@ const getDockerLogs = async () => {
         });
       }
     } catch (err) {
+      console.error(`[DOCKER LOGS] Container ${name}: ERRO: ${err.message}`);
       const hint = err.message && err.message.toLowerCase().includes('permission')
         ? 'Permissao negada no socket Docker. Verifique /var/run/docker.sock e grupo docker.'
         : null;
@@ -484,6 +501,8 @@ const getDockerLogs = async () => {
       });
     }
   }
+
+  console.log(`[DOCKER LOGS] Finalizado. Total de logs Docker coletados: ${logs.length}`);
 
   return logs;
 };
