@@ -27,6 +27,15 @@ const pool = require('./config/database');
 const app = express();
 const appLogsPath = path.join(process.cwd(), 'backend/logs/app.log');
 fs.mkdirSync(path.dirname(appLogsPath), { recursive: true });
+const appendNodeLog = (message) => {
+  const entry = {
+    timestamp: new Date().toISOString(),
+    level: 'info',
+    source: 'nodejs',
+    message
+  };
+  fs.appendFile(appLogsPath, `${JSON.stringify(entry)}\n`, () => {});
+};
 
 app.use(helmet());
 app.use(cors());
@@ -114,5 +123,10 @@ ensureDefaultAdmin().finally(() => {
       message: 'Backend iniciado'
     };
     fs.appendFile(appLogsPath, `${JSON.stringify(entry)}\n`, () => {});
+    appendNodeLog(`Node.js iniciado (pid ${process.pid})`);
   });
 });
+
+setInterval(() => {
+  appendNodeLog(`Node.js ativo (pid ${process.pid})`);
+}, 60000);
