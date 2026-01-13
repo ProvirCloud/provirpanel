@@ -419,6 +419,18 @@ const ensureNextBuildTimeout = (command, timeoutSeconds = 180) => {
   return command;
 };
 
+const ensureNextBuildEnv = (env = [], command, timeoutSeconds = 180) => {
+  if (!command) return env;
+  const cmd = stringifyCommand(command);
+  if (!cmd.includes('next build') && !cmd.includes('npm run build')) {
+    return env;
+  }
+  const key = 'NEXT_STATIC_PAGE_GENERATION_TIMEOUT';
+  const hasKey = env.some((entry) => entry.startsWith(`${key}=`));
+  if (hasKey) return env;
+  return [...env, `${key}=${timeoutSeconds}`];
+};
+
 const ensureCommandWorkdir = (command, workdir) => {
   if (!command || !workdir) return command;
   if (Array.isArray(command)) {
@@ -738,7 +750,7 @@ router.post('/services', async (req, res, next) => {
     }
 
     const normalizedEnvVars = normalizeEnvVars(envVars);
-    const env = [
+    let env = [
       ...template.env.map((e) => `${e.key}=${e.value}`),
       ...normalizedEnvVars.map((e) => `${e.key}=${e.value}`)
     ];
@@ -791,6 +803,11 @@ router.post('/services', async (req, res, next) => {
     }
     if (createCmdAfter !== createAfterDev) {
       progress.push('ℹ️ Ajustando timeout do Next.js para build');
+    }
+    const envBefore = env;
+    env = ensureNextBuildEnv(env, containerCmd);
+    if (env !== envBefore) {
+      progress.push('ℹ️ Variavel de ambiente de timeout do Next.js adicionada');
     }
 
     const containerConfig = {
@@ -1070,7 +1087,7 @@ router.put('/services/:id', async (req, res, next) => {
     const resolvedPort = newPort || service.hostPort;
     
     const resolvedEnvVars = mergeEnvVars(envVars, service.envVars || []);
-    const env = [
+    let env = [
       ...template.env.map((e) => `${e.key}=${e.value}`),
       ...resolvedEnvVars.map((e) => `${e.key}=${e.value}`)
     ];
@@ -1121,6 +1138,11 @@ router.put('/services/:id', async (req, res, next) => {
       appendServiceLog('info', `WorkingDir para ${service.name}: ${workdir}`);
     } else {
       appendServiceLog('warn', `WorkingDir nao resolvido para ${service.name}`);
+    }
+    const envBeforeUpdate = env;
+    env = ensureNextBuildEnv(env, containerCmd);
+    if (env !== envBeforeUpdate) {
+      appendServiceLog('info', 'Variavel de ambiente de timeout do Next.js adicionada');
     }
 
     const containerConfig = {
@@ -1223,7 +1245,7 @@ router.post('/services/:id/project-upload', upload.single('archive'), async (req
     }
 
     const resolvedEnvVars = service.envVars || [];
-    const env = [
+    let env = [
       ...template.env.map((e) => `${e.key}=${e.value}`),
       ...resolvedEnvVars.map((e) => `${e.key}=${e.value}`)
     ];
@@ -1268,6 +1290,11 @@ router.post('/services/:id/project-upload', upload.single('archive'), async (req
       appendServiceLog('info', `WorkingDir para ${service.name}: ${workdir}`);
     } else {
       appendServiceLog('warn', `WorkingDir nao resolvido para ${service.name}`);
+    }
+    const envBeforeUpload = env;
+    env = ensureNextBuildEnv(env, containerCmd);
+    if (env !== envBeforeUpload) {
+      appendServiceLog('info', 'Variavel de ambiente de timeout do Next.js adicionada');
     }
 
     if (service.containerId) {
