@@ -1566,18 +1566,32 @@ const DockerPanel = () => {
                         setEditDialog(prev => ({ ...prev, newProjectArchive: file }))
                       }}
                     />
-                    <button
-                      className="self-start rounded-xl border border-blue-800 bg-blue-950 px-3 py-2 text-xs text-blue-200 hover:bg-blue-900 disabled:cursor-not-allowed disabled:opacity-60"
-                      disabled={!editDialog.newProjectArchive}
-                      onClick={async () => {
-                        const ok = await uploadProjectArchive(editDialog.id, editDialog.newProjectArchive)
-                        if (ok) {
-                          setEditDialog(prev => ({ ...prev, newProjectArchive: null }))
-                        }
-                      }}
-                    >
-                      Enviar projeto
-                    </button>
+                    <div className="flex flex-wrap gap-2">
+                      <button
+                        className="rounded-xl border border-blue-800 bg-blue-950 px-3 py-2 text-xs text-blue-200 hover:bg-blue-900 disabled:cursor-not-allowed disabled:opacity-60"
+                        disabled={!editDialog.newProjectArchive}
+                        onClick={async () => {
+                          const ok = await uploadProjectArchive(editDialog.id, editDialog.newProjectArchive)
+                          if (ok) {
+                            setEditDialog(prev => ({ ...prev, newProjectArchive: null }))
+                          }
+                        }}
+                      >
+                        Enviar projeto
+                      </button>
+                      <button
+                        className="rounded-xl border border-emerald-800 bg-emerald-950 px-3 py-2 text-xs text-emerald-200 hover:bg-emerald-900 disabled:cursor-not-allowed disabled:opacity-60"
+                        disabled={!editDialog.newProjectArchive}
+                        onClick={async () => {
+                          const ok = await uploadProjectArchive(editDialog.id, editDialog.newProjectArchive)
+                          if (ok) {
+                            setEditDialog(prev => ({ ...prev, newProjectArchive: null }))
+                          }
+                        }}
+                      >
+                        Atualizar serviço publicado
+                      </button>
+                    </div>
                     <p className="text-xs text-slate-400">
                       O projeto sera extraido no volume do servico e o container sera reiniciado.
                     </p>
@@ -1588,7 +1602,10 @@ const DockerPanel = () => {
             <div className="flex gap-2 mt-6">
               <button
                 className="flex-1 rounded-xl bg-blue-500 px-4 py-2 text-sm font-semibold text-white hover:bg-blue-600"
-                onClick={() => {
+                onClick={async () => {
+                  if (editDialog.newProjectArchive) {
+                    await uploadProjectArchive(editDialog.id, editDialog.newProjectArchive)
+                  }
                   updateService(editDialog.id, {
                     hostPort: editDialog.newHostPort || editDialog.hostPort,
                     envVars: editDialog.newEnvVars || [],
