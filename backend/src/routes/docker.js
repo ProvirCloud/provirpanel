@@ -375,6 +375,20 @@ const normalizeCommand = (commandInput) => {
   return null;
 };
 
+const ensureCommandWorkdir = (command, workdir) => {
+  if (!command || !workdir) return command;
+  if (Array.isArray(command)) {
+    if (command[0] === 'sh' && command[1] === '-c') {
+      return ['sh', '-c', `cd ${workdir} && ${command.slice(2).join(' ')}`];
+    }
+    return ['sh', '-c', `cd ${workdir} && ${command.join(' ')}`];
+  }
+  if (typeof command === 'string') {
+    return `cd ${workdir} && ${command}`;
+  }
+  return command;
+};
+
 // List saved services (containers + metadata)
 router.get('/services', async (req, res, next) => {
   try {
@@ -692,6 +706,7 @@ router.post('/services', async (req, res, next) => {
     } else if (!createProject && templateId === 'node-app' && !normalizedCommand) {
       containerCmd = resolveNodeCommand(finalizedVolumes) || ['npm', 'start'];
     }
+    containerCmd = ensureCommandWorkdir(containerCmd, template.workdir);
 
     const containerConfig = {
       name,
@@ -1001,6 +1016,7 @@ router.put('/services/:id', async (req, res, next) => {
     if (service.templateId === 'node-app' && !normalizedCommand) {
       containerCmd = resolveNodeCommand(service.volumes) || containerCmd;
     }
+    containerCmd = ensureCommandWorkdir(containerCmd, workdir);
     appendServiceLog(
       'info',
       `Comando definido para ${service.name}: ${containerCmd ? containerCmd.join(' ') : 'padrao'}`
@@ -1139,6 +1155,7 @@ router.post('/services/:id/project-upload', upload.single('archive'), async (req
 
     let containerCmd = service.command || template.command;
     containerCmd = resolveNodeCommand(service.volumes) || containerCmd;
+    containerCmd = ensureCommandWorkdir(containerCmd, workdir);
     appendServiceLog('info', `Comando detectado para ${service.name}: ${containerCmd ? containerCmd.join(' ') : 'padrao'}`);
     if (workdir) {
       appendServiceLog('info', `WorkingDir para ${service.name}: ${workdir}`);
