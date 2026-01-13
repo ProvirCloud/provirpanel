@@ -1594,7 +1594,11 @@ const DockerPanel = () => {
                     <div className="flex flex-wrap gap-2">
                       <button
                         className="rounded-xl border border-blue-800 bg-blue-950 px-3 py-2 text-xs text-blue-200 hover:bg-blue-900 disabled:cursor-not-allowed disabled:opacity-60"
-                        disabled={!editDialog.newProjectArchive}
+                        disabled={
+                          !editDialog.newProjectArchive ||
+                          projectUploadStatus?.status === 'uploading' ||
+                          projectUploadStatus?.status === 'processing'
+                        }
                         onClick={async () => {
                           const ok = await uploadProjectArchive(editDialog.id, editDialog.newProjectArchive)
                           if (ok) {
@@ -1602,7 +1606,19 @@ const DockerPanel = () => {
                           }
                         }}
                       >
-                        Atualizar serviço publicado
+                        <span className="inline-flex items-center gap-2">
+                          {(projectUploadStatus?.status === 'uploading' ||
+                            projectUploadStatus?.status === 'processing') && (
+                            <span className="inline-flex h-3 w-3 animate-spin rounded-full border-2 border-slate-500 border-t-blue-400" />
+                          )}
+                          {projectUploadStatus?.status === 'uploading' && 'Enviando...'}
+                          {projectUploadStatus?.status === 'processing' && 'Processando...'}
+                          {!projectUploadStatus ||
+                          (projectUploadStatus?.status !== 'uploading' &&
+                            projectUploadStatus?.status !== 'processing')
+                            ? 'Atualizar serviço publicado'
+                            : ''}
+                        </span>
                       </button>
                     </div>
                     <p className="text-xs text-slate-400">
