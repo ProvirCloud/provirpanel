@@ -17,7 +17,7 @@ const LogsPanel = () => {
   const [dateFilter, setDateFilter] = useState('')
   const [levelFilter, setLevelFilter] = useState('all')
   const [sourceFilter, setSourceFilter] = useState('all')
-  const [autoRefresh, setAutoRefresh] = useState(true)
+  const [autoRefresh, setAutoRefresh] = useState(false)
   const [selectedLogs, setSelectedLogs] = useState(new Set())
   const [showFilters, setShowFilters] = useState(true)
   const [errorOnly, setErrorOnly] = useState(false)

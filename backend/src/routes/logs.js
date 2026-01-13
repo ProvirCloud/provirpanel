@@ -528,16 +528,28 @@ let dockerLogsCache = {
 };
 
 const refreshDockerLogsCache = async () => {
-  if (dockerLogsCache.inFlight) return;
+  if (dockerLogsCache.inFlight) {
+    console.log('[DOCKER CACHE] Refresh already in flight, skipping');
+    return;
+  }
+
   dockerLogsCache.inFlight = true;
+  console.log('[DOCKER CACHE] Starting cache refresh...');
+
   try {
+    const startTime = Date.now();
     const logs = await getDockerLogsSafe();
+    const duration = Date.now() - startTime;
+
+    console.log(`[DOCKER CACHE] Cache refresh completed in ${duration}ms, collected ${logs.length} logs`);
+
     dockerLogsCache = {
       logs,
       updatedAt: Date.now(),
       inFlight: false
     };
   } catch (err) {
+    console.error(`[DOCKER CACHE] Cache refresh failed: ${err.message}`);
     dockerLogsCache = {
       logs: [{
         timestamp: new Date().toISOString(),
@@ -555,14 +567,20 @@ const getDockerLogsCached = async () => {
   const now = Date.now();
   const stale = now - dockerLogsCache.updatedAt > DOCKER_LOGS_TTL_MS;
 
+  console.log(`[DOCKER CACHE] Cache status - stale: ${stale}, age: ${now - dockerLogsCache.updatedAt}ms, TTL: ${DOCKER_LOGS_TTL_MS}ms, cached logs: ${dockerLogsCache.logs.length}, inFlight: ${dockerLogsCache.inFlight}`);
+
+  // Se o cache está velho e não há requisição em andamento, atualiza
   if (stale && !dockerLogsCache.inFlight) {
-    refreshDockerLogsCache();
+    console.log('[DOCKER CACHE] Cache stale, refreshing...');
+    await refreshDockerLogsCache();
   }
 
   if (dockerLogsCache.logs.length) {
+    console.log(`[DOCKER CACHE] Returning ${dockerLogsCache.logs.length} cached logs`);
     return dockerLogsCache.logs;
   }
 
+  console.warn('[DOCKER CACHE] No cached logs, returning placeholder');
   return [{
     timestamp: new Date().toISOString(),
     level: 'info',
