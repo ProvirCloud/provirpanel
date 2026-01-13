@@ -233,8 +233,14 @@ const ensureExtractor = async (command, hint) => {
 const flattenSingleRootDir = (targetDir) => {
   try {
     const entries = fs.readdirSync(targetDir, { withFileTypes: true });
-    const dirs = entries.filter((e) => e.isDirectory());
-    const files = entries.filter((e) => e.isFile());
+    const ignoredNames = new Set(['__MACOSX']);
+    const visibleEntries = entries.filter((entry) => {
+      if (ignoredNames.has(entry.name)) return false;
+      if (entry.isFile() && entry.name === '.DS_Store') return false;
+      return true;
+    });
+    const dirs = visibleEntries.filter((e) => e.isDirectory());
+    const files = visibleEntries.filter((e) => e.isFile());
     if (files.length > 0 || dirs.length !== 1) {
       return;
     }
