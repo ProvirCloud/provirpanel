@@ -3,7 +3,7 @@
 const express = require('express');
 const fs = require('fs');
 const path = require('path');
-const { execSync, execFileSync } = require('child_process');
+const { execSync } = require('child_process');
 const DockerManager = require('../services/DockerManager');
 const pool = require('../config/database');
 
@@ -135,6 +135,44 @@ const getRuntimeLogs = () => ([
   }
 ]);
 
+const readDockerContainerLogs = (containerId) =>
+  new Promise((resolve, reject) => {
+    const container = dockerManager.docker.getContainer(containerId);
+    container.logs({ stdout: true, stderr: true, tail: 50 }, (err, stream) => {
+      if (err) {
+        reject(err);
+        return;
+      }
+      let buffer = Buffer.alloc(0);
+      stream.on('data', (chunk) => {
+        buffer = Buffer.concat([buffer, chunk]);
+      });
+      stream.on('end', () => {
+        try {
+          const lines = [];
+          let offset = 0;
+          while (offset + 8 <= buffer.length) {
+            const size = buffer.readUInt32BE(offset + 4);
+            const start = offset + 8;
+            const end = start + size;
+            if (end > buffer.length) break;
+            const payload = buffer.slice(start, end);
+            lines.push(payload.toString('utf8'));
+            offset = end;
+          }
+          if (!lines.length) {
+            resolve(buffer.toString('utf8'));
+            return;
+          }
+          resolve(lines.join(''));
+        } catch (parseErr) {
+          resolve(buffer.toString('utf8'));
+        }
+      });
+      stream.on('error', reject);
+    });
+  });
+
 const tailFileLines = (filePath, maxLines = 200) => {
   const content = fs.readFileSync(filePath, 'utf8');
   const lines = content.split('\n').filter((line) => line.trim());
@@ -235,6 +273,13 @@ const getDockerLogs = async () => {
     });
   }
 
+  logs.push({
+    timestamp: new Date().toISOString(),
+    level: 'info',
+    source: 'docker',
+    message: `Containers ativos: ${containers.length} | Servicos registrados: ${services.length}`
+  });
+
   if (!services.length && !containers.length) {
     logs.push({
       timestamp: new Date().toISOString(),
@@ -245,6 +290,7 @@ const getDockerLogs = async () => {
     return logs;
   }
 
+  const containerMap = new Map();
   services.forEach((service) => {
     if (!service.containerId) {
       logs.push({
@@ -255,47 +301,18 @@ const getDockerLogs = async () => {
       });
       return;
     }
-    try {
-      const output = execFileSync('docker', ['logs', '--tail', '50', service.containerId], {
-        encoding: 'utf8'
-      });
-      const lines = output.split('\n').filter((line) => line.trim());
-      if (!lines.length) {
-        logs.push({
-          timestamp: new Date().toISOString(),
-          level: 'info',
-          source: `docker:${service.name}`,
-          message: 'Nenhum log recente do container.'
-        });
-      } else {
-        lines.forEach((line) => {
-          logs.push({
-            timestamp: new Date().toISOString(),
-            level: 'info',
-            source: `docker:${service.name}`,
-            message: line
-          });
-        });
-      }
-    } catch (err) {
-      logs.push({
-        timestamp: new Date().toISOString(),
-        level: 'warn',
-        source: `docker:${service.name}`,
-        message: `Nao foi possivel ler logs do container ${service.containerId}: ${err.message}`
-      });
+    containerMap.set(service.containerId, service.name);
+  });
+  containers.forEach((container) => {
+    if (!containerMap.has(container.Id)) {
+      const name = container.Names?.[0]?.replace('/', '') || container.Id.slice(0, 12);
+      containerMap.set(container.Id, name);
     }
   });
 
-  containers.forEach((container) => {
-    const name = container.Names?.[0]?.replace('/', '') || container.Id.slice(0, 12);
-    if (services.some((service) => service.containerId === container.Id)) {
-      return;
-    }
+  for (const [containerId, name] of containerMap.entries()) {
     try {
-      const output = execFileSync('docker', ['logs', '--tail', '50', container.Id], {
-        encoding: 'utf8'
-      });
+      const output = await readDockerContainerLogs(containerId);
       const lines = output.split('\n').filter((line) => line.trim());
       if (!lines.length) {
         logs.push({
@@ -319,10 +336,10 @@ const getDockerLogs = async () => {
         timestamp: new Date().toISOString(),
         level: 'warn',
         source: `docker:${name}`,
-        message: `Nao foi possivel ler logs do container ${container.Id}: ${err.message}`
+        message: `Nao foi possivel ler logs do container ${containerId}: ${err.message}`
       });
     }
-  });
+  }
 
   return logs;
 };
