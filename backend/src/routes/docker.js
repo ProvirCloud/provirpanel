@@ -380,6 +380,18 @@ const stringifyCommand = (command) => {
   return Array.isArray(command) ? command.join(' ') : String(command);
 };
 
+const addNpmIncludeDev = (cmd) => {
+  let updated = cmd;
+  if (!updated.includes('--include=dev')) {
+    updated = updated.replace(/\bnpm\s+ci\b/g, 'npm ci --include=dev');
+    updated = updated.replace(/\bnpm\s+install\b/g, 'npm install --include=dev');
+  }
+  if (updated.includes('--omit=dev')) {
+    updated = updated.replace(/--omit=dev/g, '--include=dev');
+  }
+  return updated;
+};
+
 const ensureCommandWorkdir = (command, workdir) => {
   if (!command || !workdir) return command;
   if (Array.isArray(command)) {
@@ -405,16 +417,21 @@ const ensureNpmDevDependencies = (command) => {
   if (Array.isArray(command)) {
     if (command[0] === 'sh' && command[1] === '-c') {
       const cmd = command.slice(2).join(' ');
-      if (!needsPrefix(cmd)) return command;
-      return ['sh', '-c', `${prefix} ${cmd}`];
+      const updatedCmd = addNpmIncludeDev(cmd);
+      if (!needsPrefix(cmd) && updatedCmd === cmd) return command;
+      const finalCmd = needsPrefix(cmd) ? `${prefix} ${updatedCmd}` : updatedCmd;
+      return ['sh', '-c', finalCmd];
     }
     const cmd = command.join(' ');
-    if (!needsPrefix(cmd)) return command;
-    return ['sh', '-c', `${prefix} ${cmd}`];
+    const updatedCmd = addNpmIncludeDev(cmd);
+    if (!needsPrefix(cmd) && updatedCmd === cmd) return command;
+    const finalCmd = needsPrefix(cmd) ? `${prefix} ${updatedCmd}` : updatedCmd;
+    return ['sh', '-c', finalCmd];
   }
   if (typeof command === 'string') {
-    if (!needsPrefix(command)) return command;
-    return `${prefix} ${command}`;
+    const updatedCmd = addNpmIncludeDev(command);
+    if (!needsPrefix(command) && updatedCmd === command) return command;
+    return needsPrefix(command) ? `${prefix} ${updatedCmd}` : updatedCmd;
   }
   return command;
 };
