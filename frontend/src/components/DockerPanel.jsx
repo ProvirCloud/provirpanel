@@ -757,7 +757,6 @@ const DockerPanel = () => {
               <label className="text-xs text-slate-300">Importar arquivo .env</label>
               <input
                 type="file"
-                accept=".env,text/plain"
                 className="rounded-xl border border-slate-800 bg-slate-950 px-3 py-2 text-sm text-slate-200 file:mr-3 file:rounded-lg file:border-0 file:bg-blue-500 file:px-3 file:py-1.5 file:text-xs file:font-semibold file:text-slate-950"
                 onChange={async (e) => {
                   const file = e.target.files?.[0]
@@ -1534,12 +1533,11 @@ const DockerPanel = () => {
                   <label className="block text-sm text-slate-300 mb-2">Importar arquivo .env</label>
                   <input
                     type="file"
-                    accept=".env,text/plain"
                     className="w-full rounded-xl border border-slate-700 bg-slate-800 px-3 py-2 text-sm text-slate-200 file:mr-3 file:rounded-lg file:border-0 file:bg-blue-500 file:px-3 file:py-1.5 file:text-xs file:font-semibold file:text-slate-950"
                     onChange={async (e) => {
                       const file = e.target.files?.[0]
                       if (!file) return
-                      const parsed = await parseEnvFile(file)
+                  const parsed = await parseEnvFile(file)
                       const currentEnvs = editDialog?.newEnvVars || []
                       const { merged, overwrites } = buildEnvMerge(currentEnvs, parsed)
                       if (overwrites.length) {
