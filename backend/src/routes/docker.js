@@ -948,6 +948,13 @@ router.put('/services/:id', async (req, res, next) => {
     } else {
       appendServiceLog('warn', `Nao foi possivel resolver o diretorio do projeto para ${service.name}`);
     }
+    const projectPath = resolveProjectPathFromVolume(service.volumes);
+    const workdir = projectPath?.containerPath || template.workdir || null;
+    if (projectPath?.hostPath) {
+      appendServiceLog('info', `Projeto resolvido em ${projectPath.hostPath}`);
+    } else {
+      appendServiceLog('warn', `Nao foi possivel resolver o diretorio do projeto para ${service.name}`);
+    }
     const resolvedPort = newPort || service.hostPort;
     
     const resolvedEnvVars = mergeEnvVars(envVars, service.envVars || []);
@@ -1085,6 +1092,13 @@ router.post('/services/:id/project-upload', upload.single('archive'), async (req
     const template =
       SERVICE_TEMPLATES.find((t) => t.id === service.templateId) ||
       { env: [], workdir: null, command: null };
+    const projectPath = resolveProjectPathFromVolume(service.volumes);
+    const workdir = projectPath?.containerPath || template.workdir || null;
+    if (projectPath?.hostPath) {
+      appendServiceLog('info', `Projeto resolvido em ${projectPath.hostPath}`);
+    } else {
+      appendServiceLog('warn', `Nao foi possivel resolver o diretorio do projeto para ${service.name}`);
+    }
 
     const resolvedEnvVars = service.envVars || [];
     const env = [
