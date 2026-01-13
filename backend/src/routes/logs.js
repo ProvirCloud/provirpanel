@@ -319,14 +319,23 @@ const getDockerLogs = async () => {
   }
 
   try {
-    containers = await withTimeout(dockerManager.listContainers(), 2000, null);
+    containers = await withTimeout(dockerManager.listContainers(), 5000, null);
     if (!containers) {
       logs.push({
         timestamp: new Date().toISOString(),
         level: 'warn',
         source: 'docker:system',
-        message: 'Timeout ao listar containers do Docker.',
+        message: 'Timeout ao listar containers do Docker (5s). Verifique a conexao com Docker daemon.',
         metadata: { timeout: true }
+      });
+      containers = [];
+    } else if (!Array.isArray(containers)) {
+      logs.push({
+        timestamp: new Date().toISOString(),
+        level: 'error',
+        source: 'docker:system',
+        message: 'Resposta invalida do Docker API ao listar containers.',
+        metadata: { responseType: typeof containers }
       });
       containers = [];
     }
@@ -343,12 +352,17 @@ const getDockerLogs = async () => {
     });
   }
 
+  const containerNames = containers.map(c => c.Names?.[0]?.replace('/', '') || c.Id.slice(0, 12));
   logs.push({
     timestamp: new Date().toISOString(),
     level: 'info',
     source: 'docker:system',
-    message: `Containers ativos: ${containers.length} | Servicos registrados: ${services.length}`,
-    metadata: { containersCount: containers.length, servicesCount: services.length }
+    message: `Containers encontrados: ${containers.length} | Servicos registrados: ${services.length}`,
+    metadata: {
+      containersCount: containers.length,
+      servicesCount: services.length,
+      containerNames: containerNames.join(', ')
+    }
   });
 
   if (!services.length && !containers.length) {
@@ -365,7 +379,20 @@ const getDockerLogs = async () => {
   const containerInfo = new Map();
 
   // Primeiro, mapeia os containers ativos (prioridade)
-  containers.forEach((container) => {
+  // Filtra apenas containers em estado 'running' para coletar logs
+  const runningContainers = containers.filter(c => c.State === 'running');
+
+  if (runningContainers.length < containers.length) {
+    logs.push({
+      timestamp: new Date().toISOString(),
+      level: 'info',
+      source: 'docker:system',
+      message: `${runningContainers.length} containers rodando de ${containers.length} total (ignorando containers parados para logs).`,
+      metadata: { runningCount: runningContainers.length, totalCount: containers.length }
+    });
+  }
+
+  runningContainers.forEach((container) => {
     const id = container.Id;
     const containerName = container.Names?.[0]?.replace('/', '') || id.slice(0, 12);
 
