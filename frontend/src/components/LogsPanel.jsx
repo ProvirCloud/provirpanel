@@ -32,12 +32,18 @@ const LogsPanel = () => {
 
   const loadHealth = async () => {
     try {
-      const response = await api.get('/health')
+      const response = await api.get('/logs/health')
       console.log('Health response:', response.data)
       setHealth(response.data)
     } catch (error) {
-      console.error('Erro ao carregar health:', error)
-      setHealth({ status: 'error', message: 'Erro ao conectar com o servidor' })
+      try {
+        const response = await api.get('/health')
+        console.log('Health response:', response.data)
+        setHealth(response.data)
+      } catch (fallbackErr) {
+        console.error('Erro ao carregar health:', error)
+        setHealth({ status: 'error', message: 'Erro ao conectar com o servidor' })
+      }
     } finally {
       setLoading(false)
     }
