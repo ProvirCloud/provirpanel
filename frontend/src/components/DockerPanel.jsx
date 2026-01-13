@@ -1621,7 +1621,14 @@ const DockerPanel = () => {
                         <span className="inline-flex items-center gap-2">
                           {(projectUploadStatus?.status === 'uploading' ||
                             projectUploadStatus?.status === 'processing') && (
-                            <span className="inline-flex h-3 w-3 animate-spin rounded-full border-2 border-slate-500 border-t-blue-400" />
+                            <>
+                              <span className="inline-flex h-3 w-3 animate-spin rounded-full border-2 border-slate-500 border-t-blue-400" />
+                              <span className="flex items-center gap-1">
+                                <span className="h-1.5 w-1.5 animate-bounce rounded-full bg-blue-300 [animation-delay:-0.2s]" />
+                                <span className="h-1.5 w-1.5 animate-bounce rounded-full bg-blue-300" />
+                                <span className="h-1.5 w-1.5 animate-bounce rounded-full bg-blue-300 [animation-delay:0.2s]" />
+                              </span>
+                            </>
                           )}
                           {projectUploadStatus?.status === 'uploading' && 'Enviando...'}
                           {projectUploadStatus?.status === 'processing' && 'Processando...'}

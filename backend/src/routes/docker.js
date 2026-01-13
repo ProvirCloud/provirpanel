@@ -948,6 +948,13 @@ router.put('/services/:id', async (req, res, next) => {
     } else {
       appendServiceLog('warn', `Nao foi possivel resolver o diretorio do projeto para ${service.name}`);
     }
+    const projectPath = resolveProjectPathFromVolume(service.volumes);
+    const workdir = projectPath?.containerPath || template.workdir || null;
+    if (projectPath?.hostPath) {
+      appendServiceLog('info', `Projeto resolvido em ${projectPath.hostPath}`);
+    } else {
+      appendServiceLog('warn', `Nao foi possivel resolver o diretorio do projeto para ${service.name}`);
+    }
     if (projectPath?.hostPath) {
       appendServiceLog('info', `Projeto resolvido em ${projectPath.hostPath}`);
     } else {
