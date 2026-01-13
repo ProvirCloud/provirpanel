@@ -291,6 +291,19 @@ const removeContainerByName = async (name) => {
   }
 };
 
+const runContainerWithRetry = async (image, config, name) => {
+  try {
+    return await dockerManager.runContainer(image, config);
+  } catch (err) {
+    const message = err && err.message ? err.message : '';
+    if (message.includes('already in use') || message.includes('Conflict')) {
+      await removeContainerByName(name);
+      return await dockerManager.runContainer(image, config);
+    }
+    throw err;
+  }
+};
+
 const writeEnvFile = (projectPath, envVars = [], templateEnv = []) => {
   if (!projectPath?.hostPath) return;
   const envLines = [
@@ -1023,10 +1036,8 @@ router.put('/services/:id', async (req, res, next) => {
 
     appendServiceLog('info', `Garantindo nome livre para ${service.name}`);
     await removeContainerByName(service.name);
-    appendServiceLog('info', `Garantindo nome livre para ${service.name}`);
-    await removeContainerByName(service.name);
     appendServiceLog('info', `Iniciando novo container para ${service.name}`);
-    const container = await dockerManager.runContainer(service.image, containerConfig);
+    const container = await runContainerWithRetry(service.image, containerConfig, service.name);
     
     // Update service
     const updatedService = {
@@ -1164,8 +1175,10 @@ router.post('/services/:id/project-upload', upload.single('archive'), async (req
       containerConfig.WorkingDir = workdir;
     }
 
+    appendServiceLog('info', `Garantindo nome livre para ${service.name}`);
+    await removeContainerByName(service.name);
     appendServiceLog('info', `Iniciando novo container para ${service.name}`);
-    const container = await dockerManager.runContainer(service.image, containerConfig);
+    const container = await runContainerWithRetry(service.image, containerConfig, service.name);
 
     const updatedService = {
       ...service,
