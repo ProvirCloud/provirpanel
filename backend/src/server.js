@@ -1,6 +1,7 @@
 'use strict';
 
 const path = require('path');
+const fs = require('fs');
 require('dotenv').config({ path: path.join(__dirname, '../.env') });
 const http = require('http');
 const express = require('express');
@@ -24,6 +25,8 @@ const DockerManager = require('./services/DockerManager');
 const pool = require('./config/database');
 
 const app = express();
+const appLogsPath = path.join(process.cwd(), 'backend/logs/app.log');
+fs.mkdirSync(path.dirname(appLogsPath), { recursive: true });
 
 app.use(helmet());
 app.use(cors());
@@ -104,5 +107,12 @@ ensureDefaultAdmin().finally(() => {
   server.listen(port, () => {
     // eslint-disable-next-line no-console
     console.log(`CloudPainel listening on port ${port}`);
+    const entry = {
+      timestamp: new Date().toISOString(),
+      level: 'info',
+      source: 'backend',
+      message: 'Backend iniciado'
+    };
+    fs.appendFile(appLogsPath, `${JSON.stringify(entry)}\n`, () => {});
   });
 });
