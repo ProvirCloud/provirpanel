@@ -186,6 +186,12 @@ const readDockerContainerLogs = (containerId, timeoutMs = 2000) =>
     });
   });
 
+const withTimeout = (promise, timeoutMs, fallback) =>
+  Promise.race([
+    promise,
+    new Promise((resolve) => setTimeout(() => resolve(fallback), timeoutMs))
+  ]);
+
 const tailFileLines = (filePath, maxLines = 200) => {
   const content = fs.readFileSync(filePath, 'utf8');
   const lines = content.split('\n').filter((line) => line.trim());
@@ -279,7 +285,16 @@ const getDockerLogs = async () => {
   }
 
   try {
-    containers = await dockerManager.listContainers();
+    containers = await withTimeout(dockerManager.listContainers(), 1500, null);
+    if (!containers) {
+      logs.push({
+        timestamp: new Date().toISOString(),
+        level: 'warn',
+        source: 'docker',
+        message: 'Timeout ao listar containers do Docker.'
+      });
+      containers = [];
+    }
   } catch (err) {
     const hint = err.message && err.message.toLowerCase().includes('permission')
       ? 'Permissao negada no socket Docker. Verifique /var/run/docker.sock e grupo docker.'
@@ -331,7 +346,16 @@ const getDockerLogs = async () => {
 
   for (const [containerId, name] of containerMap.entries()) {
     try {
-      const output = await readDockerContainerLogs(containerId);
+      const output = await withTimeout(readDockerContainerLogs(containerId), 1500, '');
+      if (!output) {
+        logs.push({
+          timestamp: new Date().toISOString(),
+          level: 'warn',
+          source: `docker:${name}`,
+          message: 'Timeout ao ler logs do container.'
+        });
+        continue;
+      }
       const lines = output.split('\n').filter((line) => line.trim());
       if (!lines.length) {
         logs.push({
