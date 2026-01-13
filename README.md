@@ -198,6 +198,35 @@ Endpoints:
 - `DELETE /docker/containers/:id`
 - `GET /docker/containers/:id/stats`
 
+## Handoff para IA (estado atual)
+
+### Logs
+- Endpoint de logs: `GET /api/logs` (agrega PM2, backend, service-update, Docker, Nginx, Postgres).
+- Health reduzido para logs: `GET /api/logs/health` (nodejs/backend/service-update).
+- Arquivos locais: `backend/logs/app.log`, `backend/logs/service-updates.log`.
+- Coleta de Docker usa Docker API com timeout e cache (evita travar o backend).
+- UI de logs com filtro por fonte e agrupamento em `frontend/src/components/LogsPanel.jsx`.
+
+### DockerPanel (servicos)
+- Modal de edicao com scroll e largura maior, mostra volume host → container.
+- Envs com opcao "Secreto" (mascara) e importacao de `.env` com aviso de sobrescrita.
+- Campo "Comando de inicializacao" (string) envia para backend.
+- Upload de projeto `.zip/.tar` para Node com progresso e link para logs.
+- Update de projeto remove pasta raiz unica do zip (flatten).
+
+### Node/Next.js no Docker
+- Backend resolve `WorkingDir` a partir do volume (inclui subpasta detectando projeto Next).
+- Gera `.env` no projeto com variaveis do servico antes de build/start.
+- Logs de atualizacao registram working dir e checagem de arquivos (case-sensitive).
+
+### Arquivos principais alterados
+- `backend/src/routes/docker.js`: comandos, envs, upload de projeto, working dir, .env, logs.
+- `backend/src/routes/logs.js`: agregacao de logs e Docker API.
+- `backend/src/middleware/errorHandler.js`: grava `app.log`.
+- `backend/src/server.js`: log de inicializacao/heartbeat `nodejs`.
+- `frontend/src/components/DockerPanel.jsx`: UI de servicos/envs/upload.
+- `frontend/src/components/LogsPanel.jsx`: filtros e agrupamento por fonte.
+
 Socket:
 - `/api/docker/logs` com evento `subscribe`
 

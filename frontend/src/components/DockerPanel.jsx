@@ -123,6 +123,7 @@ const DockerPanel = () => {
   const [baseDir, setBaseDir] = useState('')
   const [editDialog, setEditDialog] = useState(null)
   const [envImportDialog, setEnvImportDialog] = useState(null)
+  const [envImportStatus, setEnvImportStatus] = useState(null)
   const [projectUploadStatus, setProjectUploadStatus] = useState(null)
   const [removeDialog, setRemoveDialog] = useState(null)
   const [postgresDatabases, setPostgresDatabases] = useState([])
@@ -238,6 +239,7 @@ const DockerPanel = () => {
       setServiceProgress([])
       setServiceWorking(false)
       setPortAvailability(null)
+      setEnvImportStatus(null)
       return
     }
 
@@ -784,17 +786,28 @@ const DockerPanel = () => {
                 onChange={async (e) => {
                   const file = e.target.files?.[0]
                   if (!file) return
+                  setEnvImportStatus({ status: 'loading', message: 'Lendo arquivo...' })
                   const parsed = await parseEnvFile(file)
                   const currentEnvs = serviceForm?.envs || []
                   const { merged, overwrites } = buildEnvMerge(currentEnvs, parsed)
                   if (overwrites.length) {
                     setEnvImportDialog({ target: 'create', merged, overwrites })
+                    setEnvImportStatus({ status: 'waiting', message: 'Aguardando confirmacao de sobrescrita.' })
                   } else {
                     setServiceForm((p) => ({ ...p, envs: merged }))
+                    setEnvImportStatus({ status: 'done', message: 'Variaveis importadas com sucesso.' })
                   }
                   e.target.value = ''
                 }}
               />
+              {envImportStatus && (
+                <div className="flex items-center gap-2 text-xs text-slate-300">
+                  {envImportStatus.status === 'loading' && (
+                    <span className="inline-flex h-3 w-3 animate-spin rounded-full border-2 border-slate-500 border-t-blue-400" />
+                  )}
+                  <span>{envImportStatus.message}</span>
+                </div>
+              )}
               <p className="text-xs text-slate-400">
                 As chaves do arquivo substituem as existentes com o mesmo nome.
               </p>
@@ -1210,6 +1223,7 @@ const DockerPanel = () => {
                           className="rounded-xl border border-blue-800 bg-blue-950 px-3 py-2 text-xs text-blue-200 hover:bg-blue-900"
                           onClick={() => {
                             setProjectUploadStatus(null)
+                            setEnvImportStatus(null)
                             setEditDialog({ 
                               ...svc, 
                               newEnvVars: (svc.envVars || []).map((env) => ({
@@ -1574,17 +1588,28 @@ const DockerPanel = () => {
                     onChange={async (e) => {
                       const file = e.target.files?.[0]
                       if (!file) return
-                  const parsed = await parseEnvFile(file)
+                      setEnvImportStatus({ status: 'loading', message: 'Lendo arquivo...' })
+                      const parsed = await parseEnvFile(file)
                       const currentEnvs = editDialog?.newEnvVars || []
                       const { merged, overwrites } = buildEnvMerge(currentEnvs, parsed)
                       if (overwrites.length) {
                         setEnvImportDialog({ target: 'edit', merged, overwrites })
+                        setEnvImportStatus({ status: 'waiting', message: 'Aguardando confirmacao de sobrescrita.' })
                       } else {
                         setEditDialog((prev) => ({ ...prev, newEnvVars: merged }))
+                        setEnvImportStatus({ status: 'done', message: 'Variaveis importadas com sucesso.' })
                       }
                       e.target.value = ''
                     }}
                   />
+                  {envImportStatus && (
+                    <div className="flex items-center gap-2 text-xs text-slate-300 mt-2">
+                      {envImportStatus.status === 'loading' && (
+                        <span className="inline-flex h-3 w-3 animate-spin rounded-full border-2 border-slate-500 border-t-blue-400" />
+                      )}
+                      <span>{envImportStatus.message}</span>
+                    </div>
+                  )}
                   <p className="text-xs text-slate-400 mt-1">
                     As chaves do arquivo substituem as existentes com o mesmo nome.
                   </p>
@@ -1750,6 +1775,7 @@ const DockerPanel = () => {
                   } else {
                     setEditDialog((prev) => ({ ...prev, newEnvVars: envImportDialog.merged }))
                   }
+                  setEnvImportStatus({ status: 'done', message: 'Variaveis importadas com sucesso.' })
                   setEnvImportDialog(null)
                 }}
               >
