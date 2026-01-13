@@ -9,8 +9,8 @@ const pool = require('../config/database');
 
 const router = express.Router();
 const dockerManager = new DockerManager();
-const serviceLogsPath = path.join(process.cwd(), 'backend/logs/service-updates.log');
-const appLogsPath = path.join(process.cwd(), 'backend/logs/app.log');
+const serviceLogsPath = path.join(__dirname, '..', 'logs', 'service-updates.log');
+const appLogsPath = path.join(__dirname, '..', 'logs', 'app.log');
 
 // Função para ler logs do PM2
 const getPM2Logs = () => {
@@ -53,7 +53,12 @@ const getPM2Logs = () => {
 const getServiceUpdateLogs = () => {
   try {
     if (!fs.existsSync(serviceLogsPath)) {
-      return [];
+      return [{
+        timestamp: new Date().toISOString(),
+        level: 'info',
+        source: 'service-update',
+        message: 'Nenhuma atualizacao registrada ainda.'
+      }];
     }
     const content = fs.readFileSync(serviceLogsPath, 'utf8');
     const lines = content.split('\n').filter((line) => line.trim());
@@ -120,6 +125,15 @@ const getAppLogs = () => {
     }];
   }
 };
+
+const getRuntimeLogs = () => ([
+  {
+    timestamp: new Date().toISOString(),
+    level: 'info',
+    source: 'nodejs',
+    message: `Node.js ativo (pid ${process.pid}, uptime ${Math.round(process.uptime())}s)`
+  }
+]);
 
 const tailFileLines = (filePath, maxLines = 200) => {
   const content = fs.readFileSync(filePath, 'utf8');
@@ -346,7 +360,8 @@ router.get('/logs', async (req, res, next) => {
       ...getServiceUpdateLogs(),
       ...getDockerLogs(),
       ...getNginxLogs(),
-      ...getPostgresLogs()
+      ...getPostgresLogs(),
+      ...getRuntimeLogs()
     ]
       .sort((a, b) => new Date(a.timestamp) - new Date(b.timestamp))
       .slice(-200);

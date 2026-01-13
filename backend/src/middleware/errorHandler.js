@@ -3,7 +3,7 @@
 const fs = require('fs');
 const path = require('path');
 
-const appLogsPath = path.join(process.cwd(), 'backend/logs/app.log');
+const appLogsPath = path.join(__dirname, '..', 'logs', 'app.log');
 fs.mkdirSync(path.dirname(appLogsPath), { recursive: true });
 
 module.exports = (err, req, res, next) => {

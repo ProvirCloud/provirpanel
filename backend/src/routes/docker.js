@@ -14,7 +14,7 @@ const multer = require('multer');
 const router = express.Router();
 const upload = multer({ dest: os.tmpdir() });
 const dockerManager = new DockerManager();
-const serviceLogsPath = path.join(process.cwd(), 'backend/logs/service-updates.log');
+const serviceLogsPath = path.join(__dirname, '..', 'logs', 'service-updates.log');
 fs.mkdirSync(path.dirname(serviceLogsPath), { recursive: true });
 const jwtSecret = process.env.JWT_SECRET || 'change-me';
 let dockerBaseDir =
