@@ -88,11 +88,78 @@ router.get('/templates', (req, res) => {
   res.json({ templates: SERVICE_TEMPLATES, baseDir: dockerBaseDir });
 });
 
+const SECRET_MASK = '******';
+
+const maskEnvVars = (envVars = []) =>
+  envVars.map((env) => ({
+    ...env,
+    value: env.secret ? SECRET_MASK : env.value
+  }));
+
+const normalizeEnvVars = (envVars = []) =>
+  envVars
+    .filter((env) => env && env.key)
+    .map((env) => ({
+      key: env.key,
+      value: env.value ?? '',
+      secret: !!env.secret
+    }));
+
+const mergeEnvVars = (incoming = [], existing = []) => {
+  const existingByKey = new Map(
+    existing.filter((env) => env && env.key).map((env) => [env.key, env])
+  );
+
+  return normalizeEnvVars(incoming).map((env) => {
+    const previous = existingByKey.get(env.key);
+    if (
+      env.secret &&
+      previous?.secret &&
+      (env.value === SECRET_MASK || env.value === '')
+    ) {
+      return { ...env, value: previous.value };
+    }
+    return env;
+  });
+};
+
+const sanitizeServiceForClient = (service) => ({
+  ...service,
+  networkName: service.networkName || 'bridge',
+  envVars: maskEnvVars(service.envVars || [])
+});
+
+const resolveNodeCommand = (volumes = []) => {
+  const projectRoot = volumes.find((m) => m.hostPath)?.hostPath;
+  if (!projectRoot) return null;
+
+  const packagePath = path.join(projectRoot, 'package.json');
+  if (!fs.existsSync(packagePath)) return null;
+
+  try {
+    const pkg = JSON.parse(fs.readFileSync(packagePath, 'utf-8'));
+    const scripts = pkg && typeof pkg === 'object' ? pkg.scripts || {} : {};
+    if (scripts.start) {
+      return ['sh', '-c', 'npm install && npm run start'];
+    }
+    if (scripts.dev) {
+      return ['sh', '-c', 'npm install && npm run dev'];
+    }
+    if (pkg.main) {
+      return ['sh', '-c', `npm install && node ${pkg.main}`];
+    }
+  } catch (err) {
+    return null;
+  }
+
+  return ['sh', '-c', 'npm install && npm start'];
+};
+
 // List saved services (containers + metadata)
 router.get('/services', async (req, res, next) => {
   try {
     const services = dockerManager.listServices();
-    res.json({ services });
+    res.json({ services: services.map(sanitizeServiceForClient) });
   } catch (err) {
     next(err);
   }
@@ -220,12 +287,7 @@ router.post('/images/pull', async (req, res, next) => {
 router.get('/services', async (req, res, next) => {
   try {
     const services = dockerManager.listServices();
-    // Add network fallback for older services
-    const servicesWithNetwork = services.map(service => ({
-      ...service,
-      networkName: service.networkName || 'bridge'
-    }));
-    res.json({ services: servicesWithNetwork });
+    res.json({ services: services.map(sanitizeServiceForClient) });
   } catch (err) {
     next(err);
   }
@@ -367,9 +429,10 @@ router.post('/services', async (req, res, next) => {
       throw err;
     }
 
+    const normalizedEnvVars = normalizeEnvVars(envVars);
     const env = [
       ...template.env.map((e) => `${e.key}=${e.value}`),
-      ...envVars.filter((e) => e.key).map((e) => `${e.key}=${e.value}`)
+      ...normalizedEnvVars.map((e) => `${e.key}=${e.value}`)
     ];
 
     let finalImageName = imageName;
@@ -392,13 +455,13 @@ router.post('/services', async (req, res, next) => {
         
         // Para Node.js, usar imagem base e instalar dependências
         if (templateId === 'node-app') {
-          containerCmd = ['sh', '-c', 'npm install && npm start'];
+          containerCmd = resolveNodeCommand(finalizedVolumes) || ['sh', '-c', 'npm install && npm start'];
         }
       } catch (err) {
         progress.push(`⚠️ Erro ao criar projeto exemplo: ${err.message}`);
       }
     } else if (!createProject && templateId === 'node-app') {
-      containerCmd = ['npm', 'start'];
+      containerCmd = resolveNodeCommand(finalizedVolumes) || ['npm', 'start'];
     }
 
     const containerConfig = {
@@ -416,9 +479,9 @@ router.post('/services', async (req, res, next) => {
       }
     };
 
-    if (containerCmd) {
-      containerConfig.Cmd = containerCmd;
-    }
+      if (containerCmd) {
+        containerConfig.Cmd = containerCmd;
+      }
     if (template.workdir) {
       containerConfig.WorkingDir = template.workdir;
     }
@@ -449,6 +512,8 @@ router.post('/services', async (req, res, next) => {
         hostPort: resolvedPort,
         containerPort: template.containerPort,
         volumes: finalizedVolumes,
+        envVars: normalizedEnvVars,
+        command: containerCmd || null,
         networkName,
         url: `http://localhost:${resolvedPort}`,
         serverIP: getLocalIP(),
@@ -553,7 +618,7 @@ router.post('/services', async (req, res, next) => {
         progressNamespace.emit('progress', { sessionId, message: '✅ Serviço criado com sucesso!' });
       }
 
-      res.json({ service, managerService, container, progress, sessionId });
+      res.json({ service: sanitizeServiceForClient(service), managerService, container, progress, sessionId });
     } catch (containerErr) {
       progress.push(`❌ Erro ao criar container: ${containerErr.message}`);
       throw containerErr;
@@ -662,10 +727,16 @@ router.put('/services/:id', async (req, res, next) => {
     const template = SERVICE_TEMPLATES.find((t) => t.id === service.templateId);
     const resolvedPort = newPort || service.hostPort;
     
+    const resolvedEnvVars = mergeEnvVars(envVars, service.envVars || []);
     const env = [
       ...template.env.map((e) => `${e.key}=${e.value}`),
-      ...envVars.filter((e) => e.key).map((e) => `${e.key}=${e.value}`)
+      ...resolvedEnvVars.map((e) => `${e.key}=${e.value}`)
     ];
+
+    let containerCmd = template.command;
+    if (service.templateId === 'node-app') {
+      containerCmd = resolveNodeCommand(service.volumes) || containerCmd;
+    }
 
     const containerConfig = {
       name: service.name,
@@ -684,15 +755,15 @@ router.put('/services/:id', async (req, res, next) => {
       }
     };
 
-    if (template.command) {
-      containerConfig.Cmd = template.command;
+    if (containerCmd) {
+      containerConfig.Cmd = containerCmd;
     }
     if (template.workdir) {
       containerConfig.WorkingDir = template.workdir;
     }
 
     // For Node.js with project, use npm install and start
-    if (service.hasProject && service.templateId === 'node-app') {
+    if (service.hasProject && service.templateId === 'node-app' && !containerCmd) {
       containerConfig.Cmd = ['sh', '-c', 'npm install && npm start'];
     }
 
@@ -703,6 +774,8 @@ router.put('/services/:id', async (req, res, next) => {
       ...service,
       containerId: container.Id,
       hostPort: resolvedPort,
+      envVars: resolvedEnvVars,
+      command: containerCmd || null,
       networkName: networkName || service.networkName,
       url: `http://localhost:${resolvedPort}`,
       serverIP: getLocalIP(),
@@ -711,7 +784,7 @@ router.put('/services/:id', async (req, res, next) => {
     };
 
     dockerManager.saveService(updatedService);
-    res.json({ service: updatedService });
+    res.json({ service: sanitizeServiceForClient(updatedService) });
   } catch (err) {
     next(err);
   }

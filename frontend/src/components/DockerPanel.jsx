@@ -194,7 +194,7 @@ const DockerPanel = () => {
           hostPath: v.hostPath || (baseDir ? `${baseDir}/${tpl?.label ? tpl.label.replace(/[^a-zA-Z0-9_-]/g, '-').toLowerCase() : 'service'}` : ''),
           containerPath: v.containerPath
         })) || [],
-      envs: tpl?.env?.map((e) => ({ key: e.key, value: e.value })) || [],
+      envs: tpl?.env?.map((e) => ({ key: e.key, value: e.value, secret: false })) || [],
       createProject: false,
       createManager: false,
       configureDb: null,
@@ -611,7 +611,7 @@ const DockerPanel = () => {
                 className="text-xs text-blue-300 underline"
                 onClick={() => setServiceForm((p) => ({
                   ...p,
-                  envs: [...p.envs, { key: '', value: '' }]
+                  envs: [...p.envs, { key: '', value: '', secret: false }]
                 }))}
               >
                 + Adicionar variável
@@ -632,6 +632,7 @@ const DockerPanel = () => {
                 <input
                   className="flex-1 min-w-[200px] rounded-xl border border-slate-800 bg-slate-950 px-3 py-2 text-sm text-white"
                   placeholder="value"
+                  type={env.secret ? 'password' : 'text'}
                   value={env.value}
                   onChange={(e) => {
                     const next = [...serviceForm.envs]
@@ -639,6 +640,23 @@ const DockerPanel = () => {
                     setServiceForm((p) => ({ ...p, envs: next }))
                   }}
                 />
+                <label className="flex items-center gap-2 text-xs text-slate-300">
+                  <input
+                    type="checkbox"
+                    className="rounded border-slate-700 bg-slate-900 text-blue-400"
+                    checked={!!env.secret}
+                    onChange={(e) => {
+                      const next = [...serviceForm.envs]
+                      const nextSecret = e.target.checked
+                      next[idx].secret = nextSecret
+                      if (!nextSecret && next[idx].value === '******') {
+                        next[idx].value = ''
+                      }
+                      setServiceForm((p) => ({ ...p, envs: next }))
+                    }}
+                  />
+                  Secreto
+                </label>
                 <button
                   className="rounded-xl border border-rose-800 bg-rose-950 px-3 py-2 text-xs text-rose-200 hover:bg-rose-900"
                   onClick={() => {
@@ -1028,7 +1046,13 @@ const DockerPanel = () => {
                       <div className="flex gap-2">
                         <button
                           className="rounded-xl border border-blue-800 bg-blue-950 px-3 py-2 text-xs text-blue-200 hover:bg-blue-900"
-                          onClick={() => setEditDialog({ ...svc, newEnvVars: [] })}
+                          onClick={() => setEditDialog({ 
+                            ...svc, 
+                            newEnvVars: (svc.envVars || []).map((env) => ({
+                              ...env,
+                              value: env.secret ? '******' : env.value
+                            }))
+                          })}
                         >
                           Editar
                         </button>
@@ -1249,9 +1273,9 @@ const DockerPanel = () => {
 
       {editDialog && (
         <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50">
-          <div className="bg-slate-900 border border-slate-700 rounded-2xl p-6 max-w-md w-full mx-4">
+          <div className="bg-slate-900 border border-slate-700 rounded-2xl p-6 max-w-md w-full mx-4 max-h-[85vh] flex flex-col">
             <h3 className="text-lg font-semibold text-white mb-4">⚙️ Editar Serviço</h3>
-            <div className="space-y-4">
+            <div className="space-y-4 overflow-y-auto pr-1 flex-1">
               <div>
                 <label className="block text-sm text-slate-300 mb-2">Porta Externa</label>
                 <input
@@ -1283,6 +1307,9 @@ const DockerPanel = () => {
               <div>
                 <label className="block text-sm text-slate-300 mb-2">Variáveis de Ambiente</label>
                 <div className="space-y-2">
+                  {(editDialog.newEnvVars || []).length === 0 && (
+                    <p className="text-xs text-slate-500">Nenhuma variável configurada.</p>
+                  )}
                   {(editDialog.newEnvVars || []).map((env, idx) => (
                     <div key={idx} className="flex gap-2">
                       <input
@@ -1292,12 +1319,16 @@ const DockerPanel = () => {
                         onChange={(e) => {
                           const newEnvs = [...(editDialog.newEnvVars || [])];
                           newEnvs[idx].key = e.target.value;
+                          if (newEnvs[idx].secret && newEnvs[idx].value === '******') {
+                            newEnvs[idx].value = '';
+                          }
                           setEditDialog(prev => ({ ...prev, newEnvVars: newEnvs }));
                         }}
                       />
                       <input
                         className="flex-1 rounded-xl border border-slate-700 bg-slate-800 px-3 py-2 text-sm text-white"
                         placeholder="valor"
+                        type={env.secret ? 'password' : 'text'}
                         value={env.value}
                         onChange={(e) => {
                           const newEnvs = [...(editDialog.newEnvVars || [])];
@@ -1305,6 +1336,23 @@ const DockerPanel = () => {
                           setEditDialog(prev => ({ ...prev, newEnvVars: newEnvs }));
                         }}
                       />
+                      <label className="flex items-center gap-2 text-xs text-slate-300">
+                        <input
+                          type="checkbox"
+                          className="rounded border-slate-600 bg-slate-800 text-blue-400"
+                          checked={!!env.secret}
+                          onChange={(e) => {
+                            const newEnvs = [...(editDialog.newEnvVars || [])];
+                            const nextSecret = e.target.checked;
+                            newEnvs[idx].secret = nextSecret;
+                            if (!nextSecret && newEnvs[idx].value === '******') {
+                              newEnvs[idx].value = '';
+                            }
+                            setEditDialog(prev => ({ ...prev, newEnvVars: newEnvs }));
+                          }}
+                        />
+                        Secreto
+                      </label>
                       <button
                         className="rounded-xl border border-rose-700 bg-rose-800 px-3 py-2 text-xs text-rose-200"
                         onClick={() => {
@@ -1319,7 +1367,7 @@ const DockerPanel = () => {
                   <button
                     className="text-xs text-blue-300 underline"
                     onClick={() => {
-                      const newEnvs = [...(editDialog.newEnvVars || []), { key: '', value: '' }];
+                      const newEnvs = [...(editDialog.newEnvVars || []), { key: '', value: '', secret: false }];
                       setEditDialog(prev => ({ ...prev, newEnvVars: newEnvs }));
                     }}
                   >
