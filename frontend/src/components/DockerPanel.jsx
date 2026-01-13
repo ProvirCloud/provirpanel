@@ -405,7 +405,8 @@ const DockerPanel = () => {
       loadServices()
       loadContainers()
     } catch (err) {
-      addToast('Erro ao atualizar serviço', 'error')
+      const message = err.response?.data?.message || err.message || 'Erro ao atualizar serviço'
+      addToast(message, 'error')
     }
   }
 

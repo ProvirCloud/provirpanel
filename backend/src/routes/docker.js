@@ -781,10 +781,14 @@ router.put('/services/:id', async (req, res, next) => {
       }
     }
 
+    appendServiceLog('info', `Atualizacao de servico iniciada: ${service.name}`);
+
     // Stop current container
     if (service.containerId) {
       try {
+        appendServiceLog('info', `Parando container atual ${service.containerId} (${service.name})`);
         await dockerManager.stopContainer(service.containerId);
+        appendServiceLog('info', `Removendo container atual ${service.containerId} (${service.name})`);
         await dockerManager.removeContainer(service.containerId);
       } catch (err) {
         // Container might already be stopped/removed
@@ -792,7 +796,9 @@ router.put('/services/:id', async (req, res, next) => {
     }
 
     // Create new container with updated config
-    const template = SERVICE_TEMPLATES.find((t) => t.id === service.templateId);
+    const template =
+      SERVICE_TEMPLATES.find((t) => t.id === service.templateId) ||
+      { env: [], workdir: null, command: null };
     const resolvedPort = newPort || service.hostPort;
     
     const resolvedEnvVars = mergeEnvVars(envVars, service.envVars || []);
@@ -806,6 +812,10 @@ router.put('/services/:id', async (req, res, next) => {
     if (service.templateId === 'node-app' && !normalizedCommand) {
       containerCmd = resolveNodeCommand(service.volumes) || containerCmd;
     }
+    appendServiceLog(
+      'info',
+      `Comando definido para ${service.name}: ${containerCmd ? containerCmd.join(' ') : 'padrao'}`
+    );
 
     const containerConfig = {
       name: service.name,
@@ -836,6 +846,7 @@ router.put('/services/:id', async (req, res, next) => {
       containerConfig.Cmd = ['sh', '-c', 'npm install && npm start'];
     }
 
+    appendServiceLog('info', `Iniciando novo container para ${service.name}`);
     const container = await dockerManager.runContainer(service.image, containerConfig);
     
     // Update service
@@ -853,8 +864,10 @@ router.put('/services/:id', async (req, res, next) => {
     };
 
     dockerManager.saveService(updatedService);
+    appendServiceLog('info', `Atualizacao de servico concluida: ${service.name}`);
     res.json({ service: sanitizeServiceForClient(updatedService) });
   } catch (err) {
+    appendServiceLog('error', `Erro ao atualizar servico ${req.params.id}: ${err.message}`);
     next(err);
   }
 });
@@ -890,10 +903,9 @@ router.post('/services/:id/project-upload', upload.single('archive'), async (req
       fs.unlink(archivePath, () => {});
     }
 
-    const template = SERVICE_TEMPLATES.find((t) => t.id === service.templateId);
-    if (!template) {
-      return res.status(400).json({ message: 'Template not found' });
-    }
+    const template =
+      SERVICE_TEMPLATES.find((t) => t.id === service.templateId) ||
+      { env: [], workdir: null, command: null };
 
     const resolvedEnvVars = service.envVars || [];
     const env = [
