@@ -58,6 +58,28 @@ const formatCommandForInput = (command) => {
   return ''
 }
 
+const parseEnvFile = async (file) => {
+  const content = await file.text()
+  return content
+    .split('\n')
+    .map((line) => line.trim())
+    .filter((line) => line && !line.startsWith('#'))
+    .map((line) => {
+      const idx = line.indexOf('=')
+      if (idx === -1) return null
+      const key = line.slice(0, idx).trim()
+      let value = line.slice(idx + 1).trim()
+      if (
+        (value.startsWith('"') && value.endsWith('"')) ||
+        (value.startsWith("'") && value.endsWith("'"))
+      ) {
+        value = value.slice(1, -1)
+      }
+      return key ? { key, value, secret: false } : null
+    })
+    .filter(Boolean)
+}
+
 const DockerPanel = () => {
   const [activeTab, setActiveTab] = useState('services')
   const [containers, setContainers] = useState([])
@@ -706,6 +728,33 @@ const DockerPanel = () => {
               </div>
             ))}
           </div>
+
+          {(tpl?.id === 'node-app' || tpl?.id === 'node' || (tpl?.image || '').startsWith('node')) && (
+            <div className="grid gap-2">
+              <label className="text-xs text-slate-300">Importar arquivo .env</label>
+              <input
+                type="file"
+                accept=".env,text/plain"
+                className="rounded-xl border border-slate-800 bg-slate-950 px-3 py-2 text-sm text-slate-200 file:mr-3 file:rounded-lg file:border-0 file:bg-blue-500 file:px-3 file:py-1.5 file:text-xs file:font-semibold file:text-slate-950"
+                onChange={async (e) => {
+                  const file = e.target.files?.[0]
+                  if (!file) return
+                  const parsed = await parseEnvFile(file)
+                  setServiceForm((p) => {
+                    const existing = new Map((p.envs || []).map((env) => [env.key, env]))
+                    parsed.forEach((env) => {
+                      existing.set(env.key, env)
+                    })
+                    return { ...p, envs: Array.from(existing.values()) }
+                  })
+                  e.target.value = ''
+                }}
+              />
+              <p className="text-xs text-slate-400">
+                As chaves do arquivo substituem as existentes com o mesmo nome.
+              </p>
+            </div>
+          )}
 
           <div className="grid gap-2">
             <label className="text-xs text-slate-300">Comando de inicializacao</label>
@@ -1457,6 +1506,32 @@ const DockerPanel = () => {
                   </button>
                 </div>
               </div>
+              {(editDialog.templateId === 'node-app' || editDialog.templateId === 'node' || (editDialog.image || '').startsWith('node')) && (
+                <div>
+                  <label className="block text-sm text-slate-300 mb-2">Importar arquivo .env</label>
+                  <input
+                    type="file"
+                    accept=".env,text/plain"
+                    className="w-full rounded-xl border border-slate-700 bg-slate-800 px-3 py-2 text-sm text-slate-200 file:mr-3 file:rounded-lg file:border-0 file:bg-blue-500 file:px-3 file:py-1.5 file:text-xs file:font-semibold file:text-slate-950"
+                    onChange={async (e) => {
+                      const file = e.target.files?.[0]
+                      if (!file) return
+                      const parsed = await parseEnvFile(file)
+                      setEditDialog((prev) => {
+                        const existing = new Map((prev.newEnvVars || []).map((env) => [env.key, env]))
+                        parsed.forEach((env) => {
+                          existing.set(env.key, env)
+                        })
+                        return { ...prev, newEnvVars: Array.from(existing.values()) }
+                      })
+                      e.target.value = ''
+                    }}
+                  />
+                  <p className="text-xs text-slate-400 mt-1">
+                    As chaves do arquivo substituem as existentes com o mesmo nome.
+                  </p>
+                </div>
+              )}
               {(editDialog.templateId === 'node-app' || editDialog.templateId === 'node' || (editDialog.image || '').startsWith('node')) && (
                 <div>
                   <label className="block text-sm text-slate-300 mb-2">Atualizar projeto (zip/tar)</label>
