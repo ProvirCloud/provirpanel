@@ -833,8 +833,6 @@ router.put('/services/:id', async (req, res, next) => {
       { env: [], workdir: null, command: null };
     const projectPath = resolveProjectPathFromVolume(service.volumes);
     const workdir = projectPath?.containerPath || template.workdir || null;
-    const projectPath = resolveProjectPathFromVolume(service.volumes);
-    const workdir = projectPath?.containerPath || template.workdir || null;
     const resolvedPort = newPort || service.hostPort;
     
     const resolvedEnvVars = mergeEnvVars(envVars, service.envVars || []);
