@@ -375,6 +375,11 @@ const normalizeCommand = (commandInput) => {
   return null;
 };
 
+const stringifyCommand = (command) => {
+  if (!command) return '';
+  return Array.isArray(command) ? command.join(' ') : String(command);
+};
+
 const ensureCommandWorkdir = (command, workdir) => {
   if (!command || !workdir) return command;
   if (Array.isArray(command)) {
@@ -385,6 +390,31 @@ const ensureCommandWorkdir = (command, workdir) => {
   }
   if (typeof command === 'string') {
     return `cd ${workdir} && ${command}`;
+  }
+  return command;
+};
+
+const ensureNpmDevDependencies = (command) => {
+  if (!command) return command;
+  const prefix = 'NPM_CONFIG_PRODUCTION=false';
+  const needsPrefix = (value) => {
+    const hasInstall = value.includes('npm install') || value.includes('npm ci');
+    const hasBuild = value.includes('npm run build') || value.includes('next build');
+    return hasInstall && hasBuild && !value.includes(prefix);
+  };
+  if (Array.isArray(command)) {
+    if (command[0] === 'sh' && command[1] === '-c') {
+      const cmd = command.slice(2).join(' ');
+      if (!needsPrefix(cmd)) return command;
+      return ['sh', '-c', `${prefix} ${cmd}`];
+    }
+    const cmd = command.join(' ');
+    if (!needsPrefix(cmd)) return command;
+    return ['sh', '-c', `${prefix} ${cmd}`];
+  }
+  if (typeof command === 'string') {
+    if (!needsPrefix(command)) return command;
+    return `${prefix} ${command}`;
   }
   return command;
 };
@@ -707,6 +737,11 @@ router.post('/services', async (req, res, next) => {
       containerCmd = resolveNodeCommand(finalizedVolumes) || ['npm', 'start'];
     }
     containerCmd = ensureCommandWorkdir(containerCmd, template.workdir);
+    const createCmdBefore = stringifyCommand(containerCmd);
+    containerCmd = ensureNpmDevDependencies(containerCmd);
+    if (stringifyCommand(containerCmd) !== createCmdBefore) {
+      progress.push('ℹ️ Forcando instalacao de dependencias de desenvolvimento para build');
+    }
 
     const containerConfig = {
       name,
@@ -1017,6 +1052,11 @@ router.put('/services/:id', async (req, res, next) => {
       containerCmd = resolveNodeCommand(service.volumes) || containerCmd;
     }
     containerCmd = ensureCommandWorkdir(containerCmd, workdir);
+    const updateCmdBefore = stringifyCommand(containerCmd);
+    containerCmd = ensureNpmDevDependencies(containerCmd);
+    if (stringifyCommand(containerCmd) !== updateCmdBefore) {
+      appendServiceLog('info', 'Forcando instalacao de dependencias de desenvolvimento para build');
+    }
     appendServiceLog(
       'info',
       `Comando definido para ${service.name}: ${containerCmd ? containerCmd.join(' ') : 'padrao'}`
@@ -1156,6 +1196,11 @@ router.post('/services/:id/project-upload', upload.single('archive'), async (req
     let containerCmd = service.command || template.command;
     containerCmd = resolveNodeCommand(service.volumes) || containerCmd;
     containerCmd = ensureCommandWorkdir(containerCmd, workdir);
+    const uploadCmdBefore = stringifyCommand(containerCmd);
+    containerCmd = ensureNpmDevDependencies(containerCmd);
+    if (stringifyCommand(containerCmd) !== uploadCmdBefore) {
+      appendServiceLog('info', 'Forcando instalacao de dependencias de desenvolvimento para build');
+    }
     appendServiceLog('info', `Comando detectado para ${service.name}: ${containerCmd ? containerCmd.join(' ') : 'padrao'}`);
     if (workdir) {
       appendServiceLog('info', `WorkingDir para ${service.name}: ${workdir}`);
