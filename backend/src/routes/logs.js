@@ -551,11 +551,24 @@ router.get('/logs', async (req, res, next) => {
   try {
     const dockerLogs = await getDockerLogsCached();
 
+    const dockerEntries = Array.isArray(dockerLogs) ? dockerLogs : [];
+    const hasDockerSource = dockerEntries.some((log) =>
+      (log.source || '').startsWith('docker')
+    );
+    if (!hasDockerSource) {
+      dockerEntries.push({
+        timestamp: new Date().toISOString(),
+        level: 'info',
+        source: 'docker',
+        message: 'Logs do Docker indisponiveis ou vazios no momento.'
+      });
+    }
+
     const logs = [
       ...safeLogs('pm2', getPM2Logs),
       ...safeLogs('backend', getAppLogs),
       ...safeLogs('service-update', getServiceUpdateLogs),
-      ...dockerLogs,
+      ...dockerEntries,
       ...safeLogs('nginx', getNginxLogs),
       ...safeLogs('postgres', getPostgresLogs),
       ...getRuntimeLogs()
