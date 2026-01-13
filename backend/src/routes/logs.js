@@ -266,6 +266,39 @@ const getPostgresLogs = () => {
   }));
 };
 
+// Detecta o nivel do log baseado em palavras-chave
+const detectLogLevel = (message) => {
+  const msgLower = message.toLowerCase();
+  if (msgLower.includes('error') || msgLower.includes('fatal') || msgLower.includes('exception') ||
+      msgLower.includes('failed') || msgLower.includes('panic')) {
+    return 'error';
+  }
+  if (msgLower.includes('warn') || msgLower.includes('warning') || msgLower.includes('deprecated')) {
+    return 'warn';
+  }
+  if (msgLower.includes('debug') || msgLower.includes('trace')) {
+    return 'debug';
+  }
+  return 'info';
+};
+
+// Extrai timestamp do log se disponível
+const extractTimestamp = (line) => {
+  // Tenta ISO format: 2025-01-13T12:34:56Z
+  const isoMatch = line.match(/(\d{4}-\d{2}-\d{2}[T\s]\d{2}:\d{2}:\d{2}(?:\.\d{3})?(?:Z|[+-]\d{2}:?\d{2})?)/);
+  if (isoMatch) {
+    try {
+      const date = new Date(isoMatch[1]);
+      if (!isNaN(date.getTime())) {
+        return { timestamp: date.toISOString(), cleanMessage: line.replace(isoMatch[0], '').trim() };
+      }
+    } catch (e) {}
+  }
+
+  // Fallback: usa timestamp atual
+  return { timestamp: new Date().toISOString(), cleanMessage: line };
+};
+
 const getDockerLogs = async () => {
   const logs = [];
   let services = [];
@@ -278,20 +311,22 @@ const getDockerLogs = async () => {
       : null;
     return [{
       timestamp: new Date().toISOString(),
-      level: 'warn',
-      source: 'docker',
-      message: `Nao foi possivel listar servicos do Docker: ${err.message}${hint ? ` (${hint})` : ''}`
+      level: 'error',
+      source: 'docker:system',
+      message: `Nao foi possivel listar servicos do Docker: ${err.message}${hint ? ` (${hint})` : ''}`,
+      metadata: { error: err.message, hint }
     }];
   }
 
   try {
-    containers = await withTimeout(dockerManager.listContainers(), 1500, null);
+    containers = await withTimeout(dockerManager.listContainers(), 2000, null);
     if (!containers) {
       logs.push({
         timestamp: new Date().toISOString(),
         level: 'warn',
-        source: 'docker',
-        message: 'Timeout ao listar containers do Docker.'
+        source: 'docker:system',
+        message: 'Timeout ao listar containers do Docker.',
+        metadata: { timeout: true }
       });
       containers = [];
     }
@@ -301,58 +336,74 @@ const getDockerLogs = async () => {
       : null;
     logs.push({
       timestamp: new Date().toISOString(),
-      level: 'warn',
-      source: 'docker',
-      message: `Nao foi possivel listar containers do Docker: ${err.message}${hint ? ` (${hint})` : ''}`
+      level: 'error',
+      source: 'docker:system',
+      message: `Nao foi possivel listar containers do Docker: ${err.message}${hint ? ` (${hint})` : ''}`,
+      metadata: { error: err.message, hint }
     });
   }
 
   logs.push({
     timestamp: new Date().toISOString(),
     level: 'info',
-    source: 'docker',
-    message: `Containers ativos: ${containers.length} | Servicos registrados: ${services.length}`
+    source: 'docker:system',
+    message: `Containers ativos: ${containers.length} | Servicos registrados: ${services.length}`,
+    metadata: { containersCount: containers.length, servicesCount: services.length }
   });
 
   if (!services.length && !containers.length) {
     logs.push({
       timestamp: new Date().toISOString(),
       level: 'info',
-      source: 'docker',
+      source: 'docker:system',
       message: 'Nenhum servico registrado ou container ativo para logs.'
     });
     return logs;
   }
 
   const containerMap = new Map();
+  const containerInfo = new Map();
+
   services.forEach((service) => {
     if (!service.containerId) {
       logs.push({
         timestamp: new Date().toISOString(),
         level: 'warn',
         source: `docker:${service.name}`,
-        message: 'Servico sem containerId registrado.'
+        message: 'Servico sem containerId registrado.',
+        metadata: { serviceName: service.name }
       });
       return;
     }
     containerMap.set(service.containerId, service.name);
   });
+
   containers.forEach((container) => {
-    if (!containerMap.has(container.Id)) {
-      const name = container.Names?.[0]?.replace('/', '') || container.Id.slice(0, 12);
-      containerMap.set(container.Id, name);
+    const id = container.Id;
+    const name = container.Names?.[0]?.replace('/', '') || id.slice(0, 12);
+    if (!containerMap.has(id)) {
+      containerMap.set(id, name);
     }
+    containerInfo.set(id, {
+      name,
+      state: container.State,
+      status: container.Status,
+      image: container.Image,
+      created: container.Created
+    });
   });
 
   for (const [containerId, name] of containerMap.entries()) {
+    const info = containerInfo.get(containerId);
     try {
-      const output = await withTimeout(readDockerContainerLogs(containerId), 1500, '');
+      const output = await withTimeout(readDockerContainerLogs(containerId, 3000), 2500, '');
       if (!output) {
         logs.push({
           timestamp: new Date().toISOString(),
           level: 'warn',
           source: `docker:${name}`,
-          message: 'Timeout ao ler logs do container.'
+          message: 'Timeout ao ler logs do container.',
+          metadata: { containerId: containerId.slice(0, 12), timeout: true, ...info }
         });
         continue;
       }
@@ -362,15 +413,23 @@ const getDockerLogs = async () => {
           timestamp: new Date().toISOString(),
           level: 'info',
           source: `docker:${name}`,
-          message: 'Nenhum log recente do container.'
+          message: 'Nenhum log recente do container.',
+          metadata: { containerId: containerId.slice(0, 12), ...info }
         });
       } else {
-        lines.forEach((line) => {
+        lines.slice(-100).forEach((line) => {
+          const { timestamp, cleanMessage } = extractTimestamp(line);
+          const detectedLevel = detectLogLevel(cleanMessage);
           logs.push({
-            timestamp: new Date().toISOString(),
-            level: 'info',
+            timestamp,
+            level: detectedLevel,
             source: `docker:${name}`,
-            message: line
+            message: cleanMessage,
+            metadata: {
+              containerId: containerId.slice(0, 12),
+              containerState: info?.state,
+              image: info?.image
+            }
           });
         });
       }
@@ -380,9 +439,10 @@ const getDockerLogs = async () => {
         : null;
       logs.push({
         timestamp: new Date().toISOString(),
-        level: 'warn',
+        level: 'error',
         source: `docker:${name}`,
-        message: `Nao foi possivel ler logs do container ${containerId}: ${err.message}${hint ? ` (${hint})` : ''}`
+        message: `Nao foi possivel ler logs do container ${containerId.slice(0, 12)}: ${err.message}${hint ? ` (${hint})` : ''}`,
+        metadata: { containerId: containerId.slice(0, 12), error: err.message, hint, ...info }
       });
     }
   }
@@ -639,6 +699,109 @@ router.get('/health', async (req, res, next) => {
   try {
     const health = await checkHealth();
     res.json(health);
+  } catch (error) {
+    next(error);
+  }
+});
+
+// Rota para estatísticas de logs
+router.get('/logs/stats', async (req, res, next) => {
+  try {
+    const dockerLogs = await getDockerLogsCached();
+    const allLogs = [
+      ...safeLogs('pm2', getPM2Logs),
+      ...safeLogs('backend', getAppLogs),
+      ...safeLogs('service-update', getServiceUpdateLogs),
+      ...(Array.isArray(dockerLogs) ? dockerLogs : []),
+      ...safeLogs('nginx', getNginxLogs),
+      ...safeLogs('postgres', getPostgresLogs),
+      ...getRuntimeLogs()
+    ];
+
+    const stats = {
+      total: allLogs.length,
+      byLevel: {},
+      bySource: {},
+      errorRate: 0,
+      warnRate: 0,
+      recentErrors: [],
+      timeline: {}
+    };
+
+    allLogs.forEach(log => {
+      // Contar por nível
+      stats.byLevel[log.level] = (stats.byLevel[log.level] || 0) + 1;
+
+      // Contar por fonte
+      const source = log.source || 'unknown';
+      stats.bySource[source] = (stats.bySource[source] || 0) + 1;
+
+      // Timeline por hora
+      const hour = new Date(log.timestamp).toISOString().slice(0, 13);
+      if (!stats.timeline[hour]) {
+        stats.timeline[hour] = { total: 0, error: 0, warn: 0, info: 0 };
+      }
+      stats.timeline[hour].total++;
+      stats.timeline[hour][log.level] = (stats.timeline[hour][log.level] || 0) + 1;
+
+      // Coletar erros recentes
+      if (log.level === 'error' && stats.recentErrors.length < 10) {
+        stats.recentErrors.push({
+          timestamp: log.timestamp,
+          source: log.source,
+          message: log.message.slice(0, 150)
+        });
+      }
+    });
+
+    stats.errorRate = stats.total > 0 ? ((stats.byLevel['error'] || 0) / stats.total * 100).toFixed(2) : 0;
+    stats.warnRate = stats.total > 0 ? ((stats.byLevel['warn'] || 0) / stats.total * 100).toFixed(2) : 0;
+
+    res.json({ stats });
+  } catch (error) {
+    next(error);
+  }
+});
+
+// Rota para exportar logs
+router.get('/logs/export', async (req, res, next) => {
+  try {
+    const format = req.query.format || 'json'; // json, csv, txt
+    const dockerLogs = await getDockerLogsCached();
+    const logs = [
+      ...safeLogs('pm2', getPM2Logs),
+      ...safeLogs('backend', getAppLogs),
+      ...safeLogs('service-update', getServiceUpdateLogs),
+      ...(Array.isArray(dockerLogs) ? dockerLogs : []),
+      ...safeLogs('nginx', getNginxLogs),
+      ...safeLogs('postgres', getPostgresLogs),
+      ...getRuntimeLogs()
+    ].sort((a, b) => new Date(a.timestamp) - new Date(b.timestamp));
+
+    if (format === 'json') {
+      res.setHeader('Content-Type', 'application/json');
+      res.setHeader('Content-Disposition', `attachment; filename="logs-${Date.now()}.json"`);
+      res.json({ logs, exportedAt: new Date().toISOString(), total: logs.length });
+    } else if (format === 'csv') {
+      res.setHeader('Content-Type', 'text/csv');
+      res.setHeader('Content-Disposition', `attachment; filename="logs-${Date.now()}.csv"`);
+      let csv = 'Timestamp,Level,Source,Message\n';
+      logs.forEach(log => {
+        const message = (log.message || '').replace(/"/g, '""').replace(/\n/g, ' ');
+        csv += `"${log.timestamp}","${log.level}","${log.source || ''}","${message}"\n`;
+      });
+      res.send(csv);
+    } else if (format === 'txt') {
+      res.setHeader('Content-Type', 'text/plain');
+      res.setHeader('Content-Disposition', `attachment; filename="logs-${Date.now()}.txt"`);
+      let txt = `=== LOGS EXPORT ===\nExported at: ${new Date().toISOString()}\nTotal logs: ${logs.length}\n\n`;
+      logs.forEach(log => {
+        txt += `[${log.timestamp}] [${log.level.toUpperCase()}] [${log.source || 'unknown'}] ${log.message}\n`;
+      });
+      res.send(txt);
+    } else {
+      res.status(400).json({ error: 'Invalid format. Use json, csv, or txt' });
+    }
   } catch (error) {
     next(error);
   }
