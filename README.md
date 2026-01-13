@@ -227,6 +227,23 @@ Endpoints:
 - `frontend/src/components/DockerPanel.jsx`: UI de servicos/envs/upload.
 - `frontend/src/components/LogsPanel.jsx`: filtros e agrupamento por fonte.
 
+### Nota: logs Docker (Ubuntu)
+Problema observado: logs dos containers Docker nao apareciam, apesar de containers ativos.
+
+Diagnostico:
+- Erro no PM2: `TypeError: stream.on is not a function` ao ler logs via Docker API.
+
+Causa raiz:
+- Versoes diferentes do dockerode retornam `Buffer` diretamente em `container.logs()` (ao inves de `Stream`).
+
+Solucao recomendada:
+- Ajustar `readDockerContainerLogs()` para lidar com tres casos:
+  1) `Buffer` direto (parse multiplexado do Docker)
+  2) `Stream` (listeners `data/end/error`)
+  3) Fallback (`String(data || '')`)
+- Aumentar timeout para lidar com latencia.
+- Considerar filtrar containers `running`.
+
 Socket:
 - `/api/docker/logs` com evento `subscribe`
 
