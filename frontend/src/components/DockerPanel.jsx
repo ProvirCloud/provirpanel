@@ -123,6 +123,7 @@ const DockerPanel = () => {
   const [baseDir, setBaseDir] = useState('')
   const [editDialog, setEditDialog] = useState(null)
   const [envImportDialog, setEnvImportDialog] = useState(null)
+  const [projectUploadStatus, setProjectUploadStatus] = useState(null)
   const [removeDialog, setRemoveDialog] = useState(null)
   const [postgresDatabases, setPostgresDatabases] = useState([])
   const token = localStorage.getItem('token')
@@ -413,15 +414,36 @@ const DockerPanel = () => {
     const formData = new FormData()
     formData.append('archive', file)
     try {
+      setProjectUploadStatus({ status: 'uploading', progress: 0, message: 'Enviando arquivo...' })
       await api.post(`/docker/services/${serviceId}/project-upload`, formData, {
-        headers: { 'Content-Type': 'multipart/form-data' }
+        headers: { 'Content-Type': 'multipart/form-data' },
+        onUploadProgress: (event) => {
+          const total = event.total || 0
+          const progress = total ? Math.round((event.loaded / total) * 100) : 0
+          setProjectUploadStatus((prev) => ({
+            ...(prev || {}),
+            status: 'uploading',
+            progress
+          }))
+        }
+      })
+      setProjectUploadStatus({
+        status: 'success',
+        progress: 100,
+        message: 'Projeto publicado com sucesso. Consulte os logs se precisar.'
       })
       addToast('Projeto atualizado com sucesso')
       loadContainers()
       loadServices()
       return true
     } catch (err) {
-      addToast('Erro ao enviar projeto', 'error')
+      const message = err.response?.data?.message || err.message || 'Erro ao enviar projeto'
+      setProjectUploadStatus({
+        status: 'error',
+        progress: 0,
+        message
+      })
+      addToast(message, 'error')
       return false
     }
   }
@@ -1185,15 +1207,18 @@ const DockerPanel = () => {
                       <div className="flex gap-2">
                         <button
                           className="rounded-xl border border-blue-800 bg-blue-950 px-3 py-2 text-xs text-blue-200 hover:bg-blue-900"
-                          onClick={() => setEditDialog({ 
-                            ...svc, 
-                            newEnvVars: (svc.envVars || []).map((env) => ({
-                              ...env,
-                              value: env.secret ? '******' : env.value
-                            })),
-                            commandInput: formatCommandForInput(svc.command),
-                            newProjectArchive: null
-                          })}
+                          onClick={() => {
+                            setProjectUploadStatus(null)
+                            setEditDialog({ 
+                              ...svc, 
+                              newEnvVars: (svc.envVars || []).map((env) => ({
+                                ...env,
+                                value: env.secret ? '******' : env.value
+                              })),
+                              commandInput: formatCommandForInput(svc.command),
+                              newProjectArchive: null
+                            })
+                          }}
                         >
                           Editar
                         </button>
@@ -1577,24 +1602,44 @@ const DockerPanel = () => {
                           }
                         }}
                       >
-                        Enviar projeto
-                      </button>
-                      <button
-                        className="rounded-xl border border-emerald-800 bg-emerald-950 px-3 py-2 text-xs text-emerald-200 hover:bg-emerald-900 disabled:cursor-not-allowed disabled:opacity-60"
-                        disabled={!editDialog.newProjectArchive}
-                        onClick={async () => {
-                          const ok = await uploadProjectArchive(editDialog.id, editDialog.newProjectArchive)
-                          if (ok) {
-                            setEditDialog(prev => ({ ...prev, newProjectArchive: null }))
-                          }
-                        }}
-                      >
                         Atualizar serviço publicado
                       </button>
                     </div>
                     <p className="text-xs text-slate-400">
                       O projeto sera extraido no volume do servico e o container sera reiniciado.
                     </p>
+                    {projectUploadStatus && (
+                      <div className="rounded-xl border border-slate-700 bg-slate-800/60 p-3 text-xs">
+                        <div className="flex items-center justify-between">
+                          <span className="text-slate-200">
+                            {projectUploadStatus.status === 'uploading' && 'Enviando...'}
+                            {projectUploadStatus.status === 'success' && 'Atualizacao concluida'}
+                            {projectUploadStatus.status === 'error' && 'Falha na atualizacao'}
+                          </span>
+                          <a
+                            className="text-blue-300 underline"
+                            href="/logs"
+                            target="_blank"
+                            rel="noreferrer"
+                          >
+                            Ver logs
+                          </a>
+                        </div>
+                        {projectUploadStatus.status === 'uploading' && (
+                          <div className="mt-2 h-2 w-full rounded-full bg-slate-700">
+                            <div
+                              className="h-2 rounded-full bg-blue-500 transition-all"
+                              style={{ width: `${projectUploadStatus.progress || 0}%` }}
+                            />
+                          </div>
+                        )}
+                        {projectUploadStatus.message && (
+                          <p className="mt-2 text-slate-300 break-all">
+                            {projectUploadStatus.message}
+                          </p>
+                        )}
+                      </div>
+                    )}
                   </div>
                 </div>
               )}
@@ -1604,7 +1649,10 @@ const DockerPanel = () => {
                 className="flex-1 rounded-xl bg-blue-500 px-4 py-2 text-sm font-semibold text-white hover:bg-blue-600"
                 onClick={async () => {
                   if (editDialog.newProjectArchive) {
-                    await uploadProjectArchive(editDialog.id, editDialog.newProjectArchive)
+                    const ok = await uploadProjectArchive(editDialog.id, editDialog.newProjectArchive)
+                    if (!ok) {
+                      return
+                    }
                   }
                   updateService(editDialog.id, {
                     hostPort: editDialog.newHostPort || editDialog.hostPort,

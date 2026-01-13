@@ -14,6 +14,8 @@ const multer = require('multer');
 const router = express.Router();
 const upload = multer({ dest: os.tmpdir() });
 const dockerManager = new DockerManager();
+const serviceLogsPath = path.join(process.cwd(), 'backend/logs/service-updates.log');
+fs.mkdirSync(path.dirname(serviceLogsPath), { recursive: true });
 const jwtSecret = process.env.JWT_SECRET || 'change-me';
 let dockerBaseDir =
   process.env.DOCKER_VOLUME_BASE ||
@@ -185,6 +187,15 @@ const extractArchiveTo = async (archivePath, targetDir) => {
     return;
   }
   throw new Error('Formato de arquivo não suportado. Use .zip, .tar, .tar.gz ou .tgz.');
+};
+
+const appendServiceLog = (level, message) => {
+  const entry = {
+    timestamp: new Date().toISOString(),
+    level,
+    message
+  };
+  fs.appendFile(serviceLogsPath, `${JSON.stringify(entry)}\n`, () => {});
 };
 
 const normalizeCommand = (commandInput) => {
@@ -838,9 +849,10 @@ router.put('/services/:id', async (req, res, next) => {
 });
 
 router.post('/services/:id/project-upload', upload.single('archive'), async (req, res, next) => {
+  let service = null;
   try {
     const services = dockerManager.listServices();
-    const service = services.find((s) => s.id === req.params.id);
+    service = services.find((s) => s.id === req.params.id);
     if (!service) {
       return res.status(404).json({ message: 'Service not found' });
     }
@@ -850,6 +862,8 @@ router.post('/services/:id/project-upload', upload.single('archive'), async (req
     if (!req.file) {
       return res.status(400).json({ message: 'Nenhum arquivo enviado.' });
     }
+
+    appendServiceLog('info', `Atualizacao de projeto iniciada: ${service.name}`);
 
     const projectDir = service.volumes?.find((m) => m.hostPath)?.hostPath;
     if (!projectDir) {
@@ -921,8 +935,10 @@ router.post('/services/:id/project-upload', upload.single('archive'), async (req
     };
 
     dockerManager.saveService(updatedService);
+    appendServiceLog('info', `Atualizacao de projeto concluida: ${service.name}`);
     res.json({ service: sanitizeServiceForClient(updatedService) });
   } catch (err) {
+    appendServiceLog('error', `Erro ao atualizar projeto ${service?.name || req.params.id}: ${err.message}`);
     next(err);
   }
 });

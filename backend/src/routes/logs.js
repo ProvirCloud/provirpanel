@@ -7,6 +7,7 @@ const { execSync } = require('child_process');
 const pool = require('../config/database');
 
 const router = express.Router();
+const serviceLogsPath = path.join(process.cwd(), 'backend/logs/service-updates.log');
 
 // Função para ler logs do PM2
 const getPM2Logs = () => {
@@ -41,6 +42,40 @@ const getPM2Logs = () => {
       timestamp: new Date().toISOString(),
       level: 'warn',
       message: 'Não foi possível ler logs do PM2: ' + error.message
+    }];
+  }
+};
+
+const getServiceUpdateLogs = () => {
+  try {
+    if (!fs.existsSync(serviceLogsPath)) {
+      return [];
+    }
+    const content = fs.readFileSync(serviceLogsPath, 'utf8');
+    const lines = content.split('\n').filter((line) => line.trim());
+    const logs = lines
+      .map((line) => {
+        try {
+          const parsed = JSON.parse(line);
+          if (!parsed || !parsed.timestamp || !parsed.message) {
+            return null;
+          }
+          return {
+            timestamp: parsed.timestamp,
+            level: parsed.level || 'info',
+            message: parsed.message
+          };
+        } catch (err) {
+          return null;
+        }
+      })
+      .filter(Boolean);
+    return logs.slice(-200);
+  } catch (error) {
+    return [{
+      timestamp: new Date().toISOString(),
+      level: 'warn',
+      message: 'Nao foi possivel ler logs de atualizacao: ' + error.message
     }];
   }
 };
@@ -151,7 +186,9 @@ const checkHealth = async () => {
 // Rota para logs
 router.get('/logs', async (req, res, next) => {
   try {
-    const logs = getPM2Logs();
+    const logs = [...getPM2Logs(), ...getServiceUpdateLogs()]
+      .sort((a, b) => new Date(a.timestamp) - new Date(b.timestamp))
+      .slice(-200);
     res.json({ logs });
   } catch (error) {
     next(error);
