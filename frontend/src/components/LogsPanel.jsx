@@ -28,7 +28,11 @@ const LogsPanel = () => {
   const loadLogs = async () => {
     try {
       const response = await api.get('/logs')
-      setLogs(response.data.logs || [])
+      const logs = response.data.logs || []
+      console.log('📋 Logs carregados:', logs.length)
+      console.log('🐳 Logs Docker:', logs.filter(l => l.source?.startsWith('docker')).length)
+      console.log('📦 Fontes:', [...new Set(logs.map(l => l.source))].sort())
+      setLogs(logs)
     } catch (error) {
       try {
         const response = await api.get('/logs/health')
