@@ -80,6 +80,28 @@ const parseEnvFile = async (file) => {
     .filter(Boolean)
 }
 
+const buildEnvMerge = (existing = [], incoming = []) => {
+  const existingMap = new Map(existing.map((env) => [env.key, env]))
+  const overwrites = []
+
+  incoming.forEach((env) => {
+    const prev = existingMap.get(env.key)
+    if (prev && prev.value !== env.value) {
+      overwrites.push({
+        key: env.key,
+        previous: prev.value,
+        next: env.value
+      })
+    }
+    existingMap.set(env.key, env)
+  })
+
+  return {
+    merged: Array.from(existingMap.values()),
+    overwrites
+  }
+}
+
 const DockerPanel = () => {
   const [activeTab, setActiveTab] = useState('services')
   const [containers, setContainers] = useState([])
@@ -100,6 +122,7 @@ const DockerPanel = () => {
   const [portAvailability, setPortAvailability] = useState(null)
   const [baseDir, setBaseDir] = useState('')
   const [editDialog, setEditDialog] = useState(null)
+  const [envImportDialog, setEnvImportDialog] = useState(null)
   const [removeDialog, setRemoveDialog] = useState(null)
   const [postgresDatabases, setPostgresDatabases] = useState([])
   const token = localStorage.getItem('token')
@@ -740,13 +763,13 @@ const DockerPanel = () => {
                   const file = e.target.files?.[0]
                   if (!file) return
                   const parsed = await parseEnvFile(file)
-                  setServiceForm((p) => {
-                    const existing = new Map((p.envs || []).map((env) => [env.key, env]))
-                    parsed.forEach((env) => {
-                      existing.set(env.key, env)
-                    })
-                    return { ...p, envs: Array.from(existing.values()) }
-                  })
+                  const currentEnvs = serviceForm?.envs || []
+                  const { merged, overwrites } = buildEnvMerge(currentEnvs, parsed)
+                  if (overwrites.length) {
+                    setEnvImportDialog({ target: 'create', merged, overwrites })
+                  } else {
+                    setServiceForm((p) => ({ ...p, envs: merged }))
+                  }
                   e.target.value = ''
                 }}
               />
@@ -1517,13 +1540,13 @@ const DockerPanel = () => {
                       const file = e.target.files?.[0]
                       if (!file) return
                       const parsed = await parseEnvFile(file)
-                      setEditDialog((prev) => {
-                        const existing = new Map((prev.newEnvVars || []).map((env) => [env.key, env]))
-                        parsed.forEach((env) => {
-                          existing.set(env.key, env)
-                        })
-                        return { ...prev, newEnvVars: Array.from(existing.values()) }
-                      })
+                      const currentEnvs = editDialog?.newEnvVars || []
+                      const { merged, overwrites } = buildEnvMerge(currentEnvs, parsed)
+                      if (overwrites.length) {
+                        setEnvImportDialog({ target: 'edit', merged, overwrites })
+                      } else {
+                        setEditDialog((prev) => ({ ...prev, newEnvVars: merged }))
+                      }
                       e.target.value = ''
                     }}
                   />
@@ -1582,6 +1605,55 @@ const DockerPanel = () => {
               <button
                 className="rounded-xl border border-slate-700 bg-slate-800 px-4 py-2 text-sm text-slate-300 hover:bg-slate-700"
                 onClick={() => setEditDialog(null)}
+              >
+                Cancelar
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {envImportDialog && (
+        <div className="fixed inset-0 bg-black/60 flex items-center justify-center z-50">
+          <div className="bg-slate-900 border border-slate-700 rounded-2xl p-6 max-w-lg w-full mx-4 max-h-[85vh] flex flex-col">
+            <h3 className="text-lg font-semibold text-white mb-2">⚠️ Variáveis serão sobrescritas</h3>
+            <p className="text-sm text-slate-300 mb-4">
+              As chaves abaixo já existem. Deseja substituir pelo novo valor do arquivo?
+            </p>
+            <div className="space-y-2 overflow-y-auto pr-1 flex-1">
+              {envImportDialog.overwrites.map((item) => (
+                <div key={item.key} className="rounded-xl border border-slate-700 bg-slate-800/60 p-3 text-xs">
+                  <p className="text-slate-200 font-semibold">{item.key}</p>
+                  <div className="mt-2 grid gap-2">
+                    <div className="rounded-lg border border-slate-800 bg-slate-900 p-2">
+                      <p className="text-[10px] uppercase text-slate-400">Atual</p>
+                      <p className="text-slate-200 break-all">{item.previous || '(vazio)'}</p>
+                    </div>
+                    <div className="rounded-lg border border-slate-800 bg-slate-900 p-2">
+                      <p className="text-[10px] uppercase text-slate-400">Novo</p>
+                      <p className="text-emerald-200 break-all">{item.next || '(vazio)'}</p>
+                    </div>
+                  </div>
+                </div>
+              ))}
+            </div>
+            <div className="flex gap-2 mt-6">
+              <button
+                className="flex-1 rounded-xl bg-blue-500 px-4 py-2 text-sm font-semibold text-white hover:bg-blue-600"
+                onClick={() => {
+                  if (envImportDialog.target === 'create') {
+                    setServiceForm((p) => ({ ...p, envs: envImportDialog.merged }))
+                  } else {
+                    setEditDialog((prev) => ({ ...prev, newEnvVars: envImportDialog.merged }))
+                  }
+                  setEnvImportDialog(null)
+                }}
+              >
+                Sobrescrever
+              </button>
+              <button
+                className="rounded-xl border border-slate-700 bg-slate-800 px-4 py-2 text-sm text-slate-300 hover:bg-slate-700"
+                onClick={() => setEnvImportDialog(null)}
               >
                 Cancelar
               </button>
