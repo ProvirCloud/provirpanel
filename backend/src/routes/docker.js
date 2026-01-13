@@ -265,6 +265,23 @@ const removeContainerByName = async (name) => {
   }
 };
 
+const writeEnvFile = (projectPath, envVars = [], templateEnv = []) => {
+  if (!projectPath?.hostPath) return;
+  const envLines = [
+    ...templateEnv.map((e) => `${e.key}=${e.value ?? ''}`),
+    ...envVars.map((e) => `${e.key}=${e.value ?? ''}`)
+  ];
+  const unique = new Map();
+  envLines.forEach((line) => {
+    const idx = line.indexOf('=');
+    if (idx === -1) return;
+    const key = line.slice(0, idx);
+    unique.set(key, line);
+  });
+  const content = Array.from(unique.values()).join('\n') + '\n';
+  fs.writeFileSync(path.join(projectPath.hostPath, '.env'), content, 'utf8');
+};
+
 const appendServiceLog = (level, message) => {
   const entry = {
     timestamp: new Date().toISOString(),
@@ -566,6 +583,12 @@ router.post('/services', async (req, res, next) => {
       ...template.env.map((e) => `${e.key}=${e.value}`),
       ...normalizedEnvVars.map((e) => `${e.key}=${e.value}`)
     ];
+
+    const projectPath = resolveProjectPathFromVolume(finalizedVolumes);
+    if (projectPath?.hostPath) {
+      writeEnvFile(projectPath, normalizedEnvVars, template.env);
+      progress.push(`📝 .env gerado em ${projectPath.hostPath}`);
+    }
 
     let finalImageName = imageName;
     const normalizedCommand = normalizeCommand(command);
@@ -873,6 +896,10 @@ router.put('/services/:id', async (req, res, next) => {
       ...template.env.map((e) => `${e.key}=${e.value}`),
       ...resolvedEnvVars.map((e) => `${e.key}=${e.value}`)
     ];
+    if (projectPath?.hostPath) {
+      writeEnvFile(projectPath, resolvedEnvVars, template.env);
+      appendServiceLog('info', `Arquivo .env atualizado em ${projectPath.hostPath}`);
+    }
 
     const normalizedCommand = normalizeCommand(command);
     let containerCmd = normalizedCommand || service.command || template.command;
@@ -988,6 +1015,10 @@ router.post('/services/:id/project-upload', upload.single('archive'), async (req
       ...template.env.map((e) => `${e.key}=${e.value}`),
       ...resolvedEnvVars.map((e) => `${e.key}=${e.value}`)
     ];
+    if (projectPath?.hostPath) {
+      writeEnvFile(projectPath, resolvedEnvVars, template.env);
+      appendServiceLog('info', `Arquivo .env atualizado em ${projectPath.hostPath}`);
+    }
 
     let containerCmd = service.command || template.command;
     containerCmd = resolveNodeCommand(service.volumes) || containerCmd;

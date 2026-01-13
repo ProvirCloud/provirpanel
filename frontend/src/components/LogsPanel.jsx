@@ -11,6 +11,7 @@ const LogsPanel = () => {
   const [dateFilter, setDateFilter] = useState('')
   const [levelFilter, setLevelFilter] = useState('all')
   const [sourceFilter, setSourceFilter] = useState('all')
+  const [groupBySource, setGroupBySource] = useState(false)
   const [autoRefresh, setAutoRefresh] = useState(true)
   const logsEndRef = useRef(null)
 
@@ -109,6 +110,19 @@ const LogsPanel = () => {
   const sources = Array.from(
     new Set(logs.map((log) => log.source).filter(Boolean))
   ).sort()
+
+  const sourceCounts = logs.reduce((acc, log) => {
+    const key = log.source || 'unknown'
+    acc[key] = (acc[key] || 0) + 1
+    return acc
+  }, {})
+
+  const groupedLogs = filteredLogs.reduce((acc, log) => {
+    const key = log.source || 'unknown'
+    if (!acc[key]) acc[key] = []
+    acc[key].push(log)
+    return acc
+  }, {})
 
   return (
     <div className="space-y-6">
@@ -222,6 +236,7 @@ const LogsPanel = () => {
                 setDateFilter('')
                 setLevelFilter('all')
                 setSourceFilter('all')
+                setGroupBySource(false)
               }}
               className="w-full rounded-xl border border-slate-800 bg-slate-950 px-3 py-2 text-sm text-slate-200 hover:bg-slate-800"
             >
@@ -241,6 +256,41 @@ const LogsPanel = () => {
             {filteredLogs.length !== logs.length && `${logs.length} total`}
           </div>
         </div>
+
+        <div className="mb-4 flex flex-wrap items-center gap-2">
+          <button
+            className={`rounded-full border px-3 py-1 text-xs ${
+              sourceFilter === 'all'
+                ? 'border-blue-500/60 bg-blue-500/10 text-blue-200'
+                : 'border-slate-700 text-slate-300 hover:bg-slate-800'
+            }`}
+            onClick={() => setSourceFilter('all')}
+          >
+            Todas ({logs.length})
+          </button>
+          {sources.map((source) => (
+            <button
+              key={source}
+              className={`rounded-full border px-3 py-1 text-xs ${
+                sourceFilter === source
+                  ? 'border-emerald-500/60 bg-emerald-500/10 text-emerald-200'
+                  : 'border-slate-700 text-slate-300 hover:bg-slate-800'
+              }`}
+              onClick={() => setSourceFilter(source)}
+            >
+              {source} ({sourceCounts[source] || 0})
+            </button>
+          ))}
+          <label className="ml-auto flex items-center gap-2 text-xs text-slate-300">
+            <input
+              type="checkbox"
+              checked={groupBySource}
+              onChange={(e) => setGroupBySource(e.target.checked)}
+              className="rounded border-slate-600 bg-slate-700 text-blue-500"
+            />
+            Agrupar por fonte
+          </label>
+        </div>
         
         <div className="h-96 overflow-y-auto rounded-xl border border-slate-800 bg-slate-950/80 p-4">
           {filteredLogs.length === 0 ? (
@@ -249,24 +299,49 @@ const LogsPanel = () => {
             </div>
           ) : (
             <div className="space-y-2 font-mono text-sm">
-              {filteredLogs.map((log, index) => (
-                <div key={index} className="flex gap-3 py-1">
-                  <span className="text-slate-500 whitespace-nowrap">
-                    {formatTimestamp(log.timestamp)}
-                  </span>
-                  <span className={`px-2 py-0.5 rounded text-xs font-semibold whitespace-nowrap ${getLevelColor(log.level)}`}>
-                    {log.level.toUpperCase()}
-                  </span>
-                  {log.source && (
-                    <span className="px-2 py-0.5 rounded text-xs font-semibold whitespace-nowrap bg-slate-700/60 text-slate-200">
-                      {log.source}
+              {!groupBySource &&
+                filteredLogs.map((log, index) => (
+                  <div key={index} className="flex gap-3 py-1">
+                    <span className="text-slate-500 whitespace-nowrap">
+                      {formatTimestamp(log.timestamp)}
                     </span>
-                  )}
-                  <span className="text-slate-200 break-all">
-                    {log.message}
-                  </span>
-                </div>
-              ))}
+                    <span className={`px-2 py-0.5 rounded text-xs font-semibold whitespace-nowrap ${getLevelColor(log.level)}`}>
+                      {log.level.toUpperCase()}
+                    </span>
+                    {log.source && (
+                      <span className="px-2 py-0.5 rounded text-xs font-semibold whitespace-nowrap bg-slate-700/60 text-slate-200">
+                        {log.source}
+                      </span>
+                    )}
+                    <span className="text-slate-200 break-all">
+                      {log.message}
+                    </span>
+                  </div>
+                ))}
+              {groupBySource &&
+                Object.entries(groupedLogs).map(([source, items]) => (
+                  <div key={source} className="rounded-xl border border-slate-800 bg-slate-900/40 p-3">
+                    <div className="mb-2 flex items-center justify-between">
+                      <span className="text-xs font-semibold text-emerald-200">{source}</span>
+                      <span className="text-[10px] text-slate-400">{items.length} linhas</span>
+                    </div>
+                    <div className="space-y-2">
+                      {items.map((log, index) => (
+                        <div key={`${source}-${index}`} className="flex gap-3 py-1">
+                          <span className="text-slate-500 whitespace-nowrap">
+                            {formatTimestamp(log.timestamp)}
+                          </span>
+                          <span className={`px-2 py-0.5 rounded text-xs font-semibold whitespace-nowrap ${getLevelColor(log.level)}`}>
+                            {log.level.toUpperCase()}
+                          </span>
+                          <span className="text-slate-200 break-all">
+                            {log.message}
+                          </span>
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+                ))}
               <div ref={logsEndRef} />
             </div>
           )}
