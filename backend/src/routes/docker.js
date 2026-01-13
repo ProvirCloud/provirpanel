@@ -148,28 +148,38 @@ const resolveProjectPathFromVolume = (volumes = []) => {
     return fs.existsSync(appDir) || fs.existsSync(pagesDir) || fs.existsSync(nextConfig);
   };
 
-  if (hasNextProject(root)) {
-    return { hostPath: root, containerPath: volume.containerPath };
-  }
+  const resolveContainerPath = (hostDir) => {
+    const relative = path.relative(root, hostDir).split(path.sep).join('/');
+    return relative ? path.posix.join(volume.containerPath, relative) : volume.containerPath;
+  };
 
-  try {
-    const entries = fs
-      .readdirSync(root, { withFileTypes: true })
-      .filter((entry) => entry.isDirectory())
-      .map((entry) => entry.name)
-      .sort();
-    for (const entry of entries) {
-      const candidateDir = path.join(root, entry);
-      if (hasNextProject(candidateDir)) {
-        return {
-          hostPath: candidateDir,
-          containerPath: path.posix.join(volume.containerPath, entry)
-        };
-      }
+  const searchDepth = (dir, depth) => {
+    if (hasNextProject(dir)) {
+      return {
+        hostPath: dir,
+        containerPath: resolveContainerPath(dir)
+      };
     }
-  } catch (err) {
+    if (depth <= 0) return null;
+    let entries = [];
+    try {
+      entries = fs
+        .readdirSync(dir, { withFileTypes: true })
+        .filter((entry) => entry.isDirectory())
+        .map((entry) => entry.name)
+        .sort();
+    } catch (err) {
+      return null;
+    }
+    for (const entry of entries) {
+      const found = searchDepth(path.join(dir, entry), depth - 1);
+      if (found) return found;
+    }
     return null;
-  }
+  };
+
+  const found = searchDepth(root, 2);
+  if (found) return found;
 
   return null;
 };
@@ -875,6 +885,8 @@ router.put('/services/:id', async (req, res, next) => {
     );
     if (workdir) {
       appendServiceLog('info', `WorkingDir para ${service.name}: ${workdir}`);
+    } else {
+      appendServiceLog('warn', `WorkingDir nao resolvido para ${service.name}`);
     }
 
     const containerConfig = {
@@ -982,6 +994,8 @@ router.post('/services/:id/project-upload', upload.single('archive'), async (req
     appendServiceLog('info', `Comando detectado para ${service.name}: ${containerCmd ? containerCmd.join(' ') : 'padrao'}`);
     if (workdir) {
       appendServiceLog('info', `WorkingDir para ${service.name}: ${workdir}`);
+    } else {
+      appendServiceLog('warn', `WorkingDir nao resolvido para ${service.name}`);
     }
 
     if (service.containerId) {
