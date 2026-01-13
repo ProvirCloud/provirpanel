@@ -46,6 +46,18 @@ const Toast = ({ message, type, onClose }) => (
   </div>
 )
 
+const formatCommandForInput = (command) => {
+  if (!command) return ''
+  if (Array.isArray(command)) {
+    if (command[0] === 'sh' && command[1] === '-c') {
+      return command.slice(2).join(' ')
+    }
+    return command.join(' ')
+  }
+  if (typeof command === 'string') return command
+  return ''
+}
+
 const DockerPanel = () => {
   const [activeTab, setActiveTab] = useState('services')
   const [containers, setContainers] = useState([])
@@ -195,6 +207,7 @@ const DockerPanel = () => {
           containerPath: v.containerPath
         })) || [],
       envs: tpl?.env?.map((e) => ({ key: e.key, value: e.value, secret: false })) || [],
+      command: '',
       projectArchive: null,
       createProject: false,
       createManager: false,
@@ -411,7 +424,8 @@ const DockerPanel = () => {
         createProject: form.createProject,
         createManager: form.createManager,
         configureDb: form.configureDb,
-        networkName: form.networkName
+        networkName: form.networkName,
+        command: form.command
       }, {
         timeout: 120000 // 2 minute timeout
       })
@@ -691,6 +705,19 @@ const DockerPanel = () => {
                 </button>
               </div>
             ))}
+          </div>
+
+          <div className="grid gap-2">
+            <label className="text-xs text-slate-300">Comando de inicializacao</label>
+            <input
+              className="rounded-xl border border-slate-800 bg-slate-950 px-3 py-2 text-sm text-white"
+              placeholder="npm install && npm run start"
+              value={serviceForm.command}
+              onChange={(e) => setServiceForm((p) => ({ ...p, command: e.target.value }))}
+            />
+            <p className="text-xs text-slate-400">
+              Deixe vazio para detectar automaticamente pelo package.json.
+            </p>
           </div>
 
           {(tpl?.id === 'node-app' || tpl?.id === 'node' || (tpl?.image || '').startsWith('node')) && (
@@ -1093,6 +1120,7 @@ const DockerPanel = () => {
                               ...env,
                               value: env.secret ? '******' : env.value
                             })),
+                            commandInput: formatCommandForInput(svc.command),
                             newProjectArchive: null
                           })}
                         >
@@ -1347,6 +1375,18 @@ const DockerPanel = () => {
                 </p>
               </div>
               <div>
+                <label className="block text-sm text-slate-300 mb-2">Comando de inicializacao</label>
+                <input
+                  className="w-full rounded-xl border border-slate-700 bg-slate-800 px-3 py-2 text-sm text-white"
+                  placeholder="npm install && npm run start"
+                  value={editDialog.commandInput || ''}
+                  onChange={(e) => setEditDialog(prev => ({ ...prev, commandInput: e.target.value }))}
+                />
+                <p className="text-xs text-slate-400 mt-1">
+                  Deixe vazio para detectar automaticamente pelo package.json.
+                </p>
+              </div>
+              <div>
                 <label className="block text-sm text-slate-300 mb-2">Variáveis de Ambiente</label>
                 <div className="space-y-2">
                   {(editDialog.newEnvVars || []).length === 0 && (
@@ -1456,7 +1496,8 @@ const DockerPanel = () => {
                   updateService(editDialog.id, {
                     hostPort: editDialog.newHostPort || editDialog.hostPort,
                     envVars: editDialog.newEnvVars || [],
-                    networkName: editDialog.newNetworkName || editDialog.networkName
+                    networkName: editDialog.newNetworkName || editDialog.networkName,
+                    command: editDialog.commandInput || ''
                   });
                   setEditDialog(null);
                 }}

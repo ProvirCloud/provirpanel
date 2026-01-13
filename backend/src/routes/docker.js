@@ -187,6 +187,19 @@ const extractArchiveTo = async (archivePath, targetDir) => {
   throw new Error('Formato de arquivo não suportado. Use .zip, .tar, .tar.gz ou .tgz.');
 };
 
+const normalizeCommand = (commandInput) => {
+  if (!commandInput) return null;
+  if (Array.isArray(commandInput)) {
+    return commandInput.filter(Boolean);
+  }
+  if (typeof commandInput === 'string') {
+    const trimmed = commandInput.trim();
+    if (!trimmed) return null;
+    return ['sh', '-c', trimmed];
+  }
+  return null;
+};
+
 // List saved services (containers + metadata)
 router.get('/services', async (req, res, next) => {
   try {
@@ -359,7 +372,7 @@ router.post('/services', async (req, res, next) => {
   const sessionId = crypto.randomUUID();
   
   try {
-    const { templateId, name, hostPort, volumeMappings = [], envVars = [], createProject = false, createManager = false, configureDb = null, networkName = 'bridge' } = req.body || {};
+    const { templateId, name, hostPort, volumeMappings = [], envVars = [], createProject = false, createManager = false, configureDb = null, networkName = 'bridge', command } = req.body || {};
     
     progress.push(`🔍 Validando configuração do serviço ${name}...`);
     
@@ -468,7 +481,8 @@ router.post('/services', async (req, res, next) => {
     ];
 
     let finalImageName = imageName;
-    let containerCmd = template.command;
+    const normalizedCommand = normalizeCommand(command);
+    let containerCmd = normalizedCommand || template.command;
     let containerUser = undefined;
 
     // Para projetos exemplo, criar arquivos no volume (exceto PostgreSQL)
@@ -486,13 +500,13 @@ router.post('/services', async (req, res, next) => {
         });
         
         // Para Node.js, usar imagem base e instalar dependências
-        if (templateId === 'node-app') {
+        if (templateId === 'node-app' && !normalizedCommand) {
           containerCmd = resolveNodeCommand(finalizedVolumes) || ['sh', '-c', 'npm install && npm start'];
         }
       } catch (err) {
         progress.push(`⚠️ Erro ao criar projeto exemplo: ${err.message}`);
       }
-    } else if (!createProject && templateId === 'node-app') {
+    } else if (!createProject && templateId === 'node-app' && !normalizedCommand) {
       containerCmd = resolveNodeCommand(finalizedVolumes) || ['npm', 'start'];
     }
 
@@ -727,7 +741,7 @@ router.delete('/containers/:id', async (req, res, next) => {
 // Update service
 router.put('/services/:id', async (req, res, next) => {
   try {
-    const { hostPort, envVars = [], networkName } = req.body || {};
+    const { hostPort, envVars = [], networkName, command } = req.body || {};
     const services = dockerManager.listServices();
     const service = services.find((s) => s.id === req.params.id);
     if (!service) {
@@ -765,8 +779,9 @@ router.put('/services/:id', async (req, res, next) => {
       ...resolvedEnvVars.map((e) => `${e.key}=${e.value}`)
     ];
 
-    let containerCmd = template.command;
-    if (service.templateId === 'node-app') {
+    const normalizedCommand = normalizeCommand(command);
+    let containerCmd = normalizedCommand || service.command || template.command;
+    if (service.templateId === 'node-app' && !normalizedCommand) {
       containerCmd = resolveNodeCommand(service.volumes) || containerCmd;
     }
 
