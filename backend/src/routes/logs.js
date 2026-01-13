@@ -209,7 +209,7 @@ const getPostgresLogs = () => {
   }));
 };
 
-const getDockerLogs = () => {
+const getDockerLogs = async () => {
   const logs = [];
   let services = [];
   let containers = [];
@@ -225,7 +225,7 @@ const getDockerLogs = () => {
   }
 
   try {
-    containers = dockerManager.listContainers();
+    containers = await dockerManager.listContainers();
   } catch (err) {
     logs.push({
       timestamp: new Date().toISOString(),
@@ -437,7 +437,7 @@ router.get('/logs', async (req, res, next) => {
       ...getPM2Logs(),
       ...getAppLogs(),
       ...getServiceUpdateLogs(),
-      ...getDockerLogs(),
+      ...(await getDockerLogs()),
       ...getNginxLogs(),
       ...getPostgresLogs(),
       ...getRuntimeLogs()
