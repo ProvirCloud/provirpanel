@@ -370,6 +370,57 @@ const getDockerLogsSafe = async () => {
   }
 };
 
+const DOCKER_LOGS_TTL_MS = 5000;
+let dockerLogsCache = {
+  logs: [],
+  updatedAt: 0,
+  inFlight: false
+};
+
+const refreshDockerLogsCache = async () => {
+  if (dockerLogsCache.inFlight) return;
+  dockerLogsCache.inFlight = true;
+  try {
+    const logs = await getDockerLogsSafe();
+    dockerLogsCache = {
+      logs,
+      updatedAt: Date.now(),
+      inFlight: false
+    };
+  } catch (err) {
+    dockerLogsCache = {
+      logs: [{
+        timestamp: new Date().toISOString(),
+        level: 'warn',
+        source: 'docker',
+        message: `Falha ao atualizar cache do Docker: ${err.message}`
+      }],
+      updatedAt: Date.now(),
+      inFlight: false
+    };
+  }
+};
+
+const getDockerLogsCached = async () => {
+  const now = Date.now();
+  const stale = now - dockerLogsCache.updatedAt > DOCKER_LOGS_TTL_MS;
+
+  if (stale && !dockerLogsCache.inFlight) {
+    refreshDockerLogsCache();
+  }
+
+  if (dockerLogsCache.logs.length) {
+    return dockerLogsCache.logs;
+  }
+
+  return [{
+    timestamp: new Date().toISOString(),
+    level: 'info',
+    source: 'docker',
+    message: 'Coletando logs do Docker...'
+  }];
+};
+
 const safeLogs = (source, fn) => {
   try {
     return fn();
@@ -489,15 +540,7 @@ const checkHealth = async () => {
 // Rota para logs
 router.get('/logs', async (req, res, next) => {
   try {
-    const dockerLogs = await Promise.race([
-      getDockerLogsSafe(),
-      new Promise((resolve) => setTimeout(() => resolve([{
-        timestamp: new Date().toISOString(),
-        level: 'warn',
-        source: 'docker',
-        message: 'Timeout ao coletar logs do Docker.'
-      }]), 3000))
-    ]);
+    const dockerLogs = await getDockerLogsCached();
 
     const logs = [
       ...safeLogs('pm2', getPM2Logs),
