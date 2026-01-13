@@ -172,17 +172,28 @@ const runCommand = (cmd, args, options = {}) =>
     });
   });
 
-const extractArchiveTo = async (archivePath, targetDir) => {
-  const lower = archivePath.toLowerCase();
+const ensureExtractor = async (command, hint) => {
+  try {
+    await runCommand('which', [command]);
+  } catch (err) {
+    throw new Error(`${command} não encontrado. Instale ${hint || command} para extrair arquivos.`);
+  }
+};
+
+const extractArchiveTo = async (archivePath, targetDir, archiveName) => {
+  const lower = (archiveName || archivePath).toLowerCase();
   if (lower.endsWith('.zip')) {
+    await ensureExtractor('unzip', 'unzip');
     await runCommand('unzip', ['-o', archivePath, '-d', targetDir]);
     return;
   }
   if (lower.endsWith('.tar.gz') || lower.endsWith('.tgz')) {
+    await ensureExtractor('tar', 'tar');
     await runCommand('tar', ['-xzf', archivePath, '-C', targetDir]);
     return;
   }
   if (lower.endsWith('.tar')) {
+    await ensureExtractor('tar', 'tar');
     await runCommand('tar', ['-xf', archivePath, '-C', targetDir]);
     return;
   }
@@ -873,7 +884,8 @@ router.post('/services/:id/project-upload', upload.single('archive'), async (req
     fs.mkdirSync(projectDir, { recursive: true });
     const archivePath = req.file.path;
     try {
-      await extractArchiveTo(archivePath, projectDir);
+      appendServiceLog('info', `Extraindo arquivo ${req.file.originalname} em ${projectDir}`);
+      await extractArchiveTo(archivePath, projectDir, req.file.originalname);
     } finally {
       fs.unlink(archivePath, () => {});
     }
@@ -891,10 +903,13 @@ router.post('/services/:id/project-upload', upload.single('archive'), async (req
 
     let containerCmd = service.command || template.command;
     containerCmd = resolveNodeCommand(service.volumes) || containerCmd;
+    appendServiceLog('info', `Comando detectado para ${service.name}: ${containerCmd ? containerCmd.join(' ') : 'padrao'}`);
 
     if (service.containerId) {
       try {
+        appendServiceLog('info', `Parando container atual ${service.containerId} (${service.name})`);
         await dockerManager.stopContainer(service.containerId);
+        appendServiceLog('info', `Removendo container atual ${service.containerId} (${service.name})`);
         await dockerManager.removeContainer(service.containerId);
       } catch (err) {
         // ignore
@@ -925,6 +940,7 @@ router.post('/services/:id/project-upload', upload.single('archive'), async (req
       containerConfig.WorkingDir = template.workdir;
     }
 
+    appendServiceLog('info', `Iniciando novo container para ${service.name}`);
     const container = await dockerManager.runContainer(service.image, containerConfig);
 
     const updatedService = {

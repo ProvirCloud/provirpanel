@@ -422,7 +422,7 @@ const DockerPanel = () => {
           const progress = total ? Math.round((event.loaded / total) * 100) : 0
           setProjectUploadStatus((prev) => ({
             ...(prev || {}),
-            status: 'uploading',
+            status: total && event.loaded >= total ? 'processing' : 'uploading',
             progress
           }))
         }
@@ -1439,7 +1439,7 @@ const DockerPanel = () => {
 
       {editDialog && (
         <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50">
-          <div className="bg-slate-900 border border-slate-700 rounded-2xl p-6 max-w-md w-full mx-4 max-h-[85vh] flex flex-col">
+          <div className="bg-slate-900 border border-slate-700 rounded-2xl p-6 max-w-2xl w-full mx-4 max-h-[85vh] flex flex-col">
             <h3 className="text-lg font-semibold text-white mb-4">⚙️ Editar Serviço</h3>
             <div className="space-y-4 overflow-y-auto pr-1 flex-1">
               <div>
@@ -1608,38 +1608,44 @@ const DockerPanel = () => {
                     <p className="text-xs text-slate-400">
                       O projeto sera extraido no volume do servico e o container sera reiniciado.
                     </p>
-                    {projectUploadStatus && (
-                      <div className="rounded-xl border border-slate-700 bg-slate-800/60 p-3 text-xs">
-                        <div className="flex items-center justify-between">
-                          <span className="text-slate-200">
-                            {projectUploadStatus.status === 'uploading' && 'Enviando...'}
-                            {projectUploadStatus.status === 'success' && 'Atualizacao concluida'}
-                            {projectUploadStatus.status === 'error' && 'Falha na atualizacao'}
-                          </span>
-                          <a
-                            className="text-blue-300 underline"
-                            href="/logs"
-                            target="_blank"
-                            rel="noreferrer"
-                          >
-                            Ver logs
-                          </a>
-                        </div>
-                        {projectUploadStatus.status === 'uploading' && (
+                    <div className="rounded-xl border border-slate-700 bg-slate-800/60 p-3 text-xs">
+                      <div className="flex items-center justify-between">
+                        <span className="text-slate-200">
+                          {projectUploadStatus?.status === 'uploading' && 'Enviando...'}
+                          {projectUploadStatus?.status === 'processing' && 'Processando no servidor...'}
+                          {projectUploadStatus?.status === 'success' && 'Atualizacao concluida'}
+                          {projectUploadStatus?.status === 'error' && 'Falha na atualizacao'}
+                          {!projectUploadStatus && 'Aguardando arquivo para enviar.'}
+                        </span>
+                        <a
+                          className="text-blue-300 underline"
+                          href="/admin/logs"
+                          target="_blank"
+                          rel="noreferrer"
+                        >
+                          Ver logs
+                        </a>
+                      </div>
+                      {(projectUploadStatus?.status === 'uploading' || projectUploadStatus?.status === 'processing') && (
+                        <div className="mt-2">
+                          <div className="flex items-center gap-2 text-slate-300">
+                            <span className="inline-flex h-4 w-4 animate-spin rounded-full border-2 border-slate-500 border-t-blue-400" />
+                            <span>{projectUploadStatus.progress || 0}%</span>
+                          </div>
                           <div className="mt-2 h-2 w-full rounded-full bg-slate-700">
                             <div
                               className="h-2 rounded-full bg-blue-500 transition-all"
                               style={{ width: `${projectUploadStatus.progress || 0}%` }}
                             />
                           </div>
-                        )}
-                        {projectUploadStatus.message && (
-                          <p className="mt-2 text-slate-300 break-all">
-                            {projectUploadStatus.message}
-                          </p>
-                        )}
-                      </div>
-                    )}
+                        </div>
+                      )}
+                      {projectUploadStatus?.message && (
+                        <p className="mt-2 text-slate-300 break-all">
+                          {projectUploadStatus.message}
+                        </p>
+                      )}
+                    </div>
                   </div>
                 </div>
               )}
