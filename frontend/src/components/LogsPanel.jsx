@@ -10,6 +10,7 @@ const LogsPanel = () => {
   const [searchText, setSearchText] = useState('')
   const [dateFilter, setDateFilter] = useState('')
   const [levelFilter, setLevelFilter] = useState('all')
+  const [sourceFilter, setSourceFilter] = useState('all')
   const [autoRefresh, setAutoRefresh] = useState(true)
   const logsEndRef = useRef(null)
 
@@ -69,8 +70,12 @@ const LogsPanel = () => {
       filtered = filtered.filter(log => log.level === levelFilter)
     }
 
+    if (sourceFilter !== 'all') {
+      filtered = filtered.filter(log => log.source === sourceFilter)
+    }
+
     setFilteredLogs(filtered)
-  }, [logs, searchText, dateFilter, levelFilter])
+  }, [logs, searchText, dateFilter, levelFilter, sourceFilter])
 
   useEffect(() => {
     if (autoRefresh) {
@@ -100,6 +105,10 @@ const LogsPanel = () => {
   const formatTimestamp = (timestamp) => {
     return new Date(timestamp).toLocaleString('pt-BR')
   }
+
+  const sources = Array.from(
+    new Set(logs.map((log) => log.source).filter(Boolean))
+  ).sort()
 
   return (
     <div className="space-y-6">
@@ -150,7 +159,7 @@ const LogsPanel = () => {
 
       {/* Filtros */}
       <div className="rounded-2xl border border-slate-800 bg-slate-900/60 p-4">
-        <div className="grid gap-4 md:grid-cols-4">
+        <div className="grid gap-4 md:grid-cols-5">
           <div>
             <label className="block text-sm text-slate-300 mb-2">Buscar</label>
             <div className="relative">
@@ -191,12 +200,28 @@ const LogsPanel = () => {
             </select>
           </div>
           <div>
+            <label className="block text-sm text-slate-300 mb-2">Fonte</label>
+            <select
+              className="w-full rounded-xl border border-slate-800 bg-slate-950 px-3 py-2 text-sm text-white"
+              value={sourceFilter}
+              onChange={(e) => setSourceFilter(e.target.value)}
+            >
+              <option value="all">Todas</option>
+              {sources.map((source) => (
+                <option key={source} value={source}>
+                  {source}
+                </option>
+              ))}
+            </select>
+          </div>
+          <div>
             <label className="block text-sm text-slate-300 mb-2">Ações</label>
             <button
               onClick={() => {
                 setSearchText('')
                 setDateFilter('')
                 setLevelFilter('all')
+                setSourceFilter('all')
               }}
               className="w-full rounded-xl border border-slate-800 bg-slate-950 px-3 py-2 text-sm text-slate-200 hover:bg-slate-800"
             >
@@ -232,6 +257,11 @@ const LogsPanel = () => {
                   <span className={`px-2 py-0.5 rounded text-xs font-semibold whitespace-nowrap ${getLevelColor(log.level)}`}>
                     {log.level.toUpperCase()}
                   </span>
+                  {log.source && (
+                    <span className="px-2 py-0.5 rounded text-xs font-semibold whitespace-nowrap bg-slate-700/60 text-slate-200">
+                      {log.source}
+                    </span>
+                  )}
                   <span className="text-slate-200 break-all">
                     {log.message}
                   </span>

@@ -3,10 +3,12 @@
 const express = require('express');
 const fs = require('fs');
 const path = require('path');
-const { execSync } = require('child_process');
+const { execSync, execFileSync } = require('child_process');
+const DockerManager = require('../services/DockerManager');
 const pool = require('../config/database');
 
 const router = express.Router();
+const dockerManager = new DockerManager();
 const serviceLogsPath = path.join(process.cwd(), 'backend/logs/service-updates.log');
 
 // Função para ler logs do PM2
@@ -30,6 +32,7 @@ const getPM2Logs = () => {
           logs.push({
             timestamp: new Date().toISOString(),
             level: isError ? 'error' : 'info',
+            source: 'pm2',
             message: line.trim()
           });
         }
@@ -63,6 +66,7 @@ const getServiceUpdateLogs = () => {
           return {
             timestamp: parsed.timestamp,
             level: parsed.level || 'info',
+            source: parsed.source || 'service-update',
             message: parsed.message
           };
         } catch (err) {
@@ -78,6 +82,119 @@ const getServiceUpdateLogs = () => {
       message: 'Nao foi possivel ler logs de atualizacao: ' + error.message
     }];
   }
+};
+
+const tailFileLines = (filePath, maxLines = 200) => {
+  const content = fs.readFileSync(filePath, 'utf8');
+  const lines = content.split('\n').filter((line) => line.trim());
+  return lines.slice(-maxLines);
+};
+
+const getNginxLogs = () => {
+  const logs = [];
+  const accessLog = '/var/log/nginx/access.log';
+  const errorLog = '/var/log/nginx/error.log';
+
+  if (fs.existsSync(accessLog)) {
+    tailFileLines(accessLog, 100).forEach((line) => {
+      logs.push({
+        timestamp: new Date().toISOString(),
+        level: 'info',
+        source: 'nginx:access',
+        message: line
+      });
+    });
+  }
+
+  if (fs.existsSync(errorLog)) {
+    tailFileLines(errorLog, 100).forEach((line) => {
+      logs.push({
+        timestamp: new Date().toISOString(),
+        level: 'error',
+        source: 'nginx:error',
+        message: line
+      });
+    });
+  }
+
+  return logs;
+};
+
+const findLatestPostgresLog = () => {
+  const candidates = [
+    '/var/log/postgresql',
+    '/var/lib/postgresql/data/log',
+    '/var/lib/postgresql/data/pg_log'
+  ];
+
+  for (const dir of candidates) {
+    if (!fs.existsSync(dir)) continue;
+    const files = fs
+      .readdirSync(dir)
+      .filter((name) => name.includes('postgresql') && name.endsWith('.log'))
+      .map((name) => ({
+        name,
+        path: path.join(dir, name),
+        stat: fs.statSync(path.join(dir, name))
+      }))
+      .sort((a, b) => b.stat.mtimeMs - a.stat.mtimeMs);
+    if (files.length) {
+      return files[0].path;
+    }
+  }
+  return null;
+};
+
+const getPostgresLogs = () => {
+  const logPath = findLatestPostgresLog();
+  if (!logPath) {
+    return [];
+  }
+  return tailFileLines(logPath, 120).map((line) => ({
+    timestamp: new Date().toISOString(),
+    level: 'info',
+    source: 'postgres',
+    message: line
+  }));
+};
+
+const getDockerLogs = () => {
+  const logs = [];
+  let services = [];
+  try {
+    services = dockerManager.listServices();
+  } catch (err) {
+    return logs;
+  }
+
+  services.forEach((service) => {
+    if (!service.containerId) return;
+    try {
+      const output = execFileSync('docker', ['logs', '--tail', '50', service.containerId], {
+        encoding: 'utf8'
+      });
+      output
+        .split('\n')
+        .filter((line) => line.trim())
+        .forEach((line) => {
+          logs.push({
+            timestamp: new Date().toISOString(),
+            level: 'info',
+            source: `docker:${service.name}`,
+            message: line
+          });
+        });
+    } catch (err) {
+      logs.push({
+        timestamp: new Date().toISOString(),
+        level: 'warn',
+        source: `docker:${service.name}`,
+        message: `Nao foi possivel ler logs do container ${service.containerId}: ${err.message}`
+      });
+    }
+  });
+
+  return logs;
 };
 
 // Função para verificar saúde dos serviços
@@ -186,7 +303,13 @@ const checkHealth = async () => {
 // Rota para logs
 router.get('/logs', async (req, res, next) => {
   try {
-    const logs = [...getPM2Logs(), ...getServiceUpdateLogs()]
+    const logs = [
+      ...getPM2Logs(),
+      ...getServiceUpdateLogs(),
+      ...getDockerLogs(),
+      ...getNginxLogs(),
+      ...getPostgresLogs()
+    ]
       .sort((a, b) => new Date(a.timestamp) - new Date(b.timestamp))
       .slice(-200);
     res.json({ logs });
