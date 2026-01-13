@@ -370,6 +370,19 @@ const getDockerLogsSafe = async () => {
   }
 };
 
+const safeLogs = (source, fn) => {
+  try {
+    return fn();
+  } catch (err) {
+    return [{
+      timestamp: new Date().toISOString(),
+      level: 'warn',
+      source,
+      message: `Falha ao coletar logs (${source}): ${err.message}`
+    }];
+  }
+};
+
 // Função para verificar saúde dos serviços
 const checkHealth = async () => {
   const services = {};
@@ -476,20 +489,37 @@ const checkHealth = async () => {
 // Rota para logs
 router.get('/logs', async (req, res, next) => {
   try {
+    const dockerLogs = await Promise.race([
+      getDockerLogsSafe(),
+      new Promise((resolve) => setTimeout(() => resolve([{
+        timestamp: new Date().toISOString(),
+        level: 'warn',
+        source: 'docker',
+        message: 'Timeout ao coletar logs do Docker.'
+      }]), 3000))
+    ]);
+
     const logs = [
-      ...getPM2Logs(),
-      ...getAppLogs(),
-      ...getServiceUpdateLogs(),
-      ...(await getDockerLogsSafe()),
-      ...getNginxLogs(),
-      ...getPostgresLogs(),
+      ...safeLogs('pm2', getPM2Logs),
+      ...safeLogs('backend', getAppLogs),
+      ...safeLogs('service-update', getServiceUpdateLogs),
+      ...dockerLogs,
+      ...safeLogs('nginx', getNginxLogs),
+      ...safeLogs('postgres', getPostgresLogs),
       ...getRuntimeLogs()
     ]
       .sort((a, b) => new Date(a.timestamp) - new Date(b.timestamp))
       .slice(-200);
     res.json({ logs });
   } catch (error) {
-    next(error);
+    res.json({
+      logs: [{
+        timestamp: new Date().toISOString(),
+        level: 'error',
+        source: 'logs',
+        message: `Falha geral ao coletar logs: ${error.message}`
+      }]
+    });
   }
 });
 
