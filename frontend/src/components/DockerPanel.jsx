@@ -693,7 +693,7 @@ const DockerPanel = () => {
             ))}
           </div>
 
-          {tpl?.id === 'node-app' && (
+          {(tpl?.id === 'node-app' || tpl?.id === 'node' || (tpl?.image || '').startsWith('node')) && (
             <div className="grid gap-2">
               <label className="text-xs text-slate-300">Projeto compactado (zip/tar)</label>
               <input
@@ -1417,7 +1417,7 @@ const DockerPanel = () => {
                   </button>
                 </div>
               </div>
-              {editDialog.templateId === 'node-app' && (
+              {(editDialog.templateId === 'node-app' || editDialog.templateId === 'node' || (editDialog.image || '').startsWith('node')) && (
                 <div>
                   <label className="block text-sm text-slate-300 mb-2">Atualizar projeto (zip/tar)</label>
                   <div className="flex flex-col gap-2">

@@ -829,7 +829,7 @@ router.post('/services/:id/project-upload', upload.single('archive'), async (req
     if (!service) {
       return res.status(404).json({ message: 'Service not found' });
     }
-    if (service.templateId !== 'node-app') {
+    if (service.templateId !== 'node-app' && service.templateId !== 'node') {
       return res.status(400).json({ message: 'Upload disponível apenas para serviços Node.' });
     }
     if (!req.file) {
