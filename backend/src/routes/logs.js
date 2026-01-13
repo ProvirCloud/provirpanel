@@ -267,22 +267,28 @@ const getDockerLogs = async () => {
   try {
     services = dockerManager.listServices();
   } catch (err) {
+    const hint = err.message && err.message.toLowerCase().includes('permission')
+      ? 'Permissao negada no socket Docker. Verifique /var/run/docker.sock e grupo docker.'
+      : null;
     return [{
       timestamp: new Date().toISOString(),
       level: 'warn',
       source: 'docker',
-      message: `Nao foi possivel listar servicos do Docker: ${err.message}`
+      message: `Nao foi possivel listar servicos do Docker: ${err.message}${hint ? ` (${hint})` : ''}`
     }];
   }
 
   try {
     containers = await dockerManager.listContainers();
   } catch (err) {
+    const hint = err.message && err.message.toLowerCase().includes('permission')
+      ? 'Permissao negada no socket Docker. Verifique /var/run/docker.sock e grupo docker.'
+      : null;
     logs.push({
       timestamp: new Date().toISOString(),
       level: 'warn',
       source: 'docker',
-      message: `Nao foi possivel listar containers do Docker: ${err.message}`
+      message: `Nao foi possivel listar containers do Docker: ${err.message}${hint ? ` (${hint})` : ''}`
     });
   }
 
@@ -345,11 +351,14 @@ const getDockerLogs = async () => {
         });
       }
     } catch (err) {
+      const hint = err.message && err.message.toLowerCase().includes('permission')
+        ? 'Permissao negada no socket Docker. Verifique /var/run/docker.sock e grupo docker.'
+        : null;
       logs.push({
         timestamp: new Date().toISOString(),
         level: 'warn',
         source: `docker:${name}`,
-        message: `Nao foi possivel ler logs do container ${containerId}: ${err.message}`
+        message: `Nao foi possivel ler logs do container ${containerId}: ${err.message}${hint ? ` (${hint})` : ''}`
       });
     }
   }
