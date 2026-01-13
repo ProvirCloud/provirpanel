@@ -18,6 +18,7 @@ const storageRoutes = require('./routes/storage');
 const cicdRoutes = require('./routes/ci-cd');
 const domainsRoutes = require('./routes/domains');
 const logsRoutes = require('./routes/logs');
+const nginxRoutes = require('./routes/nginx');
 const authMiddleware = require('./middleware/auth');
 const errorHandler = require('./middleware/errorHandler');
 const MetricsCollector = require('./services/MetricsCollector');
@@ -50,6 +51,7 @@ app.use('/docker', authMiddleware, dockerRoutes.router);
 app.use('/storage', authMiddleware, storageRoutes);
 app.use('/ci-cd', authMiddleware, cicdRoutes);
 app.use('/domains', authMiddleware, domainsRoutes);
+app.use('/nginx', authMiddleware, nginxRoutes);
 
 app.use(errorHandler);
 

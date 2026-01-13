@@ -1,5 +1,5 @@
 import { NavLink } from 'react-router-dom'
-import { Activity, Boxes, Files, Terminal, Globe, Users, FileText } from 'lucide-react'
+import { Activity, Boxes, Files, Terminal, Globe, Users, FileText, Server } from 'lucide-react'
 
 const linkBase =
   'flex items-center gap-3 rounded-xl px-4 py-3 text-sm font-medium transition hover:bg-slate-800/70'
@@ -40,6 +40,15 @@ const Sidebar = () => {
         >
           <Boxes className="h-4 w-4" />
           Docker (Serviços)
+        </NavLink>
+        <NavLink
+          to="/nginx"
+          className={({ isActive }) =>
+            `${linkBase} ${isActive ? 'bg-emerald-500/15 text-emerald-200' : ''}`
+          }
+        >
+          <Server className="h-4 w-4" />
+          Nginx Manager
         </NavLink>
         <NavLink
           to="/domains"
