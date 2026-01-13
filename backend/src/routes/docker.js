@@ -8,8 +8,11 @@ const fs = require('fs');
 const path = require('path');
 const net = require('net');
 const os = require('os');
+const { execFile } = require('child_process');
+const multer = require('multer');
 
 const router = express.Router();
+const upload = multer({ dest: os.tmpdir() });
 const dockerManager = new DockerManager();
 const jwtSecret = process.env.JWT_SECRET || 'change-me';
 let dockerBaseDir =
@@ -153,6 +156,35 @@ const resolveNodeCommand = (volumes = []) => {
   }
 
   return ['sh', '-c', 'npm install && npm start'];
+};
+
+const runCommand = (cmd, args, options = {}) =>
+  new Promise((resolve, reject) => {
+    execFile(cmd, args, options, (err, stdout, stderr) => {
+      if (err) {
+        err.message = `${err.message}${stderr ? `: ${stderr}` : ''}`;
+        reject(err);
+        return;
+      }
+      resolve(stdout);
+    });
+  });
+
+const extractArchiveTo = async (archivePath, targetDir) => {
+  const lower = archivePath.toLowerCase();
+  if (lower.endsWith('.zip')) {
+    await runCommand('unzip', ['-o', archivePath, '-d', targetDir]);
+    return;
+  }
+  if (lower.endsWith('.tar.gz') || lower.endsWith('.tgz')) {
+    await runCommand('tar', ['-xzf', archivePath, '-C', targetDir]);
+    return;
+  }
+  if (lower.endsWith('.tar')) {
+    await runCommand('tar', ['-xf', archivePath, '-C', targetDir]);
+    return;
+  }
+  throw new Error('Formato de arquivo não suportado. Use .zip, .tar, .tar.gz ou .tgz.');
 };
 
 // List saved services (containers + metadata)
@@ -780,6 +812,96 @@ router.put('/services/:id', async (req, res, next) => {
       url: `http://localhost:${resolvedPort}`,
       serverIP: getLocalIP(),
       externalUrl: `http://${getLocalIP()}:${resolvedPort}`,
+      updatedAt: new Date().toISOString()
+    };
+
+    dockerManager.saveService(updatedService);
+    res.json({ service: sanitizeServiceForClient(updatedService) });
+  } catch (err) {
+    next(err);
+  }
+});
+
+router.post('/services/:id/project-upload', upload.single('archive'), async (req, res, next) => {
+  try {
+    const services = dockerManager.listServices();
+    const service = services.find((s) => s.id === req.params.id);
+    if (!service) {
+      return res.status(404).json({ message: 'Service not found' });
+    }
+    if (service.templateId !== 'node-app') {
+      return res.status(400).json({ message: 'Upload disponível apenas para serviços Node.' });
+    }
+    if (!req.file) {
+      return res.status(400).json({ message: 'Nenhum arquivo enviado.' });
+    }
+
+    const projectDir = service.volumes?.find((m) => m.hostPath)?.hostPath;
+    if (!projectDir) {
+      return res.status(400).json({ message: 'Volume do serviço não encontrado.' });
+    }
+
+    fs.mkdirSync(projectDir, { recursive: true });
+    const archivePath = req.file.path;
+    try {
+      await extractArchiveTo(archivePath, projectDir);
+    } finally {
+      fs.unlink(archivePath, () => {});
+    }
+
+    const template = SERVICE_TEMPLATES.find((t) => t.id === service.templateId);
+    if (!template) {
+      return res.status(400).json({ message: 'Template not found' });
+    }
+
+    const resolvedEnvVars = service.envVars || [];
+    const env = [
+      ...template.env.map((e) => `${e.key}=${e.value}`),
+      ...resolvedEnvVars.map((e) => `${e.key}=${e.value}`)
+    ];
+
+    let containerCmd = service.command || template.command;
+    containerCmd = resolveNodeCommand(service.volumes) || containerCmd;
+
+    if (service.containerId) {
+      try {
+        await dockerManager.stopContainer(service.containerId);
+        await dockerManager.removeContainer(service.containerId);
+      } catch (err) {
+        // ignore
+      }
+    }
+
+    const containerConfig = {
+      name: service.name,
+      HostConfig: {
+        NetworkMode: service.networkName || 'bridge',
+        PortBindings: {
+          [`${service.containerPort}/tcp`]: [{ HostPort: String(service.hostPort) }]
+        },
+        Binds: service.volumes
+          .filter((m) => m.hostPath && m.containerPath)
+          .map((m) => `${m.hostPath}:${m.containerPath}`)
+      },
+      Env: env,
+      ExposedPorts: {
+        [`${service.containerPort}/tcp`]: {}
+      }
+    };
+
+    if (containerCmd) {
+      containerConfig.Cmd = containerCmd;
+    }
+    if (template.workdir) {
+      containerConfig.WorkingDir = template.workdir;
+    }
+
+    const container = await dockerManager.runContainer(service.image, containerConfig);
+
+    const updatedService = {
+      ...service,
+      containerId: container.Id,
+      command: containerCmd || null,
       updatedAt: new Date().toISOString()
     };
 

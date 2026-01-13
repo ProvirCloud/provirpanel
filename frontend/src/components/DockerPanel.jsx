@@ -195,6 +195,7 @@ const DockerPanel = () => {
           containerPath: v.containerPath
         })) || [],
       envs: tpl?.env?.map((e) => ({ key: e.key, value: e.value, secret: false })) || [],
+      projectArchive: null,
       createProject: false,
       createManager: false,
       configureDb: null,
@@ -349,6 +350,24 @@ const DockerPanel = () => {
     }
   }
 
+  const uploadProjectArchive = async (serviceId, file) => {
+    if (!serviceId || !file) return false
+    const formData = new FormData()
+    formData.append('archive', file)
+    try {
+      await api.post(`/docker/services/${serviceId}/project-upload`, formData, {
+        headers: { 'Content-Type': 'multipart/form-data' }
+      })
+      addToast('Projeto atualizado com sucesso')
+      loadContainers()
+      loadServices()
+      return true
+    } catch (err) {
+      addToast('Erro ao enviar projeto', 'error')
+      return false
+    }
+  }
+
   const removeService = async (serviceId, removeFolder = false) => {
     try {
       await api.delete(`/docker/services/${serviceId}`, {
@@ -407,6 +426,10 @@ const DockerPanel = () => {
       addToast(`Serviço criado: ${response.data.service?.name}`)
       loadContainers()
       loadServices()
+
+      if (form.projectArchive && response.data.service?.id) {
+        await uploadProjectArchive(response.data.service.id, form.projectArchive)
+      }
       
       // Close wizard on success
       setTimeout(() => {
@@ -669,6 +692,24 @@ const DockerPanel = () => {
               </div>
             ))}
           </div>
+
+          {tpl?.id === 'node-app' && (
+            <div className="grid gap-2">
+              <label className="text-xs text-slate-300">Projeto compactado (zip/tar)</label>
+              <input
+                type="file"
+                accept=".zip,.tar,.tar.gz,.tgz"
+                className="rounded-xl border border-slate-800 bg-slate-950 px-3 py-2 text-sm text-slate-200 file:mr-3 file:rounded-lg file:border-0 file:bg-blue-500 file:px-3 file:py-1.5 file:text-xs file:font-semibold file:text-slate-950"
+                onChange={(e) => {
+                  const file = e.target.files?.[0] || null
+                  setServiceForm((p) => ({ ...p, projectArchive: file }))
+                }}
+              />
+              <p className="text-xs text-slate-400">
+                Envie um .zip/.tar para atualizar o codigo do projeto apos a criacao.
+              </p>
+            </div>
+          )}
 
           <div className="rounded-xl border border-blue-500/30 bg-blue-500/5 p-4">
             <div className="flex items-center justify-between mb-3">
@@ -1051,7 +1092,8 @@ const DockerPanel = () => {
                             newEnvVars: (svc.envVars || []).map((env) => ({
                               ...env,
                               value: env.secret ? '******' : env.value
-                            }))
+                            })),
+                            newProjectArchive: null
                           })}
                         >
                           Editar
@@ -1375,6 +1417,37 @@ const DockerPanel = () => {
                   </button>
                 </div>
               </div>
+              {editDialog.templateId === 'node-app' && (
+                <div>
+                  <label className="block text-sm text-slate-300 mb-2">Atualizar projeto (zip/tar)</label>
+                  <div className="flex flex-col gap-2">
+                    <input
+                      type="file"
+                      accept=".zip,.tar,.tar.gz,.tgz"
+                      className="rounded-xl border border-slate-700 bg-slate-800 px-3 py-2 text-sm text-slate-200 file:mr-3 file:rounded-lg file:border-0 file:bg-blue-500 file:px-3 file:py-1.5 file:text-xs file:font-semibold file:text-slate-950"
+                      onChange={(e) => {
+                        const file = e.target.files?.[0] || null
+                        setEditDialog(prev => ({ ...prev, newProjectArchive: file }))
+                      }}
+                    />
+                    <button
+                      className="self-start rounded-xl border border-blue-800 bg-blue-950 px-3 py-2 text-xs text-blue-200 hover:bg-blue-900 disabled:cursor-not-allowed disabled:opacity-60"
+                      disabled={!editDialog.newProjectArchive}
+                      onClick={async () => {
+                        const ok = await uploadProjectArchive(editDialog.id, editDialog.newProjectArchive)
+                        if (ok) {
+                          setEditDialog(prev => ({ ...prev, newProjectArchive: null }))
+                        }
+                      }}
+                    >
+                      Enviar projeto
+                    </button>
+                    <p className="text-xs text-slate-400">
+                      O projeto sera extraido no volume do servico e o container sera reiniciado.
+                    </p>
+                  </div>
+                </div>
+              )}
             </div>
             <div className="flex gap-2 mt-6">
               <button
