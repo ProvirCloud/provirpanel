@@ -1471,6 +1471,17 @@ const DockerPanel = () => {
                   📌 Serviços na mesma rede podem se comunicar pelo nome
                 </p>
               </div>
+              {editDialog.volumes?.length > 0 && (
+                <div>
+                  <label className="block text-sm text-slate-300 mb-2">Volume do projeto</label>
+                  <div className="rounded-xl border border-slate-700 bg-slate-800 px-3 py-2 text-xs text-slate-200">
+                    {editDialog.volumes[0].hostPath} → {editDialog.volumes[0].containerPath}
+                  </div>
+                  <p className="text-xs text-slate-400 mt-1">
+                    O projeto sera executado a partir desse volume.
+                  </p>
+                </div>
+              )}
               <div>
                 <label className="block text-sm text-slate-300 mb-2">Comando de inicializacao</label>
                 <input

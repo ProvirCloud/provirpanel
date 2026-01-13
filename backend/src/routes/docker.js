@@ -230,21 +230,47 @@ const ensureExtractor = async (command, hint) => {
   }
 };
 
+const flattenSingleRootDir = (targetDir) => {
+  try {
+    const entries = fs.readdirSync(targetDir, { withFileTypes: true });
+    const dirs = entries.filter((e) => e.isDirectory());
+    const files = entries.filter((e) => e.isFile());
+    if (files.length > 0 || dirs.length !== 1) {
+      return;
+    }
+    const rootDir = path.join(targetDir, dirs[0].name);
+    const rootPackage = path.join(targetDir, 'package.json');
+    const nestedPackage = path.join(rootDir, 'package.json');
+    if (!fs.existsSync(rootPackage) && fs.existsSync(nestedPackage)) {
+      const nestedEntries = fs.readdirSync(rootDir);
+      nestedEntries.forEach((entry) => {
+        fs.renameSync(path.join(rootDir, entry), path.join(targetDir, entry));
+      });
+      fs.rmdirSync(rootDir);
+    }
+  } catch (err) {
+    // ignore flatten errors
+  }
+};
+
 const extractArchiveTo = async (archivePath, targetDir, archiveName) => {
   const lower = (archiveName || archivePath).toLowerCase();
   if (lower.endsWith('.zip')) {
     await ensureExtractor('unzip', 'unzip');
     await runCommand('unzip', ['-o', archivePath, '-d', targetDir]);
+    flattenSingleRootDir(targetDir);
     return;
   }
   if (lower.endsWith('.tar.gz') || lower.endsWith('.tgz')) {
     await ensureExtractor('tar', 'tar');
     await runCommand('tar', ['-xzf', archivePath, '-C', targetDir]);
+    flattenSingleRootDir(targetDir);
     return;
   }
   if (lower.endsWith('.tar')) {
     await ensureExtractor('tar', 'tar');
     await runCommand('tar', ['-xf', archivePath, '-C', targetDir]);
+    flattenSingleRootDir(targetDir);
     return;
   }
   throw new Error('Formato de arquivo não suportado. Use .zip, .tar, .tar.gz ou .tgz.');
