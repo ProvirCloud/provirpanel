@@ -282,6 +282,11 @@ const writeEnvFile = (projectPath, envVars = [], templateEnv = []) => {
   fs.writeFileSync(path.join(projectPath.hostPath, '.env'), content, 'utf8');
 };
 
+const checkProjectFiles = (projectPath, files = []) => {
+  if (!projectPath?.hostPath) return [];
+  return files.filter((file) => !fs.existsSync(path.join(projectPath.hostPath, file)));
+};
+
 const appendServiceLog = (level, message) => {
   const entry = {
     timestamp: new Date().toISOString(),
@@ -588,6 +593,8 @@ router.post('/services', async (req, res, next) => {
     if (projectPath?.hostPath) {
       writeEnvFile(projectPath, normalizedEnvVars, template.env);
       progress.push(`📝 .env gerado em ${projectPath.hostPath}`);
+    } else {
+      progress.push('⚠️ Nao foi possivel resolver o diretorio do projeto para gerar .env');
     }
 
     let finalImageName = imageName;
@@ -889,6 +896,16 @@ router.put('/services/:id', async (req, res, next) => {
       { env: [], workdir: null, command: null };
     const projectPath = resolveProjectPathFromVolume(service.volumes);
     const workdir = projectPath?.containerPath || template.workdir || null;
+    if (projectPath?.hostPath) {
+      appendServiceLog('info', `Projeto resolvido em ${projectPath.hostPath}`);
+    } else {
+      appendServiceLog('warn', `Nao foi possivel resolver o diretorio do projeto para ${service.name}`);
+    }
+    if (projectPath?.hostPath) {
+      appendServiceLog('info', `Projeto resolvido em ${projectPath.hostPath}`);
+    } else {
+      appendServiceLog('warn', `Nao foi possivel resolver o diretorio do projeto para ${service.name}`);
+    }
     const resolvedPort = newPort || service.hostPort;
     
     const resolvedEnvVars = mergeEnvVars(envVars, service.envVars || []);
@@ -899,6 +916,16 @@ router.put('/services/:id', async (req, res, next) => {
     if (projectPath?.hostPath) {
       writeEnvFile(projectPath, resolvedEnvVars, template.env);
       appendServiceLog('info', `Arquivo .env atualizado em ${projectPath.hostPath}`);
+      const missing = checkProjectFiles(projectPath, [
+        'package.json',
+        'tsconfig.json',
+        'app/v1/api/boleto/route.ts',
+        'app/v1/api/pix/route.ts',
+        'lib/db.ts'
+      ]);
+      if (missing.length) {
+        appendServiceLog('warn', `Arquivos ausentes no projeto: ${missing.join(', ')}`);
+      }
     }
 
     const normalizedCommand = normalizeCommand(command);
@@ -1018,6 +1045,16 @@ router.post('/services/:id/project-upload', upload.single('archive'), async (req
     if (projectPath?.hostPath) {
       writeEnvFile(projectPath, resolvedEnvVars, template.env);
       appendServiceLog('info', `Arquivo .env atualizado em ${projectPath.hostPath}`);
+      const missing = checkProjectFiles(projectPath, [
+        'package.json',
+        'tsconfig.json',
+        'app/v1/api/boleto/route.ts',
+        'app/v1/api/pix/route.ts',
+        'lib/db.ts'
+      ]);
+      if (missing.length) {
+        appendServiceLog('warn', `Arquivos ausentes no projeto: ${missing.join(', ')}`);
+      }
     }
 
     let containerCmd = service.command || template.command;

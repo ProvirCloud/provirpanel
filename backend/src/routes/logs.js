@@ -215,19 +215,48 @@ const getDockerLogs = () => {
   try {
     services = dockerManager.listServices();
   } catch (err) {
+    return [{
+      timestamp: new Date().toISOString(),
+      level: 'warn',
+      source: 'docker',
+      message: `Nao foi possivel listar servicos do Docker: ${err.message}`
+    }];
+  }
+
+  if (!services.length) {
+    logs.push({
+      timestamp: new Date().toISOString(),
+      level: 'info',
+      source: 'docker',
+      message: 'Nenhum servico registrado para logs do Docker.'
+    });
     return logs;
   }
 
   services.forEach((service) => {
-    if (!service.containerId) return;
+    if (!service.containerId) {
+      logs.push({
+        timestamp: new Date().toISOString(),
+        level: 'warn',
+        source: `docker:${service.name}`,
+        message: 'Servico sem containerId registrado.'
+      });
+      return;
+    }
     try {
       const output = execFileSync('docker', ['logs', '--tail', '50', service.containerId], {
         encoding: 'utf8'
       });
-      output
-        .split('\n')
-        .filter((line) => line.trim())
-        .forEach((line) => {
+      const lines = output.split('\n').filter((line) => line.trim());
+      if (!lines.length) {
+        logs.push({
+          timestamp: new Date().toISOString(),
+          level: 'info',
+          source: `docker:${service.name}`,
+          message: 'Nenhum log recente do container.'
+        });
+      } else {
+        lines.forEach((line) => {
           logs.push({
             timestamp: new Date().toISOString(),
             level: 'info',
@@ -235,6 +264,7 @@ const getDockerLogs = () => {
             message: line
           });
         });
+      }
     } catch (err) {
       logs.push({
         timestamp: new Date().toISOString(),
