@@ -364,33 +364,44 @@ const getDockerLogs = async () => {
   const containerMap = new Map();
   const containerInfo = new Map();
 
+  // Primeiro, mapeia os containers ativos (prioridade)
+  containers.forEach((container) => {
+    const id = container.Id;
+    const containerName = container.Names?.[0]?.replace('/', '') || id.slice(0, 12);
+
+    // Tenta encontrar um serviço correspondente pelo containerId
+    const matchingService = services.find(s => s.containerId === id);
+    const displayName = matchingService ? matchingService.name : containerName;
+
+    containerMap.set(id, displayName);
+    containerInfo.set(id, {
+      name: displayName,
+      state: container.State,
+      status: container.Status,
+      image: container.Image,
+      created: container.Created,
+      serviceName: matchingService?.name
+    });
+  });
+
+  // Avisa sobre serviços sem container ativo
   services.forEach((service) => {
     if (!service.containerId) {
+      return;
+    }
+    // Se o serviço tem um containerId mas o container não está na lista de ativos
+    if (!containerMap.has(service.containerId)) {
       logs.push({
         timestamp: new Date().toISOString(),
         level: 'warn',
         source: `docker:${service.name}`,
-        message: 'Servico sem containerId registrado.',
-        metadata: { serviceName: service.name }
+        message: 'Servico registrado mas container nao encontrado (pode estar parado ou foi recriado).',
+        metadata: {
+          serviceName: service.name,
+          registeredContainerId: service.containerId.slice(0, 12)
+        }
       });
-      return;
     }
-    containerMap.set(service.containerId, service.name);
-  });
-
-  containers.forEach((container) => {
-    const id = container.Id;
-    const name = container.Names?.[0]?.replace('/', '') || id.slice(0, 12);
-    if (!containerMap.has(id)) {
-      containerMap.set(id, name);
-    }
-    containerInfo.set(id, {
-      name,
-      state: container.State,
-      status: container.Status,
-      image: container.Image,
-      created: container.Created
-    });
   });
 
   for (const [containerId, name] of containerMap.entries()) {
