@@ -232,6 +232,21 @@ const extractArchiveTo = async (archivePath, targetDir, archiveName) => {
   throw new Error('Formato de arquivo não suportado. Use .zip, .tar, .tar.gz ou .tgz.');
 };
 
+const removeContainerByName = async (name) => {
+  if (!name) return;
+  try {
+    const containers = await dockerManager.docker.listContainers({ all: true });
+    const match = containers.find((container) =>
+      (container.Names || []).includes(`/${name}`)
+    );
+    if (match) {
+      await dockerManager.docker.getContainer(match.Id).remove({ force: true });
+    }
+  } catch (err) {
+    // ignore
+  }
+};
+
 const appendServiceLog = (level, message) => {
   const entry = {
     timestamp: new Date().toISOString(),
@@ -883,6 +898,10 @@ router.put('/services/:id', async (req, res, next) => {
       containerConfig.Cmd = ['sh', '-c', 'npm install && npm start'];
     }
 
+    appendServiceLog('info', `Garantindo nome livre para ${service.name}`);
+    await removeContainerByName(service.name);
+    appendServiceLog('info', `Garantindo nome livre para ${service.name}`);
+    await removeContainerByName(service.name);
     appendServiceLog('info', `Iniciando novo container para ${service.name}`);
     const container = await dockerManager.runContainer(service.image, containerConfig);
     
