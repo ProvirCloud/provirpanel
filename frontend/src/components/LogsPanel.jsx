@@ -29,9 +29,6 @@ const LogsPanel = () => {
     try {
       const response = await api.get('/logs')
       const logs = response.data.logs || []
-      console.log('📋 Logs carregados:', logs.length)
-      console.log('🐳 Logs Docker:', logs.filter(l => l.source?.startsWith('docker')).length)
-      console.log('📦 Fontes:', [...new Set(logs.map(l => l.source))].sort())
       setLogs(logs)
     } catch (error) {
       try {
