@@ -392,6 +392,33 @@ const addNpmIncludeDev = (cmd) => {
   return updated;
 };
 
+const ensureNextBuildTimeout = (command, timeoutSeconds = 180) => {
+  if (!command) return command;
+  const prefix = `NEXT_STATIC_PAGE_GENERATION_TIMEOUT=${timeoutSeconds}`;
+  const needsPrefix = (value) => {
+    const hasNextBuild = value.includes('next build') || value.includes('npm run build');
+    return hasNextBuild && !value.includes(prefix);
+  };
+  const wrapWithPrefix = (value) => (needsPrefix(value) ? `${prefix} ${value}` : value);
+
+  if (Array.isArray(command)) {
+    if (command[0] === 'sh' && command[1] === '-c') {
+      const cmd = command.slice(2).join(' ');
+      const updated = wrapWithPrefix(cmd);
+      if (updated === cmd) return command;
+      return ['sh', '-c', updated];
+    }
+    const cmd = command.join(' ');
+    const updated = wrapWithPrefix(cmd);
+    if (updated === cmd) return command;
+    return ['sh', '-c', updated];
+  }
+  if (typeof command === 'string') {
+    return wrapWithPrefix(command);
+  }
+  return command;
+};
+
 const ensureCommandWorkdir = (command, workdir) => {
   if (!command || !workdir) return command;
   if (Array.isArray(command)) {
@@ -756,8 +783,14 @@ router.post('/services', async (req, res, next) => {
     containerCmd = ensureCommandWorkdir(containerCmd, template.workdir);
     const createCmdBefore = stringifyCommand(containerCmd);
     containerCmd = ensureNpmDevDependencies(containerCmd);
-    if (stringifyCommand(containerCmd) !== createCmdBefore) {
+    const createAfterDev = stringifyCommand(containerCmd);
+    containerCmd = ensureNextBuildTimeout(containerCmd);
+    const createCmdAfter = stringifyCommand(containerCmd);
+    if (createAfterDev !== createCmdBefore) {
       progress.push('ℹ️ Forcando instalacao de dependencias de desenvolvimento para build');
+    }
+    if (createCmdAfter !== createAfterDev) {
+      progress.push('ℹ️ Ajustando timeout do Next.js para build');
     }
 
     const containerConfig = {
@@ -1071,8 +1104,14 @@ router.put('/services/:id', async (req, res, next) => {
     containerCmd = ensureCommandWorkdir(containerCmd, workdir);
     const updateCmdBefore = stringifyCommand(containerCmd);
     containerCmd = ensureNpmDevDependencies(containerCmd);
-    if (stringifyCommand(containerCmd) !== updateCmdBefore) {
+    const updateAfterDev = stringifyCommand(containerCmd);
+    containerCmd = ensureNextBuildTimeout(containerCmd);
+    const updateCmdAfter = stringifyCommand(containerCmd);
+    if (updateAfterDev !== updateCmdBefore) {
       appendServiceLog('info', 'Forcando instalacao de dependencias de desenvolvimento para build');
+    }
+    if (updateCmdAfter !== updateAfterDev) {
+      appendServiceLog('info', 'Ajustando timeout do Next.js para build');
     }
     appendServiceLog(
       'info',
@@ -1215,8 +1254,14 @@ router.post('/services/:id/project-upload', upload.single('archive'), async (req
     containerCmd = ensureCommandWorkdir(containerCmd, workdir);
     const uploadCmdBefore = stringifyCommand(containerCmd);
     containerCmd = ensureNpmDevDependencies(containerCmd);
-    if (stringifyCommand(containerCmd) !== uploadCmdBefore) {
+    const uploadAfterDev = stringifyCommand(containerCmd);
+    containerCmd = ensureNextBuildTimeout(containerCmd);
+    const uploadCmdAfter = stringifyCommand(containerCmd);
+    if (uploadAfterDev !== uploadCmdBefore) {
       appendServiceLog('info', 'Forcando instalacao de dependencias de desenvolvimento para build');
+    }
+    if (uploadCmdAfter !== uploadAfterDev) {
+      appendServiceLog('info', 'Ajustando timeout do Next.js para build');
     }
     appendServiceLog('info', `Comando detectado para ${service.name}: ${containerCmd ? containerCmd.join(' ') : 'padrao'}`);
     if (workdir) {
