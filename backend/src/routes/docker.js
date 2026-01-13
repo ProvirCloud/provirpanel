@@ -139,8 +139,16 @@ const resolveProjectPathFromVolume = (volumes = []) => {
   if (!volume) return null;
 
   const root = volume.hostPath;
-  const rootPackage = path.join(root, 'package.json');
-  if (fs.existsSync(rootPackage)) {
+  const hasNextProject = (dir) => {
+    const pkg = path.join(dir, 'package.json');
+    if (!fs.existsSync(pkg)) return false;
+    const appDir = path.join(dir, 'app');
+    const pagesDir = path.join(dir, 'pages');
+    const nextConfig = path.join(dir, 'next.config.js');
+    return fs.existsSync(appDir) || fs.existsSync(pagesDir) || fs.existsSync(nextConfig);
+  };
+
+  if (hasNextProject(root)) {
     return { hostPath: root, containerPath: volume.containerPath };
   }
 
@@ -151,10 +159,10 @@ const resolveProjectPathFromVolume = (volumes = []) => {
       .map((entry) => entry.name)
       .sort();
     for (const entry of entries) {
-      const candidate = path.join(root, entry, 'package.json');
-      if (fs.existsSync(candidate)) {
+      const candidateDir = path.join(root, entry);
+      if (hasNextProject(candidateDir)) {
         return {
-          hostPath: path.join(root, entry),
+          hostPath: candidateDir,
           containerPath: path.posix.join(volume.containerPath, entry)
         };
       }
