@@ -158,7 +158,7 @@ router.get('/file', async (req, res, next) => {
       
       try {
         const content = await require('fs').promises.readFile(absolutePath, 'utf8');
-        return res.send(content);
+        return res.json({ content });
       } catch (err) {
         // Se não encontrar na raiz, tenta no storage
       }
@@ -172,7 +172,7 @@ router.get('/file', async (req, res, next) => {
       if (absolutePath.startsWith(projectRoot)) {
         try {
           const content = await require('fs').promises.readFile(absolutePath, 'utf8');
-          return res.send(content);
+          return res.json({ content });
         } catch (err) {
           // Se não encontrar, tenta no storage normal
         }
@@ -182,7 +182,7 @@ router.get('/file', async (req, res, next) => {
     // Fallback para o storage normal
     try {
       const content = await storageManager.readFile(targetPath);
-      res.send(content);
+      res.json({ content });
     } catch (err) {
       res.status(404).json({ message: 'Arquivo não encontrado' });
     }
