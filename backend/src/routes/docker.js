@@ -194,6 +194,12 @@ const resolveNodeCommand = (volumes = []) => {
   try {
     const pkg = JSON.parse(fs.readFileSync(packagePath, 'utf-8'));
     const scripts = pkg && typeof pkg === 'object' ? pkg.scripts || {} : {};
+    const deps = (pkg && typeof pkg === 'object' ? pkg.dependencies || {} : {}) || {};
+    const hasNext = Boolean(deps.next);
+    const startScript = typeof scripts.start === 'string' ? scripts.start.trim() : '';
+    if (hasNext && startScript.startsWith('next start')) {
+      return ['sh', '-c', 'npm install && npm run build && next start -H 0.0.0.0 -p 3000'];
+    }
     if (scripts.start) {
       return ['sh', '-c', 'npm install && npm run start'];
     }
