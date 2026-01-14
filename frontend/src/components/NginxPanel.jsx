@@ -1,448 +1,378 @@
 import { useEffect, useState } from 'react'
-import { Server, Globe, Shield, Activity, Plus, Settings, RefreshCw, Trash2, Power, CheckCircle, XCircle } from 'lucide-react'
+import { Server, Plus, Save, Trash2, Power, PowerOff, CheckCircle, XCircle, Copy, Zap, Shield, Box } from 'lucide-react'
 import api from '../services/api.js'
 
 const NginxPanel = () => {
   const [status, setStatus] = useState(null)
-  const [hosts, setHosts] = useState([])
+  const [configs, setConfigs] = useState([])
+  const [templates, setTemplates] = useState({})
+  const [dockerContainers, setDockerContainers] = useState([])
   const [certs, setCerts] = useState([])
-  const [logs, setLogs] = useState([])
-  const [activeTab, setActiveTab] = useState('hosts')
-  const [showModal, setShowModal] = useState(null)
-  const [formData, setFormData] = useState({})
-  const [loading, setLoading] = useState(false)
+  const [selectedConfig, setSelectedConfig] = useState(null)
+  const [editContent, setEditContent] = useState('')
+  const [showTemplates, setShowTemplates] = useState(false)
+  const [showSSL, setShowSSL] = useState(false)
+  const [sslForm, setSSLForm] = useState({ domain: '', email: '' })
 
-  const loadStatus = async () => {
+  const loadAll = async () => {
     try {
-      const res = await api.get('/nginx/status')
-      setStatus(res.data)
-    } catch (err) {
-      console.error(err)
-    }
-  }
-
-  const loadHosts = async () => {
-    try {
-      const res = await api.get('/nginx/hosts')
-      setHosts(res.data.hosts || [])
-    } catch (err) {
-      console.error(err)
-    }
-  }
-
-  const loadCerts = async () => {
-    try {
-      const res = await api.get('/nginx/ssl/certs')
-      setCerts(res.data.certs || [])
-    } catch (err) {
-      console.error(err)
-    }
-  }
-
-  const loadLogs = async (type = 'access') => {
-    try {
-      const res = await api.get(`/nginx/logs?type=${type}&lines=50`)
-      setLogs(res.data.logs || [])
+      const [statusRes, configsRes, templatesRes, dockerRes, certsRes] = await Promise.all([
+        api.get('/nginx/status'),
+        api.get('/nginx/configs'),
+        api.get('/nginx/templates'),
+        api.get('/nginx/docker-containers'),
+        api.get('/nginx/ssl/certs')
+      ])
+      
+      setStatus(statusRes.data)
+      setConfigs(configsRes.data.configs || [])
+      setTemplates(templatesRes.data.templates || {})
+      setDockerContainers(dockerRes.data.containers || [])
+      setCerts(certsRes.data.certs || [])
     } catch (err) {
       console.error(err)
     }
   }
 
   useEffect(() => {
-    loadStatus()
-    loadHosts()
-    loadCerts()
+    loadAll()
   }, [])
 
-  const createHost = async () => {
-    setLoading(true)
+  const saveConfig = async () => {
+    if (!selectedConfig) return
     try {
-      await api.post('/nginx/hosts', formData)
-      await loadHosts()
-      setShowModal(null)
-      setFormData({})
+      await api.put(`/nginx/configs/${selectedConfig.name}`, { content: editContent })
+      await api.post('/nginx/test')
+      await api.post('/nginx/reload')
+      alert('✅ Configuração salva e Nginx recarregado!')
+      loadAll()
     } catch (err) {
-      alert('Erro ao criar host')
-    } finally {
-      setLoading(false)
+      alert('❌ Erro: ' + (err.response?.data?.error || err.message))
     }
   }
 
-  const toggleHost = async (filename, enabled) => {
+  const createFromTemplate = async (templateName) => {
+    const filename = prompt('Nome do arquivo (ex: meusite.conf):')
+    if (!filename) return
+    
     try {
-      if (enabled) {
-        await api.post(`/nginx/hosts/${filename}/disable`)
+      await api.post('/nginx/configs', {
+        filename,
+        content: templates[templateName]
+      })
+      alert('✅ Configuração criada!')
+      setShowTemplates(false)
+      loadAll()
+    } catch (err) {
+      alert('❌ Erro: ' + err.message)
+    }
+  }
+
+  const toggleConfig = async (config) => {
+    try {
+      if (config.enabled) {
+        await api.post(`/nginx/configs/${config.name}/disable`)
       } else {
-        await api.post(`/nginx/hosts/${filename}/enable`)
+        await api.post(`/nginx/configs/${config.name}/enable`)
       }
-      await loadHosts()
+      loadAll()
     } catch (err) {
-      alert('Erro ao alterar host')
+      alert('❌ Erro ao alterar status')
     }
   }
 
-  const deleteHost = async (filename) => {
-    if (!confirm('Deletar este host?')) return
+  const deleteConfig = async (config) => {
+    if (!confirm(`Deletar ${config.name}?`)) return
     try {
-      await api.delete(`/nginx/hosts/${filename}`)
-      await loadHosts()
+      await api.delete(`/nginx/configs/${config.name}`)
+      loadAll()
+      setSelectedConfig(null)
     } catch (err) {
-      alert('Erro ao deletar host')
+      alert('❌ Erro ao deletar')
     }
   }
 
   const installSSL = async () => {
-    setLoading(true)
     try {
-      await api.post('/nginx/ssl/install', {
-        domain: formData.domain,
-        email: formData.email
-      })
-      await loadCerts()
-      setShowModal(null)
-      setFormData({})
+      await api.post('/nginx/ssl/install', sslForm)
+      alert('✅ SSL instalado! Atualize sua configuração para usar HTTPS.')
+      setShowSSL(false)
+      loadAll()
     } catch (err) {
-      alert('Erro ao instalar SSL')
-    } finally {
-      setLoading(false)
+      alert('❌ Erro: ' + err.message)
     }
   }
 
-  const renewSSL = async () => {
-    try {
-      await api.post('/nginx/ssl/renew')
-      alert('Certificados renovados')
-      await loadCerts()
-    } catch (err) {
-      alert('Erro ao renovar')
-    }
-  }
-
-  const setupAutoRenew = async () => {
-    try {
-      await api.post('/nginx/ssl/auto-renew')
-      alert('Auto-renovação configurada')
-    } catch (err) {
-      alert('Erro ao configurar')
-    }
-  }
-
-  const reloadNginx = async () => {
-    try {
-      await api.post('/nginx/reload')
-      alert('Nginx recarregado')
-      await loadStatus()
-    } catch (err) {
-      alert('Erro ao recarregar')
-    }
+  const insertDockerProxy = (container) => {
+    const proxyConfig = `
+    location / {
+        proxy_pass http://${container.ip}:${container.port};
+        proxy_http_version 1.1;
+        proxy_set_header Upgrade $http_upgrade;
+        proxy_set_header Connection 'upgrade';
+        proxy_set_header Host $host;
+        proxy_cache_bypass $http_upgrade;
+        proxy_set_header X-Real-IP $remote_addr;
+        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto $scheme;
+    }`
+    
+    setEditContent(prev => prev + proxyConfig)
   }
 
   return (
-    <div className="space-y-6">
+    <div className="h-full flex flex-col space-y-4">
       {/* Header */}
       <div className="flex items-center justify-between">
         <div>
-          <p className="text-xs uppercase tracking-[0.3em] text-slate-400">Nginx Manager</p>
-          <h2 className="text-2xl font-semibold text-white">Gerenciador Visual de Hosts</h2>
+          <h2 className="text-2xl font-semibold text-white flex items-center gap-2">
+            <Server className="h-6 w-6" />
+            Nginx Manager
+          </h2>
+          <p className="text-sm text-slate-400 mt-1">Editor visual de configurações com templates prontos</p>
         </div>
         <div className="flex gap-2">
           {status?.running ? (
             <div className="flex items-center gap-2 rounded-xl bg-emerald-500/10 px-4 py-2 text-emerald-300">
               <CheckCircle className="h-4 w-4" />
-              <span className="text-sm">Online</span>
+              Online
             </div>
           ) : (
             <div className="flex items-center gap-2 rounded-xl bg-rose-500/10 px-4 py-2 text-rose-300">
               <XCircle className="h-4 w-4" />
-              <span className="text-sm">Offline</span>
+              Offline
             </div>
           )}
-          <button
-            onClick={reloadNginx}
-            className="flex items-center gap-2 rounded-xl border border-blue-800 bg-blue-950 px-4 py-2 text-sm text-blue-200 hover:bg-blue-900"
-          >
-            <RefreshCw className="h-4 w-4" />
-            Reload
-          </button>
         </div>
       </div>
 
-      {/* Tabs */}
-      <div className="flex gap-2">
-        {[
-          { id: 'hosts', label: 'Hosts', icon: Server },
-          { id: 'ssl', label: 'SSL/TLS', icon: Shield },
-          { id: 'logs', label: 'Logs', icon: Activity }
-        ].map((tab) => (
-          <button
-            key={tab.id}
-            onClick={() => {
-              setActiveTab(tab.id)
-              if (tab.id === 'logs') loadLogs()
-            }}
-            className={`flex items-center gap-2 rounded-full border px-4 py-2 text-xs transition ${
-              activeTab === tab.id
-                ? 'border-blue-500/60 bg-blue-500/10 text-blue-200'
-                : 'border-slate-800 bg-slate-900/60 text-slate-300 hover:border-blue-500/40'
-            }`}
-          >
-            <tab.icon className="h-4 w-4" />
-            {tab.label}
-          </button>
-        ))}
-      </div>
-
-      {/* Hosts Tab */}
-      {activeTab === 'hosts' && (
-        <div className="space-y-4">
-          <div className="flex justify-between">
-            <h3 className="text-lg font-semibold text-white">Hosts Configurados</h3>
+      {/* Main Content */}
+      <div className="flex-1 grid grid-cols-12 gap-4 min-h-0">
+        {/* Sidebar - Lista de Configs */}
+        <div className="col-span-3 flex flex-col gap-3 overflow-y-auto">
+          <div className="flex gap-2">
             <button
-              onClick={() => setShowModal('create-host')}
-              className="flex items-center gap-2 rounded-xl bg-blue-500 px-4 py-2 text-sm font-semibold text-white hover:bg-blue-600"
+              onClick={() => setShowTemplates(true)}
+              className="flex-1 flex items-center justify-center gap-2 rounded-xl bg-blue-500 px-3 py-2 text-sm font-semibold text-white hover:bg-blue-600"
             >
               <Plus className="h-4 w-4" />
-              Novo Host
+              Novo
+            </button>
+            <button
+              onClick={() => setShowSSL(true)}
+              className="flex items-center gap-2 rounded-xl border border-emerald-800 bg-emerald-950 px-3 py-2 text-sm text-emerald-200 hover:bg-emerald-900"
+            >
+              <Shield className="h-4 w-4" />
+              SSL
             </button>
           </div>
 
-          <div className="grid gap-4">
-            {hosts.map((host) => (
-              <div key={host.id} className="rounded-2xl border border-slate-800 bg-slate-900/60 p-5">
-                <div className="flex items-start justify-between">
-                  <div className="flex-1">
-                    <div className="flex items-center gap-3">
-                      <Globe className="h-5 w-5 text-blue-400" />
-                      <h4 className="text-lg font-semibold text-white">{host.serverName.join(', ')}</h4>
-                      <span className={`rounded-full px-3 py-1 text-xs ${
-                        host.type === 'reverse-proxy' ? 'bg-purple-500/10 text-purple-300' :
-                        host.type === 'load-balancer' ? 'bg-orange-500/10 text-orange-300' :
-                        host.type === 'static' ? 'bg-green-500/10 text-green-300' :
-                        'bg-slate-500/10 text-slate-300'
-                      }`}>
-                        {host.type}
-                      </span>
-                      {host.ssl && (
-                        <span className="flex items-center gap-1 rounded-full bg-emerald-500/10 px-3 py-1 text-xs text-emerald-300">
-                          <Shield className="h-3 w-3" />
-                          SSL
-                        </span>
-                      )}
-                    </div>
-                    <div className="mt-2 space-y-1 text-sm text-slate-400">
-                      <p>Porta: {host.port}</p>
-                      {host.upstream && <p>Upstream: {host.upstream}</p>}
-                      {host.root && <p>Root: {host.root}</p>}
-                      {host.locations.length > 0 && <p>Locations: {host.locations.join(', ')}</p>}
-                    </div>
-                  </div>
-                  <div className="flex gap-2">
-                    <button
-                      onClick={() => toggleHost(host.configFile, host.enabled)}
-                      className={`rounded-xl border px-3 py-2 text-xs transition ${
-                        host.enabled
-                          ? 'border-emerald-800 bg-emerald-950 text-emerald-200 hover:bg-emerald-900'
-                          : 'border-slate-800 bg-slate-950 text-slate-300 hover:bg-slate-900'
-                      }`}
-                    >
-                      <Power className="h-4 w-4" />
-                    </button>
-                    <button
-                      onClick={() => deleteHost(host.configFile)}
-                      className="rounded-xl border border-rose-800 bg-rose-950 px-3 py-2 text-xs text-rose-200 hover:bg-rose-900"
-                    >
-                      <Trash2 className="h-4 w-4" />
-                    </button>
-                  </div>
-                </div>
-              </div>
-            ))}
-            {hosts.length === 0 && (
-              <p className="text-center text-slate-400 py-8">Nenhum host configurado</p>
-            )}
-          </div>
-        </div>
-      )}
-
-      {/* SSL Tab */}
-      {activeTab === 'ssl' && (
-        <div className="space-y-4">
-          <div className="flex justify-between">
-            <h3 className="text-lg font-semibold text-white">Certificados SSL</h3>
-            <div className="flex gap-2">
-              <button
-                onClick={setupAutoRenew}
-                className="flex items-center gap-2 rounded-xl border border-blue-800 bg-blue-950 px-4 py-2 text-sm text-blue-200 hover:bg-blue-900"
-              >
-                <Settings className="h-4 w-4" />
-                Auto-Renovação
-              </button>
-              <button
-                onClick={renewSSL}
-                className="flex items-center gap-2 rounded-xl border border-emerald-800 bg-emerald-950 px-4 py-2 text-sm text-emerald-200 hover:bg-emerald-900"
-              >
-                <RefreshCw className="h-4 w-4" />
-                Renovar Todos
-              </button>
-              <button
-                onClick={() => setShowModal('install-ssl')}
-                className="flex items-center gap-2 rounded-xl bg-blue-500 px-4 py-2 text-sm font-semibold text-white hover:bg-blue-600"
-              >
-                <Plus className="h-4 w-4" />
-                Instalar SSL
-              </button>
-            </div>
-          </div>
-
-          <div className="grid gap-4">
-            {certs.map((cert) => (
-              <div key={cert.domain} className="rounded-2xl border border-slate-800 bg-slate-900/60 p-5">
-                <div className="flex items-center justify-between">
-                  <div>
-                    <div className="flex items-center gap-2">
-                      <Shield className="h-5 w-5 text-emerald-400" />
-                      <h4 className="text-lg font-semibold text-white">{cert.domain}</h4>
-                    </div>
-                    <div className="mt-2 space-y-1 text-sm text-slate-400">
-                      <p>Criado: {new Date(cert.createdAt).toLocaleDateString()}</p>
-                      <p>Expira: {cert.expiresAt ? new Date(cert.expiresAt).toLocaleDateString() : 'N/A'}</p>
-                      <p className="text-xs text-slate-500">{cert.certPath}</p>
-                    </div>
-                  </div>
-                </div>
-              </div>
-            ))}
-            {certs.length === 0 && (
-              <p className="text-center text-slate-400 py-8">Nenhum certificado instalado</p>
-            )}
-          </div>
-        </div>
-      )}
-
-      {/* Logs Tab */}
-      {activeTab === 'logs' && (
-        <div className="space-y-4">
-          <div className="flex justify-between">
-            <h3 className="text-lg font-semibold text-white">Logs do Nginx</h3>
-            <div className="flex gap-2">
-              <button
-                onClick={() => loadLogs('access')}
-                className="rounded-xl border border-slate-800 bg-slate-950 px-4 py-2 text-xs text-slate-200"
-              >
-                Access
-              </button>
-              <button
-                onClick={() => loadLogs('error')}
-                className="rounded-xl border border-slate-800 bg-slate-950 px-4 py-2 text-xs text-slate-200"
-              >
-                Error
-              </button>
-            </div>
-          </div>
-
-          <div className="rounded-2xl border border-slate-800 bg-slate-900/60 p-4">
-            <pre className="h-96 overflow-y-auto text-xs text-slate-300 whitespace-pre-wrap">
-              {logs.join('\n') || 'Nenhum log disponível'}
-            </pre>
-          </div>
-        </div>
-      )}
-
-      {/* Modal: Create Host */}
-      {showModal === 'create-host' && (
-        <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50 p-4">
-          <div className="bg-slate-900 border border-slate-700 rounded-2xl p-6 max-w-2xl w-full max-h-[90vh] overflow-y-auto">
-            <h3 className="text-xl font-semibold text-white mb-4">Criar Novo Host</h3>
-            
-            <div className="space-y-4">
-              <div>
-                <label className="block text-sm text-slate-300 mb-2">Domínios (separados por espaço)</label>
-                <input
-                  className="w-full rounded-xl border border-slate-700 bg-slate-800 px-3 py-2 text-sm text-white"
-                  placeholder="example.com www.example.com"
-                  onChange={(e) => setFormData({...formData, serverName: e.target.value.split(' ')})}
-                />
-              </div>
-
-              <div>
-                <label className="block text-sm text-slate-300 mb-2">Tipo</label>
-                <select
-                  className="w-full rounded-xl border border-slate-700 bg-slate-800 px-3 py-2 text-sm text-white"
-                  onChange={(e) => setFormData({...formData, type: e.target.value})}
+          {configs.map((config) => (
+            <div
+              key={config.name}
+              onClick={() => {
+                setSelectedConfig(config)
+                setEditContent(config.content)
+              }}
+              className={`rounded-xl border p-3 cursor-pointer transition ${
+                selectedConfig?.name === config.name
+                  ? 'border-blue-500 bg-blue-500/10'
+                  : 'border-slate-800 bg-slate-900/60 hover:border-slate-700'
+              }`}
+            >
+              <div className="flex items-center justify-between mb-2">
+                <span className="text-sm font-semibold text-white truncate">{config.name}</span>
+                <button
+                  onClick={(e) => {
+                    e.stopPropagation()
+                    toggleConfig(config)
+                  }}
+                  className="flex-shrink-0"
                 >
-                  <option value="reverse-proxy">Reverse Proxy</option>
-                  <option value="load-balancer">Load Balancer</option>
-                  <option value="static">Site Estático</option>
-                </select>
+                  {config.enabled ? (
+                    <Power className="h-4 w-4 text-emerald-400" />
+                  ) : (
+                    <PowerOff className="h-4 w-4 text-slate-500" />
+                  )}
+                </button>
               </div>
-
-              <div>
-                <label className="block text-sm text-slate-300 mb-2">Porta</label>
-                <input
-                  type="number"
-                  className="w-full rounded-xl border border-slate-700 bg-slate-800 px-3 py-2 text-sm text-white"
-                  placeholder="80"
-                  defaultValue="80"
-                  onChange={(e) => setFormData({...formData, port: parseInt(e.target.value)})}
-                />
-              </div>
-
-              {formData.type === 'reverse-proxy' && (
-                <div>
-                  <label className="block text-sm text-slate-300 mb-2">Upstream (host:porta)</label>
-                  <input
-                    className="w-full rounded-xl border border-slate-700 bg-slate-800 px-3 py-2 text-sm text-white"
-                    placeholder="localhost:3000"
-                    onChange={(e) => setFormData({...formData, upstream: e.target.value})}
-                  />
-                </div>
-              )}
-
-              {formData.type === 'static' && (
-                <div>
-                  <label className="block text-sm text-slate-300 mb-2">Diretório Root</label>
-                  <input
-                    className="w-full rounded-xl border border-slate-700 bg-slate-800 px-3 py-2 text-sm text-white"
-                    placeholder="/var/www/html"
-                    onChange={(e) => setFormData({...formData, root: e.target.value})}
-                  />
-                </div>
-              )}
-
               <div className="flex items-center gap-2">
-                <input
-                  type="checkbox"
-                  id="ssl"
-                  onChange={(e) => setFormData({...formData, ssl: e.target.checked})}
-                />
-                <label htmlFor="ssl" className="text-sm text-slate-300">Habilitar SSL</label>
+                <span className={`text-xs px-2 py-0.5 rounded-full ${
+                  config.enabled 
+                    ? 'bg-emerald-500/10 text-emerald-300' 
+                    : 'bg-slate-500/10 text-slate-400'
+                }`}>
+                  {config.enabled ? 'Ativo' : 'Inativo'}
+                </span>
+                <span className="text-xs text-slate-500">{config.type}</span>
               </div>
             </div>
+          ))}
+        </div>
 
-            <div className="flex gap-2 mt-6">
-              <button
-                onClick={createHost}
-                disabled={loading}
-                className="flex-1 rounded-xl bg-blue-500 px-4 py-2 text-sm font-semibold text-white hover:bg-blue-600 disabled:opacity-50"
-              >
-                {loading ? 'Criando...' : 'Criar Host'}
-              </button>
-              <button
-                onClick={() => {
-                  setShowModal(null)
-                  setFormData({})
-                }}
-                className="rounded-xl border border-slate-700 bg-slate-800 px-4 py-2 text-sm text-slate-300"
-              >
-                Cancelar
-              </button>
+        {/* Editor */}
+        <div className="col-span-6 flex flex-col gap-3 min-h-0">
+          {selectedConfig ? (
+            <>
+              <div className="flex items-center justify-between">
+                <h3 className="text-lg font-semibold text-white">{selectedConfig.name}</h3>
+                <div className="flex gap-2">
+                  <button
+                    onClick={saveConfig}
+                    className="flex items-center gap-2 rounded-xl bg-emerald-500 px-4 py-2 text-sm font-semibold text-white hover:bg-emerald-600"
+                  >
+                    <Save className="h-4 w-4" />
+                    Salvar & Reload
+                  </button>
+                  <button
+                    onClick={() => deleteConfig(selectedConfig)}
+                    className="flex items-center gap-2 rounded-xl border border-rose-800 bg-rose-950 px-4 py-2 text-sm text-rose-200 hover:bg-rose-900"
+                  >
+                    <Trash2 className="h-4 w-4" />
+                  </button>
+                </div>
+              </div>
+              
+              <textarea
+                value={editContent}
+                onChange={(e) => setEditContent(e.target.value)}
+                className="flex-1 rounded-xl border border-slate-800 bg-slate-950 p-4 text-sm text-white font-mono resize-none focus:border-blue-500 focus:outline-none"
+                spellCheck={false}
+              />
+              
+              <div className="text-xs text-slate-400 bg-slate-900/60 rounded-xl p-3">
+                💡 <strong>Dica:</strong> Use os containers Docker à direita para inserir proxy automaticamente
+              </div>
+            </>
+          ) : (
+            <div className="flex-1 flex items-center justify-center text-slate-500">
+              <div className="text-center">
+                <Server className="h-12 w-12 mx-auto mb-3 opacity-50" />
+                <p>Selecione uma configuração para editar</p>
+                <p className="text-sm mt-2">ou crie uma nova usando templates</p>
+              </div>
             </div>
+          )}
+        </div>
+
+        {/* Sidebar Direita - Docker & SSL */}
+        <div className="col-span-3 flex flex-col gap-3 overflow-y-auto">
+          {/* Docker Containers */}
+          <div className="rounded-xl border border-slate-800 bg-slate-900/60 p-4">
+            <h4 className="text-sm font-semibold text-white mb-3 flex items-center gap-2">
+              <Box className="h-4 w-4" />
+              Containers Docker
+            </h4>
+            <div className="space-y-2">
+              {dockerContainers.map((container) => (
+                <div
+                  key={container.id}
+                  className="rounded-lg border border-slate-800 bg-slate-950 p-3"
+                >
+                  <div className="flex items-start justify-between mb-2">
+                    <div className="flex-1 min-w-0">
+                      <p className="text-sm font-semibold text-white truncate">{container.name}</p>
+                      <p className="text-xs text-slate-400 truncate">{container.image}</p>
+                    </div>
+                    <button
+                      onClick={() => insertDockerProxy(container)}
+                      className="flex-shrink-0 ml-2 rounded-lg border border-blue-800 bg-blue-950 px-2 py-1 text-xs text-blue-200 hover:bg-blue-900"
+                      title="Inserir proxy no editor"
+                    >
+                      <Zap className="h-3 w-3" />
+                    </button>
+                  </div>
+                  {container.port && (
+                    <p className="text-xs text-emerald-400">
+                      {container.ip}:{container.port}
+                    </p>
+                  )}
+                </div>
+              ))}
+              {dockerContainers.length === 0 && (
+                <p className="text-xs text-slate-500 text-center py-4">
+                  Nenhum container rodando
+                </p>
+              )}
+            </div>
+          </div>
+
+          {/* SSL Certificates */}
+          <div className="rounded-xl border border-slate-800 bg-slate-900/60 p-4">
+            <h4 className="text-sm font-semibold text-white mb-3 flex items-center gap-2">
+              <Shield className="h-4 w-4" />
+              Certificados SSL
+            </h4>
+            <div className="space-y-2">
+              {certs.map((cert) => (
+                <div
+                  key={cert.domain}
+                  className="rounded-lg border border-slate-800 bg-slate-950 p-3"
+                >
+                  <p className="text-sm font-semibold text-white">{cert.domain}</p>
+                  <p className="text-xs text-slate-400 mt-1">
+                    Expira em {cert.daysLeft} dias
+                  </p>
+                  <button
+                    onClick={() => {
+                      navigator.clipboard.writeText(cert.certPath)
+                      alert('Caminho copiado!')
+                    }}
+                    className="mt-2 text-xs text-blue-300 hover:underline flex items-center gap-1"
+                  >
+                    <Copy className="h-3 w-3" />
+                    Copiar caminho
+                  </button>
+                </div>
+              ))}
+              {certs.length === 0 && (
+                <p className="text-xs text-slate-500 text-center py-4">
+                  Nenhum certificado
+                </p>
+              )}
+            </div>
+          </div>
+        </div>
+      </div>
+
+      {/* Modal: Templates */}
+      {showTemplates && (
+        <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50 p-4">
+          <div className="bg-slate-900 border border-slate-700 rounded-2xl p-6 max-w-4xl w-full max-h-[90vh] overflow-y-auto">
+            <h3 className="text-xl font-semibold text-white mb-4">Escolha um Template</h3>
+            
+            <div className="grid grid-cols-2 gap-4">
+              {Object.entries(templates).map(([name, content]) => (
+                <div
+                  key={name}
+                  className="rounded-xl border border-slate-800 bg-slate-950 p-4 hover:border-blue-500 transition cursor-pointer"
+                  onClick={() => createFromTemplate(name)}
+                >
+                  <h4 className="text-lg font-semibold text-white mb-2 capitalize">
+                    {name.replace(/-/g, ' ')}
+                  </h4>
+                  <pre className="text-xs text-slate-400 overflow-hidden max-h-32">
+                    {content.slice(0, 200)}...
+                  </pre>
+                  <button className="mt-3 w-full rounded-lg bg-blue-500 px-3 py-2 text-sm font-semibold text-white hover:bg-blue-600">
+                    Usar Template
+                  </button>
+                </div>
+              ))}
+            </div>
+
+            <button
+              onClick={() => setShowTemplates(false)}
+              className="mt-6 w-full rounded-xl border border-slate-700 bg-slate-800 px-4 py-2 text-sm text-slate-300"
+            >
+              Cancelar
+            </button>
           </div>
         </div>
       )}
 
-      {/* Modal: Install SSL */}
-      {showModal === 'install-ssl' && (
+      {/* Modal: SSL */}
+      {showSSL && (
         <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50 p-4">
           <div className="bg-slate-900 border border-slate-700 rounded-2xl p-6 max-w-md w-full">
             <h3 className="text-xl font-semibold text-white mb-4">Instalar Certificado SSL</h3>
@@ -453,7 +383,8 @@ const NginxPanel = () => {
                 <input
                   className="w-full rounded-xl border border-slate-700 bg-slate-800 px-3 py-2 text-sm text-white"
                   placeholder="example.com"
-                  onChange={(e) => setFormData({...formData, domain: e.target.value})}
+                  value={sslForm.domain}
+                  onChange={(e) => setSSLForm({...sslForm, domain: e.target.value})}
                 />
               </div>
 
@@ -463,28 +394,27 @@ const NginxPanel = () => {
                   type="email"
                   className="w-full rounded-xl border border-slate-700 bg-slate-800 px-3 py-2 text-sm text-white"
                   placeholder="admin@example.com"
-                  onChange={(e) => setFormData({...formData, email: e.target.value})}
+                  value={sslForm.email}
+                  onChange={(e) => setSSLForm({...sslForm, email: e.target.value})}
                 />
               </div>
 
-              <p className="text-xs text-slate-400">
-                Será usado Let's Encrypt para gerar certificado gratuito
-              </p>
+              <div className="bg-blue-500/10 border border-blue-500/30 rounded-lg p-3">
+                <p className="text-xs text-blue-300">
+                  ✨ Será usado Let's Encrypt (gratuito). Certifique-se que o domínio aponta para este servidor.
+                </p>
+              </div>
             </div>
 
             <div className="flex gap-2 mt-6">
               <button
                 onClick={installSSL}
-                disabled={loading}
-                className="flex-1 rounded-xl bg-blue-500 px-4 py-2 text-sm font-semibold text-white hover:bg-blue-600 disabled:opacity-50"
+                className="flex-1 rounded-xl bg-emerald-500 px-4 py-2 text-sm font-semibold text-white hover:bg-emerald-600"
               >
-                {loading ? 'Instalando...' : 'Instalar'}
+                Instalar SSL
               </button>
               <button
-                onClick={() => {
-                  setShowModal(null)
-                  setFormData({})
-                }}
+                onClick={() => setShowSSL(false)}
                 className="rounded-xl border border-slate-700 bg-slate-800 px-4 py-2 text-sm text-slate-300"
               >
                 Cancelar
