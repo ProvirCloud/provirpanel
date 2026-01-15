@@ -10,11 +10,14 @@ const NginxPanel = () => {
   const [certs, setCerts] = useState([])
   const [selectedConfig, setSelectedConfig] = useState(null)
   const [editContent, setEditContent] = useState('')
+  const [originalContent, setOriginalContent] = useState('')
   const [showTemplates, setShowTemplates] = useState(false)
   const [showSSL, setShowSSL] = useState(false)
   const [sslForm, setSSLForm] = useState({ domain: '', email: '' })
   const [error, setError] = useState('')
   const [dockerError, setDockerError] = useState('')
+  const [viewMode, setViewMode] = useState('guided')
+  const [nginxTest, setNginxTest] = useState(null)
   const [builderType, setBuilderType] = useState('reverse-proxy')
   const [builder, setBuilder] = useState({
     filename: '',
@@ -36,6 +39,7 @@ const NginxPanel = () => {
     sslKeyPath: ''
   })
   const [builderPreview, setBuilderPreview] = useState('')
+  const [wizardStep, setWizardStep] = useState(1)
 
   const loadAll = async () => {
     try {
@@ -54,6 +58,12 @@ const NginxPanel = () => {
       setDockerError(dockerRes.data.error || '')
       setCerts(certsRes.data.certs || [])
       setError('')
+      try {
+        const testRes = await api.post('/nginx/test')
+        setNginxTest(testRes.data)
+      } catch (testErr) {
+        setNginxTest({ valid: false, error: testErr.response?.data?.error || testErr.message })
+      }
     } catch (err) {
       setError(err.response?.data?.error || err.message)
     }
@@ -220,16 +230,178 @@ ${buildProxyLocation(proxyTarget)}
     }))
   }
 
+  const resolveContainerHost = (container) => {
+    if (!container) return 'localhost'
+    if (!container.ip || container.ip === '0.0.0.0' || container.ip === '::') {
+      return 'localhost'
+    }
+    return container.ip
+  }
+
+  const useContainerAsTarget = (container) => {
+    if (!container?.port) return
+    const host = resolveContainerHost(container)
+    if (builderType === 'load-balancer') {
+      setBuilder((prev) => ({
+        ...prev,
+        upstreams: [
+          ...prev.upstreams,
+          { host, port: String(container.port), weight: '1', backup: false }
+        ]
+      }))
+      return
+    }
+    setBuilder((prev) => ({
+      ...prev,
+      targetHost: host,
+      targetPort: String(container.port),
+      targetPath: '/'
+    }))
+  }
+
   const saveConfig = async () => {
     if (!selectedConfig || !selectedConfig.editable || !selectedConfig.readable) return
     try {
       await api.put(`/nginx/configs/${selectedConfig.name}`, { content: editContent })
-      await api.post('/nginx/test')
-      await api.post('/nginx/reload')
-      alert('✅ Configuração salva e Nginx recarregado!')
+      alert('✅ Configuração salva.')
+      setOriginalContent(editContent)
       loadAll()
     } catch (err) {
       alert('❌ Erro: ' + (err.response?.data?.error || err.message))
+    }
+  }
+
+  const saveAndApply = async () => {
+    if (!selectedConfig || !selectedConfig.editable || !selectedConfig.readable) return
+    try {
+      await api.put(`/nginx/configs/${selectedConfig.name}`, { content: editContent })
+      const testRes = await api.post('/nginx/test')
+      setNginxTest(testRes.data)
+      if (!testRes.data?.valid) {
+        alert('❌ Configuração inválida. Veja o alerta acima.')
+        return
+      }
+      await api.post('/nginx/reload')
+      alert('✅ Configuração salva e aplicada!')
+      setOriginalContent(editContent)
+      loadAll()
+    } catch (err) {
+      alert('❌ Erro: ' + (err.response?.data?.error || err.message))
+    }
+  }
+
+  const revertConfig = () => {
+    if (!selectedConfig) return
+    setEditContent(originalContent)
+  }
+
+  const parseNginxConfig = (content) => {
+    const upstreams = []
+    const servers = []
+    const upstreamRegex = /upstream\s+([^\s{]+)\s*\{([\s\S]*?)\}/g
+    let match
+    while ((match = upstreamRegex.exec(content))) {
+      const name = match[1]
+      const block = match[2]
+      const serverMatches = []
+      const serverRegex = /server\s+([^;]+);/g
+      let srv
+      while ((srv = serverRegex.exec(block))) {
+        serverMatches.push(srv[1].trim())
+      }
+      upstreams.push({ name, servers: serverMatches })
+    }
+
+    const serverRegex = /server\s*\{([\s\S]*?)\}/g
+    let serverMatch
+    while ((serverMatch = serverRegex.exec(content))) {
+      const block = serverMatch[1]
+      const listenMatch = block.match(/listen\s+([^;]+);/)
+      const nameMatch = block.match(/server_name\s+([^;]+);/)
+      const rootMatch = block.match(/root\s+([^;]+);/)
+      const locations = []
+      const locationRegex = /location\s+([^\s{]+)\s*\{([\s\S]*?)\}/g
+      let loc
+      while ((loc = locationRegex.exec(block))) {
+        const locBlock = loc[2]
+        const proxyMatch = locBlock.match(/proxy_pass\s+([^;]+);/)
+        locations.push({
+          path: loc[1],
+          proxy: proxyMatch ? proxyMatch[1] : null
+        })
+      }
+      servers.push({
+        listen: listenMatch ? listenMatch[1] : null,
+        serverName: nameMatch ? nameMatch[1] : null,
+        root: rootMatch ? rootMatch[1] : null,
+        locations
+      })
+    }
+
+    return { upstreams, servers }
+  }
+
+  const visualConfig = selectedConfig ? parseNginxConfig(selectedConfig.content || '') : null
+
+  const populateBuilderFromConfig = () => {
+    if (!selectedConfig || !visualConfig) return
+    const firstServer = visualConfig.servers[0] || {}
+    const names = firstServer.serverName || ''
+    const listen = firstServer.listen ? String(firstServer.listen).replace(/ssl/g, '').trim() : '80'
+    const proxyLocation = (firstServer.locations || []).find((loc) => loc.proxy)
+    const proxyTarget = proxyLocation?.proxy || ''
+    const hasUpstream = visualConfig.upstreams.length > 0
+
+    if (hasUpstream) {
+      const upstream = visualConfig.upstreams[0]
+      const parsedUpstreams = upstream.servers.map((entry) => {
+        const parts = entry.split(/\s+/)
+        const hostPort = parts[0] || ''
+        const [host, port] = hostPort.split(':')
+        const weight = parts.find((p) => p.startsWith('weight='))?.split('=')[1] || '1'
+        const backup = parts.includes('backup')
+        return {
+          host: host || '127.0.0.1',
+          port: port || '3000',
+          weight,
+          backup
+        }
+      })
+      setBuilderType('load-balancer')
+      setBuilder((prev) => ({
+        ...prev,
+        serverNames: names,
+        listenPort: listen || '80',
+        upstreamName: upstream.name,
+        upstreams: parsedUpstreams.length ? parsedUpstreams : prev.upstreams
+      }))
+      return
+    }
+
+    if (proxyTarget.startsWith('http')) {
+      const clean = proxyTarget.replace(/^https?:\/\//, '')
+      const [hostPort, path = '/'] = clean.split(/\/(.+)?/)
+      const [host, port] = hostPort.split(':')
+      setBuilderType('reverse-proxy')
+      setBuilder((prev) => ({
+        ...prev,
+        serverNames: names,
+        listenPort: listen || '80',
+        targetHost: host || prev.targetHost,
+        targetPort: port || prev.targetPort,
+        targetPath: path ? `/${path}` : '/'
+      }))
+      return
+    }
+
+    if (firstServer.root) {
+      setBuilderType('static-site')
+      setBuilder((prev) => ({
+        ...prev,
+        serverNames: names,
+        listenPort: listen || '80',
+        targetPath: firstServer.root
+      }))
     }
   }
 
@@ -305,15 +477,15 @@ ${buildProxyLocation(proxyTarget)}
   return (
     <div className="h-full flex flex-col space-y-4">
       {/* Header */}
-        <div className="flex items-center justify-between">
-          <div>
-            <h2 className="text-2xl font-semibold text-white flex items-center gap-2">
-              <Server className="h-6 w-6" />
-              Nginx Manager
-            </h2>
-            <p className="text-sm text-slate-400 mt-1">Editor visual de configurações com templates prontos</p>
-          </div>
-        <div className="flex gap-2">
+      <div className="flex items-center justify-between">
+        <div>
+          <h2 className="text-2xl font-semibold text-white flex items-center gap-2">
+            <Server className="h-6 w-6" />
+            Nginx Manager
+          </h2>
+          <p className="text-sm text-slate-400 mt-1">Editor visual de configurações com templates prontos</p>
+        </div>
+        <div className="flex gap-2 items-center">
           {status?.running ? (
             <div className="flex items-center gap-2 rounded-xl bg-emerald-500/10 px-4 py-2 text-emerald-300">
               <CheckCircle className="h-4 w-4" />
@@ -325,8 +497,20 @@ ${buildProxyLocation(proxyTarget)}
               Offline
             </div>
           )}
+          <button
+            onClick={loadAll}
+            className="rounded-xl border border-slate-700 bg-slate-800 px-3 py-2 text-xs text-slate-300 hover:bg-slate-700"
+          >
+            Atualizar status
+          </button>
         </div>
       </div>
+
+      {nginxTest && !nginxTest.valid && (
+        <div className="rounded-xl border border-rose-900 bg-rose-950/70 px-4 py-3 text-sm text-rose-200">
+          ⚠️ Configuração inválida no Nginx: {nginxTest.error || 'Verifique os arquivos'}
+        </div>
+      )}
 
       {error && (
         <div className="rounded-xl border border-rose-900 bg-rose-950/70 px-4 py-3 text-sm text-rose-200">
@@ -361,6 +545,7 @@ ${buildProxyLocation(proxyTarget)}
               onClick={() => {
                 setSelectedConfig(config)
                 setEditContent(config.content)
+                setOriginalContent(config.content)
               }}
               className={`rounded-xl border p-3 cursor-pointer transition ${
                 selectedConfig?.name === config.name
@@ -404,258 +589,366 @@ ${buildProxyLocation(proxyTarget)}
 
         {/* Editor */}
         <div className="col-span-6 flex flex-col gap-3 min-h-0">
-          <div className="rounded-2xl border border-slate-800 bg-slate-900/60 p-4">
-            <div className="flex items-center justify-between mb-3">
-              <div>
-                <h3 className="text-lg font-semibold text-white">Configuração guiada</h3>
-                <p className="text-xs text-slate-400">
-                  Monte seu balanceador/proxy como um formulário simples.
-                </p>
-              </div>
-              <div className="flex gap-2">
-                {['reverse-proxy', 'load-balancer', 'static-site'].map((type) => (
-                  <button
-                    key={type}
-                    onClick={() => setBuilderType(type)}
-                    className={`rounded-full px-3 py-1 text-xs font-semibold ${
-                      builderType === type
-                        ? 'bg-blue-500 text-white'
-                        : 'bg-slate-800 text-slate-300 hover:bg-slate-700'
-                    }`}
-                  >
-                    {type === 'reverse-proxy' ? 'Proxy' : type === 'load-balancer' ? 'Load balancer' : 'Site estático'}
-                  </button>
-                ))}
-              </div>
+          <div className="flex items-center justify-between rounded-2xl border border-slate-800 bg-slate-900/60 px-4 py-3">
+            <div>
+              <h3 className="text-sm font-semibold text-white">Modo de edição</h3>
+              <p className="text-xs text-slate-400">Escolha visual ou avançado.</p>
             </div>
+            <div className="flex gap-2">
+              <button
+                onClick={() => setViewMode('guided')}
+                className={`rounded-full px-3 py-1 text-xs font-semibold ${
+                  viewMode === 'guided'
+                    ? 'bg-blue-500 text-white'
+                    : 'bg-slate-800 text-slate-300 hover:bg-slate-700'
+                }`}
+              >
+                Visual
+              </button>
+              <button
+                onClick={() => setViewMode('advanced')}
+                className={`rounded-full px-3 py-1 text-xs font-semibold ${
+                  viewMode === 'advanced'
+                    ? 'bg-blue-500 text-white'
+                    : 'bg-slate-800 text-slate-300 hover:bg-slate-700'
+                }`}
+              >
+                Avançado
+              </button>
+            </div>
+          </div>
 
-            <div className="grid grid-cols-2 gap-3">
-              <div className="col-span-2">
-                <label className="text-xs text-slate-400">Nome do arquivo</label>
-                <input
-                  className="mt-1 w-full rounded-xl border border-slate-700 bg-slate-950 px-3 py-2 text-sm text-white"
-                  placeholder="meu-site.conf"
-                  value={builder.filename}
-                  onChange={(e) => setBuilder({ ...builder, filename: e.target.value })}
-                />
-              </div>
-              <div>
-                <label className="text-xs text-slate-400">Domínio(s)</label>
-                <input
-                  className="mt-1 w-full rounded-xl border border-slate-700 bg-slate-950 px-3 py-2 text-sm text-white"
-                  placeholder="example.com www.example.com"
-                  value={builder.serverNames}
-                  onChange={(e) => setBuilder({ ...builder, serverNames: e.target.value })}
-                />
-              </div>
-              <div>
-                <label className="text-xs text-slate-400">Porta</label>
-                <input
-                  className="mt-1 w-full rounded-xl border border-slate-700 bg-slate-950 px-3 py-2 text-sm text-white"
-                  value={builder.listenPort}
-                  onChange={(e) => setBuilder({ ...builder, listenPort: e.target.value })}
-                />
-              </div>
-
-              {builderType === 'reverse-proxy' && (
-                <>
-                  <div>
-                    <label className="text-xs text-slate-400">Destino (host)</label>
-                    <input
-                      className="mt-1 w-full rounded-xl border border-slate-700 bg-slate-950 px-3 py-2 text-sm text-white"
-                      value={builder.targetHost}
-                      onChange={(e) => setBuilder({ ...builder, targetHost: e.target.value })}
-                    />
+          {viewMode === 'guided' && selectedConfig && visualConfig && (
+            <div className="rounded-2xl border border-slate-800 bg-slate-900/60 p-4">
+              <h4 className="text-sm font-semibold text-white mb-3">Resumo visual</h4>
+              {visualConfig.upstreams.length > 0 && (
+                <div className="mb-3">
+                  <p className="text-xs text-slate-400 mb-2">Upstreams</p>
+                  <div className="space-y-2">
+                    {visualConfig.upstreams.map((upstream) => (
+                      <div key={upstream.name} className="rounded-lg border border-slate-800 bg-slate-950 p-2">
+                        <div className="text-xs text-white">{upstream.name}</div>
+                        <div className="text-xs text-slate-400">
+                          {upstream.servers.length ? upstream.servers.join(', ') : 'Sem destinos'}
+                        </div>
+                      </div>
+                    ))}
                   </div>
-                  <div>
-                    <label className="text-xs text-slate-400">Destino (porta)</label>
-                    <input
-                      className="mt-1 w-full rounded-xl border border-slate-700 bg-slate-950 px-3 py-2 text-sm text-white"
-                      value={builder.targetPort}
-                      onChange={(e) => setBuilder({ ...builder, targetPort: e.target.value })}
-                    />
-                  </div>
-                  <div className="col-span-2">
-                    <label className="text-xs text-slate-400">Caminho no destino</label>
-                    <input
-                      className="mt-1 w-full rounded-xl border border-slate-700 bg-slate-950 px-3 py-2 text-sm text-white"
-                      value={builder.targetPath}
-                      onChange={(e) => setBuilder({ ...builder, targetPath: e.target.value })}
-                    />
-                  </div>
-                </>
-              )}
-
-              {builderType === 'static-site' && (
-                <div className="col-span-2">
-                  <label className="text-xs text-slate-400">Pasta do site</label>
-                  <input
-                    className="mt-1 w-full rounded-xl border border-slate-700 bg-slate-950 px-3 py-2 text-sm text-white"
-                    value={builder.targetPath}
-                    onChange={(e) => setBuilder({ ...builder, targetPath: e.target.value })}
-                  />
                 </div>
               )}
-            </div>
-
-            {builderType === 'load-balancer' && (
-              <div className="mt-4 rounded-xl border border-slate-800 bg-slate-950/70 p-3">
-                <div className="flex items-center justify-between mb-2">
-                  <div>
-                    <h4 className="text-sm font-semibold text-white">Backends</h4>
-                    <p className="text-xs text-slate-400">Adicione destinos e pesos (weight).</p>
-                  </div>
-                  <button
-                    onClick={addUpstream}
-                    className="rounded-lg bg-blue-500 px-3 py-1 text-xs font-semibold text-white hover:bg-blue-600"
-                  >
-                    Adicionar
-                  </button>
-                </div>
+              {visualConfig.servers.length > 0 ? (
                 <div className="space-y-2">
-                  {builder.upstreams.map((upstream, index) => (
-                    <div key={`${upstream.host}-${index}`} className="grid grid-cols-6 gap-2">
-                      <input
-                        className="col-span-2 rounded-lg border border-slate-700 bg-slate-900 px-2 py-1 text-xs text-white"
-                        value={upstream.host}
-                        onChange={(e) => updateUpstream(index, 'host', e.target.value)}
-                      />
-                      <input
-                        className="col-span-1 rounded-lg border border-slate-700 bg-slate-900 px-2 py-1 text-xs text-white"
-                        value={upstream.port}
-                        onChange={(e) => updateUpstream(index, 'port', e.target.value)}
-                      />
-                      <input
-                        className="col-span-1 rounded-lg border border-slate-700 bg-slate-900 px-2 py-1 text-xs text-white"
-                        value={upstream.weight}
-                        onChange={(e) => updateUpstream(index, 'weight', e.target.value)}
-                      />
-                      <label className="col-span-1 flex items-center gap-2 text-xs text-slate-300">
-                        <input
-                          type="checkbox"
-                          checked={upstream.backup}
-                          onChange={(e) => updateUpstream(index, 'backup', e.target.checked)}
-                        />
-                        Backup
-                      </label>
-                      <button
-                        onClick={() => removeUpstream(index)}
-                        className="col-span-1 rounded-lg border border-rose-800 text-xs text-rose-200 hover:bg-rose-900"
-                      >
-                        Remover
-                      </button>
+                  {visualConfig.servers.map((server, index) => (
+                    <div key={`${server.serverName}-${index}`} className="rounded-lg border border-slate-800 bg-slate-950 p-2">
+                      <div className="text-xs text-white">
+                        server {server.serverName || '(sem dominio)'}
+                      </div>
+                      <div className="text-xs text-slate-400">
+                        listen {server.listen || '-'} {server.root ? `| root ${server.root}` : ''}
+                      </div>
+                      {server.locations.length > 0 && (
+                        <div className="mt-1 text-xs text-slate-400">
+                          {server.locations.map((loc) => (
+                            <div key={loc.path}>
+                              location {loc.path} → {loc.proxy || 'sem proxy'}
+                            </div>
+                          ))}
+                        </div>
+                      )}
                     </div>
                   ))}
                 </div>
-                <div className="mt-3">
-                  <label className="text-xs text-slate-400">Nome do upstream</label>
-                  <input
-                    className="mt-1 w-full rounded-xl border border-slate-700 bg-slate-900 px-2 py-1 text-xs text-white"
-                    value={builder.upstreamName}
-                    onChange={(e) => setBuilder({ ...builder, upstreamName: e.target.value })}
-                  />
+              ) : (
+                <div className="text-xs text-slate-500">Nenhum server block encontrado.</div>
+              )}
+              <button
+                onClick={populateBuilderFromConfig}
+                className="mt-3 rounded-lg border border-blue-800 bg-blue-950 px-3 py-2 text-xs text-blue-200 hover:bg-blue-900"
+              >
+                Usar estes dados no visual
+              </button>
+            </div>
+          )}
+
+          {viewMode === 'guided' && (
+            <div className="rounded-2xl border border-slate-800 bg-slate-900/60 p-4">
+              <div className="flex items-center justify-between mb-3">
+                <div>
+                  <h3 className="text-lg font-semibold text-white">Wizard em 3 passos</h3>
+                  <p className="text-xs text-slate-400">Domínio → Destino → SSL</p>
+                </div>
+                <div className="flex gap-2">
+                  {['reverse-proxy', 'load-balancer', 'static-site'].map((type) => (
+                    <button
+                      key={type}
+                      onClick={() => setBuilderType(type)}
+                      className={`rounded-full px-3 py-1 text-xs font-semibold ${
+                        builderType === type
+                          ? 'bg-blue-500 text-white'
+                          : 'bg-slate-800 text-slate-300 hover:bg-slate-700'
+                      }`}
+                    >
+                      {type === 'reverse-proxy' ? 'Proxy' : type === 'load-balancer' ? 'Load balancer' : 'Site estático'}
+                    </button>
+                  ))}
                 </div>
               </div>
-            )}
 
-            <div className="mt-4 grid grid-cols-2 gap-3">
-              <label className="flex items-center gap-2 text-xs text-slate-300">
-                <input
-                  type="checkbox"
-                  checked={builder.websocket}
-                  onChange={(e) => setBuilder({ ...builder, websocket: e.target.checked })}
-                />
-                WebSocket / Upgrade
-              </label>
-              <label className="flex items-center gap-2 text-xs text-slate-300">
-                <input
-                  type="checkbox"
-                  checked={builder.forwardHeaders}
-                  onChange={(e) => setBuilder({ ...builder, forwardHeaders: e.target.checked })}
-                />
-                Headers de proxy
-              </label>
-              <div>
-                <label className="text-xs text-slate-400">Upload máximo</label>
-                <input
-                  className="mt-1 w-full rounded-lg border border-slate-700 bg-slate-900 px-2 py-1 text-xs text-white"
-                  value={builder.clientBodySize}
-                  onChange={(e) => setBuilder({ ...builder, clientBodySize: e.target.value })}
-                />
+              <div className="flex items-center gap-2 text-xs text-slate-400 mb-4">
+                <div className={`rounded-full px-3 py-1 ${wizardStep === 1 ? 'bg-blue-500 text-white' : 'bg-slate-800'}`}>1. Domínio</div>
+                <div className={`rounded-full px-3 py-1 ${wizardStep === 2 ? 'bg-blue-500 text-white' : 'bg-slate-800'}`}>2. Destino</div>
+                <div className={`rounded-full px-3 py-1 ${wizardStep === 3 ? 'bg-blue-500 text-white' : 'bg-slate-800'}`}>3. SSL</div>
               </div>
-              <div>
-                <label className="text-xs text-slate-400">Timeout leitura</label>
-                <input
-                  className="mt-1 w-full rounded-lg border border-slate-700 bg-slate-900 px-2 py-1 text-xs text-white"
-                  value={builder.readTimeout}
-                  onChange={(e) => setBuilder({ ...builder, readTimeout: e.target.value })}
-                />
-              </div>
-              <div>
-                <label className="text-xs text-slate-400">Timeout conexão</label>
-                <input
-                  className="mt-1 w-full rounded-lg border border-slate-700 bg-slate-900 px-2 py-1 text-xs text-white"
-                  value={builder.connectTimeout}
-                  onChange={(e) => setBuilder({ ...builder, connectTimeout: e.target.value })}
-                />
-              </div>
-              <div>
-                <label className="text-xs text-slate-400">Timeout envio</label>
-                <input
-                  className="mt-1 w-full rounded-lg border border-slate-700 bg-slate-900 px-2 py-1 text-xs text-white"
-                  value={builder.sendTimeout}
-                  onChange={(e) => setBuilder({ ...builder, sendTimeout: e.target.value })}
-                />
-              </div>
-            </div>
 
-            <div className="mt-4 rounded-xl border border-slate-800 bg-slate-950/70 p-3">
-              <label className="flex items-center gap-2 text-xs text-slate-300">
-                <input
-                  type="checkbox"
-                  checked={builder.enableSsl}
-                  onChange={(e) => setBuilder({ ...builder, enableSsl: e.target.checked })}
-                />
-                Usar HTTPS (certificado já instalado)
-              </label>
-              {builder.enableSsl && (
-                <div className="grid grid-cols-2 gap-2 mt-2">
-                  <input
-                    className="rounded-lg border border-slate-700 bg-slate-900 px-2 py-1 text-xs text-white"
-                    placeholder="/etc/letsencrypt/live/example.com/fullchain.pem"
-                    value={builder.sslCertPath}
-                    onChange={(e) => setBuilder({ ...builder, sslCertPath: e.target.value })}
-                  />
-                  <input
-                    className="rounded-lg border border-slate-700 bg-slate-900 px-2 py-1 text-xs text-white"
-                    placeholder="/etc/letsencrypt/live/example.com/privkey.pem"
-                    value={builder.sslKeyPath}
-                    onChange={(e) => setBuilder({ ...builder, sslKeyPath: e.target.value })}
-                  />
+              {wizardStep === 1 && (
+                <div className="grid grid-cols-2 gap-3">
+                  <div className="col-span-2">
+                    <label className="text-xs text-slate-400">Nome do arquivo</label>
+                    <input
+                      className="mt-1 w-full rounded-xl border border-slate-700 bg-slate-950 px-3 py-2 text-sm text-white"
+                      placeholder="meu-site.conf"
+                      value={builder.filename}
+                      onChange={(e) => setBuilder({ ...builder, filename: e.target.value })}
+                    />
+                  </div>
+                  <div>
+                    <label className="text-xs text-slate-400">Domínio(s)</label>
+                    <input
+                      className="mt-1 w-full rounded-xl border border-slate-700 bg-slate-950 px-3 py-2 text-sm text-white"
+                      placeholder="example.com www.example.com"
+                      value={builder.serverNames}
+                      onChange={(e) => setBuilder({ ...builder, serverNames: e.target.value })}
+                    />
+                  </div>
+                  <div>
+                    <label className="text-xs text-slate-400">Porta</label>
+                    <input
+                      className="mt-1 w-full rounded-xl border border-slate-700 bg-slate-950 px-3 py-2 text-sm text-white"
+                      value={builder.listenPort}
+                      onChange={(e) => setBuilder({ ...builder, listenPort: e.target.value })}
+                    />
+                  </div>
                 </div>
               )}
-            </div>
 
-            <div className="mt-4 flex flex-wrap gap-2">
-              <button
-                onClick={refreshPreview}
-                className="rounded-xl border border-slate-700 bg-slate-800 px-4 py-2 text-sm text-slate-200"
-              >
-                Gerar preview
-              </button>
-              <button
-                onClick={applyPreviewToEditor}
-                className="rounded-xl bg-blue-500 px-4 py-2 text-sm font-semibold text-white hover:bg-blue-600"
-              >
-                Enviar para editor
-              </button>
-              <button
-                onClick={createConfigFromBuilder}
-                className="rounded-xl bg-emerald-500 px-4 py-2 text-sm font-semibold text-white hover:bg-emerald-600"
-              >
-                Criar arquivo
-              </button>
-            </div>
+              {wizardStep === 2 && (
+                <div className="grid grid-cols-2 gap-3">
+                  {builderType === 'reverse-proxy' && (
+                    <>
+                      <div>
+                        <label className="text-xs text-slate-400">Destino (host)</label>
+                        <input
+                          className="mt-1 w-full rounded-xl border border-slate-700 bg-slate-950 px-3 py-2 text-sm text-white"
+                          value={builder.targetHost}
+                          onChange={(e) => setBuilder({ ...builder, targetHost: e.target.value })}
+                        />
+                      </div>
+                      <div>
+                        <label className="text-xs text-slate-400">Destino (porta)</label>
+                        <input
+                          className="mt-1 w-full rounded-xl border border-slate-700 bg-slate-950 px-3 py-2 text-sm text-white"
+                          value={builder.targetPort}
+                          onChange={(e) => setBuilder({ ...builder, targetPort: e.target.value })}
+                        />
+                      </div>
+                      <div className="col-span-2">
+                        <label className="text-xs text-slate-400">Caminho no destino</label>
+                        <input
+                          className="mt-1 w-full rounded-xl border border-slate-700 bg-slate-950 px-3 py-2 text-sm text-white"
+                          value={builder.targetPath}
+                          onChange={(e) => setBuilder({ ...builder, targetPath: e.target.value })}
+                        />
+                      </div>
+                    </>
+                  )}
+
+                  {builderType === 'static-site' && (
+                    <div className="col-span-2">
+                      <label className="text-xs text-slate-400">Pasta do site</label>
+                      <input
+                        className="mt-1 w-full rounded-xl border border-slate-700 bg-slate-950 px-3 py-2 text-sm text-white"
+                        value={builder.targetPath}
+                        onChange={(e) => setBuilder({ ...builder, targetPath: e.target.value })}
+                      />
+                    </div>
+                  )}
+
+                  {builderType === 'load-balancer' && (
+                    <div className="col-span-2 rounded-xl border border-slate-800 bg-slate-950/70 p-3">
+                      <div className="flex items-center justify-between mb-2">
+                        <div>
+                          <h4 className="text-sm font-semibold text-white">Backends</h4>
+                          <p className="text-xs text-slate-400">Adicione destinos e pesos (weight).</p>
+                        </div>
+                        <button
+                          onClick={addUpstream}
+                          className="rounded-lg bg-blue-500 px-3 py-1 text-xs font-semibold text-white hover:bg-blue-600"
+                        >
+                          Adicionar
+                        </button>
+                      </div>
+                      <div className="space-y-2">
+                        {builder.upstreams.map((upstream, index) => (
+                          <div key={`${upstream.host}-${index}`} className="grid grid-cols-6 gap-2">
+                            <input
+                              className="col-span-2 rounded-lg border border-slate-700 bg-slate-900 px-2 py-1 text-xs text-white"
+                              value={upstream.host}
+                              onChange={(e) => updateUpstream(index, 'host', e.target.value)}
+                            />
+                            <input
+                              className="col-span-1 rounded-lg border border-slate-700 bg-slate-900 px-2 py-1 text-xs text-white"
+                              value={upstream.port}
+                              onChange={(e) => updateUpstream(index, 'port', e.target.value)}
+                            />
+                            <input
+                              className="col-span-1 rounded-lg border border-slate-700 bg-slate-900 px-2 py-1 text-xs text-white"
+                              value={upstream.weight}
+                              onChange={(e) => updateUpstream(index, 'weight', e.target.value)}
+                            />
+                            <label className="col-span-1 flex items-center gap-2 text-xs text-slate-300">
+                              <input
+                                type="checkbox"
+                                checked={upstream.backup}
+                                onChange={(e) => updateUpstream(index, 'backup', e.target.checked)}
+                              />
+                              Backup
+                            </label>
+                            <button
+                              onClick={() => removeUpstream(index)}
+                              className="col-span-1 rounded-lg border border-rose-800 text-xs text-rose-200 hover:bg-rose-900"
+                            >
+                              Remover
+                            </button>
+                          </div>
+                        ))}
+                      </div>
+                      <div className="mt-3">
+                        <label className="text-xs text-slate-400">Nome do upstream</label>
+                        <input
+                          className="mt-1 w-full rounded-xl border border-slate-700 bg-slate-900 px-2 py-1 text-xs text-white"
+                          value={builder.upstreamName}
+                          onChange={(e) => setBuilder({ ...builder, upstreamName: e.target.value })}
+                        />
+                      </div>
+                    </div>
+                  )}
+
+                  <div className="col-span-2 grid grid-cols-2 gap-3 mt-2">
+                    <label className="flex items-center gap-2 text-xs text-slate-300">
+                      <input
+                        type="checkbox"
+                        checked={builder.websocket}
+                        onChange={(e) => setBuilder({ ...builder, websocket: e.target.checked })}
+                      />
+                      WebSocket / Upgrade
+                    </label>
+                    <label className="flex items-center gap-2 text-xs text-slate-300">
+                      <input
+                        type="checkbox"
+                        checked={builder.forwardHeaders}
+                        onChange={(e) => setBuilder({ ...builder, forwardHeaders: e.target.checked })}
+                      />
+                      Headers de proxy
+                    </label>
+                    <div>
+                      <label className="text-xs text-slate-400">Upload máximo</label>
+                      <input
+                        className="mt-1 w-full rounded-lg border border-slate-700 bg-slate-900 px-2 py-1 text-xs text-white"
+                        value={builder.clientBodySize}
+                        onChange={(e) => setBuilder({ ...builder, clientBodySize: e.target.value })}
+                      />
+                    </div>
+                    <div>
+                      <label className="text-xs text-slate-400">Timeout leitura</label>
+                      <input
+                        className="mt-1 w-full rounded-lg border border-slate-700 bg-slate-900 px-2 py-1 text-xs text-white"
+                        value={builder.readTimeout}
+                        onChange={(e) => setBuilder({ ...builder, readTimeout: e.target.value })}
+                      />
+                    </div>
+                    <div>
+                      <label className="text-xs text-slate-400">Timeout conexão</label>
+                      <input
+                        className="mt-1 w-full rounded-lg border border-slate-700 bg-slate-900 px-2 py-1 text-xs text-white"
+                        value={builder.connectTimeout}
+                        onChange={(e) => setBuilder({ ...builder, connectTimeout: e.target.value })}
+                      />
+                    </div>
+                    <div>
+                      <label className="text-xs text-slate-400">Timeout envio</label>
+                      <input
+                        className="mt-1 w-full rounded-lg border border-slate-700 bg-slate-900 px-2 py-1 text-xs text-white"
+                        value={builder.sendTimeout}
+                        onChange={(e) => setBuilder({ ...builder, sendTimeout: e.target.value })}
+                      />
+                    </div>
+                  </div>
+                </div>
+              )}
+
+              {wizardStep === 3 && (
+                <div className="rounded-xl border border-slate-800 bg-slate-950/70 p-3">
+                  <label className="flex items-center gap-2 text-xs text-slate-300">
+                    <input
+                      type="checkbox"
+                      checked={builder.enableSsl}
+                      onChange={(e) => setBuilder({ ...builder, enableSsl: e.target.checked })}
+                    />
+                    Usar HTTPS (certificado já instalado)
+                  </label>
+                  {builder.enableSsl && (
+                    <div className="grid grid-cols-2 gap-2 mt-2">
+                      <input
+                        className="rounded-lg border border-slate-700 bg-slate-900 px-2 py-1 text-xs text-white"
+                        placeholder="/etc/letsencrypt/live/example.com/fullchain.pem"
+                        value={builder.sslCertPath}
+                        onChange={(e) => setBuilder({ ...builder, sslCertPath: e.target.value })}
+                      />
+                      <input
+                        className="rounded-lg border border-slate-700 bg-slate-900 px-2 py-1 text-xs text-white"
+                        placeholder="/etc/letsencrypt/live/example.com/privkey.pem"
+                        value={builder.sslKeyPath}
+                        onChange={(e) => setBuilder({ ...builder, sslKeyPath: e.target.value })}
+                      />
+                    </div>
+                  )}
+                </div>
+              )}
+
+              <div className="mt-4 flex flex-wrap gap-2">
+                <button
+                  onClick={() => setWizardStep((prev) => Math.max(1, prev - 1))}
+                  className="rounded-xl border border-slate-700 bg-slate-800 px-4 py-2 text-sm text-slate-200"
+                  disabled={wizardStep === 1}
+                >
+                  Voltar
+                </button>
+                <button
+                  onClick={() => setWizardStep((prev) => Math.min(3, prev + 1))}
+                  className="rounded-xl border border-slate-700 bg-slate-800 px-4 py-2 text-sm text-slate-200"
+                  disabled={wizardStep === 3}
+                >
+                  Próximo
+                </button>
+                <button
+                  onClick={refreshPreview}
+                  className="rounded-xl border border-slate-700 bg-slate-800 px-4 py-2 text-sm text-slate-200"
+                >
+                  Gerar preview
+                </button>
+                <button
+                  onClick={applyPreviewToEditor}
+                  className="rounded-xl bg-blue-500 px-4 py-2 text-sm font-semibold text-white hover:bg-blue-600"
+                >
+                  Enviar para editor
+                </button>
+                <button
+                  onClick={createConfigFromBuilder}
+                  className="rounded-xl bg-emerald-500 px-4 py-2 text-sm font-semibold text-white hover:bg-emerald-600"
+                >
+                  Criar arquivo
+                </button>
+              </div>
 
             {builderPreview && (
               <pre className="mt-4 max-h-48 overflow-auto rounded-xl border border-slate-800 bg-slate-950 p-3 text-xs text-slate-300">
@@ -663,8 +956,9 @@ ${buildProxyLocation(proxyTarget)}
               </pre>
             )}
           </div>
+          )}
 
-          {selectedConfig ? (
+          {viewMode === 'advanced' && selectedConfig ? (
             <>
               <div className="flex items-center justify-between">
                 <h3 className="text-lg font-semibold text-white">{selectedConfig.name}</h3>
@@ -679,7 +973,25 @@ ${buildProxyLocation(proxyTarget)}
                     disabled={!selectedConfig.editable || !selectedConfig.readable}
                   >
                     <Save className="h-4 w-4" />
-                    Salvar & Reload
+                    Salvar
+                  </button>
+                  <button
+                    onClick={saveAndApply}
+                    className={`flex items-center gap-2 rounded-xl px-4 py-2 text-sm font-semibold text-white ${
+                      selectedConfig.editable && selectedConfig.readable
+                        ? 'bg-blue-500 hover:bg-blue-600'
+                        : 'bg-slate-700 cursor-not-allowed'
+                    }`}
+                    disabled={!selectedConfig.editable || !selectedConfig.readable}
+                  >
+                    <CheckCircle className="h-4 w-4" />
+                    Salvar & Aplicar
+                  </button>
+                  <button
+                    onClick={revertConfig}
+                    className="flex items-center gap-2 rounded-xl border border-slate-700 bg-slate-800 px-4 py-2 text-sm text-slate-300 hover:bg-slate-700"
+                  >
+                    Reverter
                   </button>
                   <button
                     onClick={() => deleteConfig(selectedConfig)}
@@ -713,7 +1025,7 @@ ${buildProxyLocation(proxyTarget)}
                 💡 <strong>Dica:</strong> Use os containers Docker à direita para inserir proxy automaticamente
               </div>
             </>
-          ) : (
+          ) : viewMode === 'advanced' ? (
             <div className="flex-1 flex items-center justify-center text-slate-500">
               <div className="text-center">
                 <Server className="h-12 w-12 mx-auto mb-3 opacity-50" />
@@ -721,7 +1033,7 @@ ${buildProxyLocation(proxyTarget)}
                 <p className="text-sm mt-2">ou crie uma nova usando templates</p>
               </div>
             </div>
-          )}
+          ) : null}
         </div>
 
         {/* Sidebar Direita - Docker & SSL */}
@@ -760,6 +1072,14 @@ ${buildProxyLocation(proxyTarget)}
                     <p className="text-xs text-emerald-400">
                       {container.ip}:{container.port}
                     </p>
+                  )}
+                  {container.port && (
+                    <button
+                      onClick={() => useContainerAsTarget(container)}
+                      className="mt-2 w-full rounded-lg border border-blue-800 bg-blue-950 px-2 py-1 text-xs text-blue-200 hover:bg-blue-900"
+                    >
+                      Usar como destino
+                    </button>
                   )}
                 </div>
               ))}
