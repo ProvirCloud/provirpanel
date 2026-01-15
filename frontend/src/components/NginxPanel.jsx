@@ -40,6 +40,18 @@ const NginxPanel = () => {
   })
   const [builderPreview, setBuilderPreview] = useState('')
   const [wizardStep, setWizardStep] = useState(1)
+  const [visualForm, setVisualForm] = useState({
+    serverNames: '',
+    listenPort: '80',
+    sslEnabled: false,
+    sslCertPath: '',
+    sslKeyPath: '',
+    mode: 'proxy',
+    proxyHost: 'localhost',
+    proxyPort: '3000',
+    proxyPath: '/',
+    rootPath: '/var/www/html'
+  })
 
   const loadAll = async () => {
     try {
@@ -274,7 +286,12 @@ ${buildProxyLocation(proxyTarget)}
   const saveAndApply = async () => {
     if (!selectedConfig || !selectedConfig.editable || !selectedConfig.readable) return
     try {
-      await api.put(`/nginx/configs/${selectedConfig.name}`, { content: editContent })
+      let contentToSave = editContent
+      if (viewMode === 'guided') {
+        contentToSave = generateVisualConfig()
+        setEditContent(contentToSave)
+      }
+      await api.put(`/nginx/configs/${selectedConfig.name}`, { content: contentToSave })
       const testRes = await api.post('/nginx/test')
       setNginxTest(testRes.data)
       if (!testRes.data?.valid) {
@@ -342,6 +359,124 @@ ${buildProxyLocation(proxyTarget)}
   }
 
   const visualConfig = selectedConfig ? parseNginxConfig(selectedConfig.content || '') : null
+
+  const extractVisualForm = (content) => {
+    const parsed = parseNginxConfig(content || '')
+    const server = parsed.servers[0] || {}
+    const serverName = server.serverName || ''
+    const listenValue = server.listen ? String(server.listen) : '80'
+    const sslEnabled = /ssl/.test(listenValue)
+    const listenPort = listenValue.replace(/ssl/g, '').trim() || '80'
+    const certMatch = content.match(/ssl_certificate\s+([^;]+);/)
+    const keyMatch = content.match(/ssl_certificate_key\s+([^;]+);/)
+    const proxyLocation = (server.locations || []).find((loc) => loc.proxy)
+    const proxyTarget = proxyLocation?.proxy || ''
+    const mode = server.root ? 'static' : 'proxy'
+    let proxyHost = 'localhost'
+    let proxyPort = '3000'
+    let proxyPath = '/'
+    if (proxyTarget.startsWith('http')) {
+      const clean = proxyTarget.replace(/^https?:\/\//, '')
+      const [hostPort, path = '/'] = clean.split(/\/(.+)?/)
+      const [host, port] = hostPort.split(':')
+      proxyHost = host || proxyHost
+      proxyPort = port || proxyPort
+      proxyPath = path ? `/${path}` : '/'
+    }
+    return {
+      serverNames: serverName,
+      listenPort,
+      sslEnabled,
+      sslCertPath: certMatch ? certMatch[1] : '',
+      sslKeyPath: keyMatch ? keyMatch[1] : '',
+      mode,
+      proxyHost,
+      proxyPort,
+      proxyPath,
+      rootPath: server.root || '/var/www/html'
+    }
+  }
+
+  const syncVisualForm = (config) => {
+    if (!config) return
+    setVisualForm(extractVisualForm(config.content || ''))
+  }
+
+  const generateVisualConfig = () => {
+    const names = visualForm.serverNames.trim() || 'example.com'
+    const listenPort = visualForm.listenPort || '80'
+    const proxyTarget = `http://${visualForm.proxyHost}:${visualForm.proxyPort}${visualForm.proxyPath || ''}`
+    if (visualForm.sslEnabled) {
+      const cert = visualForm.sslCertPath || '/etc/letsencrypt/live/example.com/fullchain.pem'
+      const key = visualForm.sslKeyPath || '/etc/letsencrypt/live/example.com/privkey.pem'
+      return `server {
+    listen 80;
+    server_name ${names};
+    return 301 https://$server_name$request_uri;
+}
+
+server {
+    listen 443 ssl http2;
+    server_name ${names};
+
+    ssl_certificate ${cert};
+    ssl_certificate_key ${key};
+    ssl_protocols TLSv1.2 TLSv1.3;
+    ssl_ciphers HIGH:!aNULL:!MD5;
+
+    ${visualForm.mode === 'static'
+      ? `root ${visualForm.rootPath};
+    index index.html;
+
+    location / {
+        try_files $uri $uri/ =404;
+    }`
+      : `location / {
+        proxy_pass ${proxyTarget};
+        proxy_http_version 1.1;
+        proxy_set_header Upgrade $http_upgrade;
+        proxy_set_header Connection 'upgrade';
+        proxy_set_header Host $host;
+        proxy_set_header X-Real-IP $remote_addr;
+        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto $scheme;
+        proxy_read_timeout 60s;
+        proxy_send_timeout 60s;
+    }`}
+}`
+    }
+
+    return `server {
+    listen ${listenPort};
+    server_name ${names};
+
+    ${visualForm.mode === 'static'
+      ? `root ${visualForm.rootPath};
+    index index.html;
+
+    location / {
+        try_files $uri $uri/ =404;
+    }`
+      : `location / {
+        proxy_pass ${proxyTarget};
+        proxy_http_version 1.1;
+        proxy_set_header Upgrade $http_upgrade;
+        proxy_set_header Connection 'upgrade';
+        proxy_set_header Host $host;
+        proxy_set_header X-Real-IP $remote_addr;
+        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto $scheme;
+        proxy_read_timeout 60s;
+        proxy_send_timeout 60s;
+    }`}
+}`
+  }
+
+  const applyVisualToEditor = () => {
+    const content = generateVisualConfig()
+    setEditContent(content)
+    setBuilderPreview(content)
+  }
 
   const populateBuilderFromConfig = () => {
     if (!selectedConfig || !visualConfig) return
@@ -546,6 +681,7 @@ ${buildProxyLocation(proxyTarget)}
                 setSelectedConfig(config)
                 setEditContent(config.content)
                 setOriginalContent(config.content)
+                syncVisualForm(config)
               }}
               className={`rounded-xl border p-3 cursor-pointer transition ${
                 selectedConfig?.name === config.name
@@ -618,55 +754,159 @@ ${buildProxyLocation(proxyTarget)}
             </div>
           </div>
 
-          {viewMode === 'guided' && selectedConfig && visualConfig && (
+          {viewMode === 'guided' && selectedConfig && (
             <div className="rounded-2xl border border-slate-800 bg-slate-900/60 p-4">
-              <h4 className="text-sm font-semibold text-white mb-3">Resumo visual</h4>
-              {visualConfig.upstreams.length > 0 && (
-                <div className="mb-3">
-                  <p className="text-xs text-slate-400 mb-2">Upstreams</p>
-                  <div className="space-y-2">
-                    {visualConfig.upstreams.map((upstream) => (
-                      <div key={upstream.name} className="rounded-lg border border-slate-800 bg-slate-950 p-2">
-                        <div className="text-xs text-white">{upstream.name}</div>
-                        <div className="text-xs text-slate-400">
-                          {upstream.servers.length ? upstream.servers.join(', ') : 'Sem destinos'}
-                        </div>
-                      </div>
-                    ))}
+              <div className="flex items-center justify-between mb-4">
+                <div>
+                  <h4 className="text-sm font-semibold text-white">Visual do Nginx</h4>
+                  <p className="text-xs text-slate-400">Diagrama simplificado + formulário.</p>
+                </div>
+                <button
+                  onClick={() => syncVisualForm(selectedConfig)}
+                  className="rounded-lg border border-slate-700 bg-slate-800 px-3 py-1 text-xs text-slate-200"
+                >
+                  Recarregar do arquivo
+                </button>
+              </div>
+
+              <div className="grid grid-cols-3 gap-3 mb-4">
+                <div className="rounded-xl border border-blue-900 bg-blue-950/60 p-3 text-xs text-blue-200">
+                  <div className="text-xs uppercase text-blue-300">Domínio</div>
+                  <div className="mt-1 text-sm text-white">{visualForm.serverNames || '(não definido)'}</div>
+                  <div className="mt-1 text-[11px] text-blue-300">Porta {visualForm.listenPort}</div>
+                </div>
+                <div className="rounded-xl border border-emerald-900 bg-emerald-950/60 p-3 text-xs text-emerald-200">
+                  <div className="text-xs uppercase text-emerald-300">
+                    {visualForm.mode === 'static' ? 'Site estático' : 'Proxy'}
                   </div>
-                </div>
-              )}
-              {visualConfig.servers.length > 0 ? (
-                <div className="space-y-2">
-                  {visualConfig.servers.map((server, index) => (
-                    <div key={`${server.serverName}-${index}`} className="rounded-lg border border-slate-800 bg-slate-950 p-2">
-                      <div className="text-xs text-white">
-                        server {server.serverName || '(sem dominio)'}
-                      </div>
-                      <div className="text-xs text-slate-400">
-                        listen {server.listen || '-'} {server.root ? `| root ${server.root}` : ''}
-                      </div>
-                      {server.locations.length > 0 && (
-                        <div className="mt-1 text-xs text-slate-400">
-                          {server.locations.map((loc) => (
-                            <div key={loc.path}>
-                              location {loc.path} → {loc.proxy || 'sem proxy'}
-                            </div>
-                          ))}
-                        </div>
-                      )}
+                  {visualForm.mode === 'static' ? (
+                    <div className="mt-1 text-sm text-white">{visualForm.rootPath}</div>
+                  ) : (
+                    <div className="mt-1 text-sm text-white">
+                      {visualForm.proxyHost}:{visualForm.proxyPort}
                     </div>
-                  ))}
+                  )}
+                  {visualForm.mode === 'proxy' && (
+                    <div className="mt-1 text-[11px] text-emerald-300">{visualForm.proxyPath}</div>
+                  )}
                 </div>
-              ) : (
-                <div className="text-xs text-slate-500">Nenhum server block encontrado.</div>
-              )}
-              <button
-                onClick={populateBuilderFromConfig}
-                className="mt-3 rounded-lg border border-blue-800 bg-blue-950 px-3 py-2 text-xs text-blue-200 hover:bg-blue-900"
-              >
-                Usar estes dados no visual
-              </button>
+                <div className="rounded-xl border border-violet-900 bg-violet-950/60 p-3 text-xs text-violet-200">
+                  <div className="text-xs uppercase text-violet-300">SSL</div>
+                  <div className="mt-1 text-sm text-white">{visualForm.sslEnabled ? 'Ativo' : 'Desativado'}</div>
+                  {visualForm.sslEnabled && (
+                    <div className="mt-1 text-[11px] text-violet-300">Certificado definido</div>
+                  )}
+                </div>
+              </div>
+
+              <div className="grid grid-cols-2 gap-3">
+                <div className="col-span-2">
+                  <label className="text-xs text-slate-400">Domínios</label>
+                  <input
+                    className="mt-1 w-full rounded-xl border border-slate-700 bg-slate-950 px-3 py-2 text-sm text-white"
+                    value={visualForm.serverNames}
+                    onChange={(e) => setVisualForm({ ...visualForm, serverNames: e.target.value })}
+                  />
+                </div>
+                <div>
+                  <label className="text-xs text-slate-400">Porta</label>
+                  <input
+                    className="mt-1 w-full rounded-xl border border-slate-700 bg-slate-950 px-3 py-2 text-sm text-white"
+                    value={visualForm.listenPort}
+                    onChange={(e) => setVisualForm({ ...visualForm, listenPort: e.target.value })}
+                  />
+                </div>
+                <div>
+                  <label className="text-xs text-slate-400">Tipo</label>
+                  <select
+                    className="mt-1 w-full rounded-xl border border-slate-700 bg-slate-950 px-3 py-2 text-sm text-white"
+                    value={visualForm.mode}
+                    onChange={(e) => setVisualForm({ ...visualForm, mode: e.target.value })}
+                  >
+                    <option value="proxy">Proxy reverso</option>
+                    <option value="static">Site estático</option>
+                  </select>
+                </div>
+                {visualForm.mode === 'proxy' ? (
+                  <>
+                    <div>
+                      <label className="text-xs text-slate-400">Destino (host)</label>
+                      <input
+                        className="mt-1 w-full rounded-xl border border-slate-700 bg-slate-950 px-3 py-2 text-sm text-white"
+                        value={visualForm.proxyHost}
+                        onChange={(e) => setVisualForm({ ...visualForm, proxyHost: e.target.value })}
+                      />
+                    </div>
+                    <div>
+                      <label className="text-xs text-slate-400">Destino (porta)</label>
+                      <input
+                        className="mt-1 w-full rounded-xl border border-slate-700 bg-slate-950 px-3 py-2 text-sm text-white"
+                        value={visualForm.proxyPort}
+                        onChange={(e) => setVisualForm({ ...visualForm, proxyPort: e.target.value })}
+                      />
+                    </div>
+                    <div className="col-span-2">
+                      <label className="text-xs text-slate-400">Caminho</label>
+                      <input
+                        className="mt-1 w-full rounded-xl border border-slate-700 bg-slate-950 px-3 py-2 text-sm text-white"
+                        value={visualForm.proxyPath}
+                        onChange={(e) => setVisualForm({ ...visualForm, proxyPath: e.target.value })}
+                      />
+                    </div>
+                  </>
+                ) : (
+                  <div className="col-span-2">
+                    <label className="text-xs text-slate-400">Pasta do site</label>
+                    <input
+                      className="mt-1 w-full rounded-xl border border-slate-700 bg-slate-950 px-3 py-2 text-sm text-white"
+                      value={visualForm.rootPath}
+                      onChange={(e) => setVisualForm({ ...visualForm, rootPath: e.target.value })}
+                    />
+                  </div>
+                )}
+              </div>
+
+              <div className="mt-4 rounded-xl border border-slate-800 bg-slate-950/70 p-3">
+                <label className="flex items-center gap-2 text-xs text-slate-300">
+                  <input
+                    type="checkbox"
+                    checked={visualForm.sslEnabled}
+                    onChange={(e) => setVisualForm({ ...visualForm, sslEnabled: e.target.checked })}
+                  />
+                  Ativar SSL (certificado já instalado)
+                </label>
+                {visualForm.sslEnabled && (
+                  <div className="grid grid-cols-2 gap-2 mt-2">
+                    <input
+                      className="rounded-lg border border-slate-700 bg-slate-900 px-2 py-1 text-xs text-white"
+                      placeholder="/etc/letsencrypt/live/example.com/fullchain.pem"
+                      value={visualForm.sslCertPath}
+                      onChange={(e) => setVisualForm({ ...visualForm, sslCertPath: e.target.value })}
+                    />
+                    <input
+                      className="rounded-lg border border-slate-700 bg-slate-900 px-2 py-1 text-xs text-white"
+                      placeholder="/etc/letsencrypt/live/example.com/privkey.pem"
+                      value={visualForm.sslKeyPath}
+                      onChange={(e) => setVisualForm({ ...visualForm, sslKeyPath: e.target.value })}
+                    />
+                  </div>
+                )}
+              </div>
+
+              <div className="mt-4 flex flex-wrap gap-2">
+                <button
+                  onClick={applyVisualToEditor}
+                  className="rounded-xl bg-blue-500 px-4 py-2 text-sm font-semibold text-white hover:bg-blue-600"
+                >
+                  Enviar para editor
+                </button>
+                <button
+                  onClick={saveAndApply}
+                  className="rounded-xl bg-emerald-500 px-4 py-2 text-sm font-semibold text-white hover:bg-emerald-600"
+                >
+                  Salvar & Aplicar
+                </button>
+              </div>
             </div>
           )}
 
