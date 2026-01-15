@@ -88,8 +88,8 @@ router.get('/templates', (req, res, next) => {
 // Containers Docker
 router.get('/docker-containers', async (req, res, next) => {
   try {
-    const containers = await nginxManager.getDockerContainers();
-    res.json({ containers });
+    const result = await nginxManager.getDockerContainers();
+    res.json(result);
   } catch (err) {
     next(err);
   }

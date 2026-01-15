@@ -9,6 +9,74 @@ class NginxManager {
     this.configPath = '/etc/nginx';
     this.sitesAvailable = path.join(this.configPath, 'sites-available');
     this.sitesEnabled = path.join(this.configPath, 'sites-enabled');
+    this.confD = path.join(this.configPath, 'conf.d');
+    this.mainConfig = path.join(this.configPath, 'nginx.conf');
+  }
+
+  isValidFilename(filename) {
+    return typeof filename === 'string' && /^[A-Za-z0-9._-]+$/.test(filename);
+  }
+
+  resolveConfigPath(filename) {
+    if (!this.isValidFilename(filename)) {
+      throw new Error('Nome de arquivo invalido');
+    }
+    const candidates = [
+      path.join(this.sitesAvailable, filename),
+      path.join(this.confD, filename),
+      path.join(this.configPath, filename)
+    ];
+    for (const candidate of candidates) {
+      if (fs.existsSync(candidate)) return candidate;
+    }
+    return path.join(this.sitesAvailable, filename);
+  }
+
+  getTargetDirForNewConfig() {
+    if (fs.existsSync(this.sitesAvailable)) return this.sitesAvailable;
+    if (fs.existsSync(this.confD)) return this.confD;
+    throw new Error('Diretorio de configuracao do Nginx nao encontrado');
+  }
+
+  safeReadFile(filePath) {
+    try {
+      const content = fs.readFileSync(filePath, 'utf8');
+      return { content, readable: true, error: null };
+    } catch (err) {
+      return {
+        content: '',
+        readable: false,
+        error: err && err.message ? err.message : 'Erro ao ler arquivo'
+      };
+    }
+  }
+
+  listConfigsInDir(dirPath, type, toggleable) {
+    const configs = [];
+    if (!fs.existsSync(dirPath)) return configs;
+    const entries = fs.readdirSync(dirPath, { withFileTypes: true });
+    entries.forEach((entry) => {
+      if (!entry.isFile()) return;
+      const file = entry.name;
+      const fullPath = path.join(dirPath, file);
+      const fileRead = this.safeReadFile(fullPath);
+      const enabled = toggleable
+        ? fs.existsSync(path.join(this.sitesEnabled, file))
+        : true;
+      configs.push({
+        name: file,
+        path: fullPath,
+        content: fileRead.content,
+        enabled,
+        type,
+        readable: fileRead.readable,
+        error: fileRead.error,
+        editable: true,
+        toggleable,
+        deletable: true
+      });
+    });
+    return configs;
   }
 
   // Listar TODOS os arquivos de configuração com conteúdo RAW
@@ -16,20 +84,25 @@ class NginxManager {
     const configs = [];
     
     // Sites available
-    if (fs.existsSync(this.sitesAvailable)) {
-      const files = fs.readdirSync(this.sitesAvailable);
-      files.forEach(file => {
-        const fullPath = path.join(this.sitesAvailable, file);
-        const content = fs.readFileSync(fullPath, 'utf8');
-        const enabled = fs.existsSync(path.join(this.sitesEnabled, file));
-        
-        configs.push({
-          name: file,
-          path: fullPath,
-          content,
-          enabled,
-          type: 'site'
-        });
+    configs.push(...this.listConfigsInDir(this.sitesAvailable, 'site', true));
+
+    // conf.d
+    configs.push(...this.listConfigsInDir(this.confD, 'conf', false));
+
+    // main nginx.conf
+    if (fs.existsSync(this.mainConfig)) {
+      const fileRead = this.safeReadFile(this.mainConfig);
+      configs.push({
+        name: path.basename(this.mainConfig),
+        path: this.mainConfig,
+        content: fileRead.content,
+        enabled: true,
+        type: 'main',
+        readable: fileRead.readable,
+        error: fileRead.error,
+        editable: true,
+        toggleable: false,
+        deletable: false
       });
     }
     
@@ -38,14 +111,21 @@ class NginxManager {
 
   // Salvar configuração editada
   saveConfig(filename, content) {
-    const filePath = path.join(this.sitesAvailable, filename);
+    const filePath = this.resolveConfigPath(filename);
+    if (!fs.existsSync(filePath)) {
+      throw new Error('Arquivo nao encontrado para edicao');
+    }
     fs.writeFileSync(filePath, content);
     return this.testConfig();
   }
 
   // Criar novo arquivo
   createConfig(filename, content) {
-    const filePath = path.join(this.sitesAvailable, filename);
+    if (!this.isValidFilename(filename)) {
+      throw new Error('Nome de arquivo invalido');
+    }
+    const targetDir = this.getTargetDirForNewConfig();
+    const filePath = path.join(targetDir, filename);
     if (fs.existsSync(filePath)) {
       throw new Error('Arquivo já existe');
     }
@@ -55,14 +135,23 @@ class NginxManager {
 
   // Deletar
   deleteConfig(filename) {
-    this.disableConfig(filename);
-    const filePath = path.join(this.sitesAvailable, filename);
+    const filePath = this.resolveConfigPath(filename);
+    if (path.resolve(filePath) === path.resolve(this.mainConfig)) {
+      throw new Error('Nao e permitido deletar nginx.conf');
+    }
+    const sitePath = path.join(this.sitesAvailable, filename);
+    if (fs.existsSync(sitePath)) {
+      this.disableConfig(filename);
+    }
     fs.unlinkSync(filePath);
   }
 
   // Enable/Disable
   enableConfig(filename) {
     const source = path.join(this.sitesAvailable, filename);
+    if (!fs.existsSync(source)) {
+      throw new Error('Configuracao nao encontrada em sites-available');
+    }
     const target = path.join(this.sitesEnabled, filename);
     if (!fs.existsSync(target)) {
       fs.symlinkSync(source, target);
@@ -71,6 +160,10 @@ class NginxManager {
   }
 
   disableConfig(filename) {
+    const source = path.join(this.sitesAvailable, filename);
+    if (!fs.existsSync(source)) {
+      throw new Error('Configuracao nao encontrada em sites-available');
+    }
     const target = path.join(this.sitesEnabled, filename);
     if (fs.existsSync(target)) {
       fs.unlinkSync(target);
@@ -156,7 +249,7 @@ server {
       const docker = new DockerManager();
       const containers = await docker.listContainers();
       
-      return containers
+      const formatted = containers
         .filter(c => c.State === 'running')
         .map(c => {
           const ports = c.Ports || [];
@@ -170,14 +263,26 @@ server {
             image: c.Image
           };
         });
-    } catch {
-      return [];
+      return { containers: formatted, error: null };
+    } catch (err) {
+      return {
+        containers: [],
+        error: err && err.message ? err.message : 'Erro ao acessar Docker'
+      };
     }
   }
 
   // Instalar SSL Let's Encrypt
   installSSL(domain, email) {
     try {
+      if (!domain || !email) {
+        return { success: false, error: 'Dominio e email sao obrigatorios' };
+      }
+      try {
+        execSync('command -v certbot', { stdio: 'pipe' });
+      } catch (err) {
+        return { success: false, error: 'Certbot nao instalado na maquina' };
+      }
       execSync(`certbot certonly --nginx -d ${domain} --email ${email} --agree-tos --non-interactive`, { stdio: 'inherit' });
       return { success: true };
     } catch (err) {

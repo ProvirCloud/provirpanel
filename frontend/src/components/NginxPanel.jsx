@@ -13,6 +13,8 @@ const NginxPanel = () => {
   const [showTemplates, setShowTemplates] = useState(false)
   const [showSSL, setShowSSL] = useState(false)
   const [sslForm, setSSLForm] = useState({ domain: '', email: '' })
+  const [error, setError] = useState('')
+  const [dockerError, setDockerError] = useState('')
 
   const loadAll = async () => {
     try {
@@ -28,9 +30,11 @@ const NginxPanel = () => {
       setConfigs(configsRes.data.configs || [])
       setTemplates(templatesRes.data.templates || {})
       setDockerContainers(dockerRes.data.containers || [])
+      setDockerError(dockerRes.data.error || '')
       setCerts(certsRes.data.certs || [])
+      setError('')
     } catch (err) {
-      console.error(err)
+      setError(err.response?.data?.error || err.message)
     }
   }
 
@@ -39,7 +43,7 @@ const NginxPanel = () => {
   }, [])
 
   const saveConfig = async () => {
-    if (!selectedConfig) return
+    if (!selectedConfig || !selectedConfig.editable || !selectedConfig.readable) return
     try {
       await api.put(`/nginx/configs/${selectedConfig.name}`, { content: editContent })
       await api.post('/nginx/test')
@@ -123,14 +127,14 @@ const NginxPanel = () => {
   return (
     <div className="h-full flex flex-col space-y-4">
       {/* Header */}
-      <div className="flex items-center justify-between">
-        <div>
-          <h2 className="text-2xl font-semibold text-white flex items-center gap-2">
-            <Server className="h-6 w-6" />
-            Nginx Manager
-          </h2>
-          <p className="text-sm text-slate-400 mt-1">Editor visual de configurações com templates prontos</p>
-        </div>
+        <div className="flex items-center justify-between">
+          <div>
+            <h2 className="text-2xl font-semibold text-white flex items-center gap-2">
+              <Server className="h-6 w-6" />
+              Nginx Manager
+            </h2>
+            <p className="text-sm text-slate-400 mt-1">Editor visual de configurações com templates prontos</p>
+          </div>
         <div className="flex gap-2">
           {status?.running ? (
             <div className="flex items-center gap-2 rounded-xl bg-emerald-500/10 px-4 py-2 text-emerald-300">
@@ -145,6 +149,12 @@ const NginxPanel = () => {
           )}
         </div>
       </div>
+
+      {error && (
+        <div className="rounded-xl border border-rose-900 bg-rose-950/70 px-4 py-3 text-sm text-rose-200">
+          {error}
+        </div>
+      )}
 
       {/* Main Content */}
       <div className="flex-1 grid grid-cols-12 gap-4 min-h-0">
@@ -187,7 +197,8 @@ const NginxPanel = () => {
                     e.stopPropagation()
                     toggleConfig(config)
                   }}
-                  className="flex-shrink-0"
+                  className={`flex-shrink-0 ${config.toggleable ? '' : 'opacity-40 cursor-not-allowed'}`}
+                  disabled={!config.toggleable}
                 >
                   {config.enabled ? (
                     <Power className="h-4 w-4 text-emerald-400" />
@@ -205,6 +216,9 @@ const NginxPanel = () => {
                   {config.enabled ? 'Ativo' : 'Inativo'}
                 </span>
                 <span className="text-xs text-slate-500">{config.type}</span>
+                {!config.readable && (
+                  <span className="text-xs text-rose-300">sem acesso</span>
+                )}
               </div>
             </div>
           ))}
@@ -219,14 +233,24 @@ const NginxPanel = () => {
                 <div className="flex gap-2">
                   <button
                     onClick={saveConfig}
-                    className="flex items-center gap-2 rounded-xl bg-emerald-500 px-4 py-2 text-sm font-semibold text-white hover:bg-emerald-600"
+                    className={`flex items-center gap-2 rounded-xl px-4 py-2 text-sm font-semibold text-white ${
+                      selectedConfig.editable && selectedConfig.readable
+                        ? 'bg-emerald-500 hover:bg-emerald-600'
+                        : 'bg-slate-700 cursor-not-allowed'
+                    }`}
+                    disabled={!selectedConfig.editable || !selectedConfig.readable}
                   >
                     <Save className="h-4 w-4" />
                     Salvar & Reload
                   </button>
                   <button
                     onClick={() => deleteConfig(selectedConfig)}
-                    className="flex items-center gap-2 rounded-xl border border-rose-800 bg-rose-950 px-4 py-2 text-sm text-rose-200 hover:bg-rose-900"
+                    className={`flex items-center gap-2 rounded-xl border border-rose-800 px-4 py-2 text-sm ${
+                      selectedConfig.deletable
+                        ? 'bg-rose-950 text-rose-200 hover:bg-rose-900'
+                        : 'bg-slate-800 text-slate-400 cursor-not-allowed'
+                    }`}
+                    disabled={!selectedConfig.deletable}
                   >
                     <Trash2 className="h-4 w-4" />
                   </button>
@@ -238,8 +262,15 @@ const NginxPanel = () => {
                 onChange={(e) => setEditContent(e.target.value)}
                 className="flex-1 rounded-xl border border-slate-800 bg-slate-950 p-4 text-sm text-white font-mono resize-none focus:border-blue-500 focus:outline-none"
                 spellCheck={false}
+                readOnly={!selectedConfig.readable}
               />
               
+              {selectedConfig.error && (
+                <div className="text-xs text-rose-200 bg-rose-950/70 rounded-xl p-3">
+                  {selectedConfig.error}
+                </div>
+              )}
+
               <div className="text-xs text-slate-400 bg-slate-900/60 rounded-xl p-3">
                 💡 <strong>Dica:</strong> Use os containers Docker à direita para inserir proxy automaticamente
               </div>
@@ -263,6 +294,11 @@ const NginxPanel = () => {
               <Box className="h-4 w-4" />
               Containers Docker
             </h4>
+            {dockerError && (
+              <div className="mb-3 rounded-lg border border-rose-900 bg-rose-950/70 px-3 py-2 text-xs text-rose-200">
+                {dockerError}
+              </div>
+            )}
             <div className="space-y-2">
               {dockerContainers.map((container) => (
                 <div
