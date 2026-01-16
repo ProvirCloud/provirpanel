@@ -870,15 +870,17 @@ ${buildProxyBlock(proxyTarget)}    }
       const content = fs.readFileSync(filePath, 'utf8');
       const filename = path.basename(filePath);
 
-      // Extract server_name
+      // Extract server_name (fallback to filename when server_name is "_")
       const serverNameMatch = content.match(/server_name\s+([^;]+);/);
-      if (!serverNameMatch) return null;
-
-      const domains = serverNameMatch[1].trim().split(/\s+/).filter(d => d && d !== '_');
-      if (domains.length === 0) return null;
-
-      const primaryDomain = domains[0];
-      const additionalDomains = domains.slice(1);
+      let domains = [];
+      if (serverNameMatch) {
+        domains = serverNameMatch[1].trim().split(/\s+/).filter(d => d);
+      }
+      const sanitizedFilename = filename.replace(/\.conf$/i, '').replace(/[^a-zA-Z0-9.-]/g, '_');
+      const fallbackDomain = sanitizedFilename || 'default';
+      const normalizedDomains = domains.filter(d => d && d !== '_');
+      const primaryDomain = normalizedDomains[0] || fallbackDomain;
+      const additionalDomains = normalizedDomains.length > 0 ? normalizedDomains.slice(1) : [];
 
       // Extract listen port
       const listenMatch = content.match(/listen\s+(\d+)/);
