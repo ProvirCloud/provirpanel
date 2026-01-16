@@ -49,8 +49,9 @@ const NginxPanel = () => {
     mode: 'proxy',
     proxyHost: 'localhost',
     proxyPort: '3000',
-    proxyPath: '/',
-    rootPath: '/var/www/html'
+    rootPath: '/var/www/html',
+    rules: [{ path: '/' }],
+    targets: [{ host: '127.0.0.1', port: '3000', weight: '1' }]
   })
 
   const loadAll = async () => {
@@ -371,18 +372,28 @@ ${buildProxyLocation(proxyTarget)}
     const keyMatch = content.match(/ssl_certificate_key\s+([^;]+);/)
     const proxyLocation = (server.locations || []).find((loc) => loc.proxy)
     const proxyTarget = proxyLocation?.proxy || ''
-    const mode = server.root ? 'static' : 'proxy'
+    const hasUpstream = parsed.upstreams.length > 0
+    const mode = server.root ? 'static' : hasUpstream ? 'balancer' : 'proxy'
     let proxyHost = 'localhost'
     let proxyPort = '3000'
-    let proxyPath = '/'
     if (proxyTarget.startsWith('http')) {
       const clean = proxyTarget.replace(/^https?:\/\//, '')
-      const [hostPort, path = '/'] = clean.split(/\/(.+)?/)
+      const [hostPort] = clean.split(/\/(.+)?/)
       const [host, port] = hostPort.split(':')
       proxyHost = host || proxyHost
       proxyPort = port || proxyPort
-      proxyPath = path ? `/${path}` : '/'
     }
+    const rules = (server.locations || []).map((loc) => ({ path: loc.path }))
+    const upstreamTargets = parsed.upstreams[0]?.servers || []
+    const targets = upstreamTargets.length
+      ? upstreamTargets.map((entry) => {
+          const parts = entry.split(/\s+/)
+          const hostPort = parts[0] || ''
+          const [host, port] = hostPort.split(':')
+          const weight = parts.find((p) => p.startsWith('weight='))?.split('=')[1] || '1'
+          return { host: host || '127.0.0.1', port: port || '3000', weight }
+        })
+      : [{ host: proxyHost, port: proxyPort, weight: '1' }]
     return {
       serverNames: serverName,
       listenPort,
@@ -392,8 +403,9 @@ ${buildProxyLocation(proxyTarget)}
       mode,
       proxyHost,
       proxyPort,
-      proxyPath,
-      rootPath: server.root || '/var/www/html'
+      rootPath: server.root || '/var/www/html',
+      rules: rules.length ? rules : [{ path: '/' }],
+      targets
     }
   }
 
@@ -402,14 +414,87 @@ ${buildProxyLocation(proxyTarget)}
     setVisualForm(extractVisualForm(config.content || ''))
   }
 
+  const addVisualRule = () => {
+    setVisualForm((prev) => ({
+      ...prev,
+      rules: [...prev.rules, { path: '/nova-regra' }]
+    }))
+  }
+
+  const updateVisualRule = (index, value) => {
+    setVisualForm((prev) => ({
+      ...prev,
+      rules: prev.rules.map((rule, idx) => (idx === index ? { ...rule, path: value } : rule))
+    }))
+  }
+
+  const removeVisualRule = (index) => {
+    setVisualForm((prev) => ({
+      ...prev,
+      rules: prev.rules.filter((_, idx) => idx !== index)
+    }))
+  }
+
+  const addVisualTarget = () => {
+    setVisualForm((prev) => ({
+      ...prev,
+      targets: [...prev.targets, { host: '127.0.0.1', port: '3000', weight: '1' }]
+    }))
+  }
+
+  const updateVisualTarget = (index, field, value) => {
+    setVisualForm((prev) => ({
+      ...prev,
+      targets: prev.targets.map((target, idx) =>
+        idx === index ? { ...target, [field]: value } : target
+      )
+    }))
+  }
+
+  const removeVisualTarget = (index) => {
+    setVisualForm((prev) => ({
+      ...prev,
+      targets: prev.targets.filter((_, idx) => idx !== index)
+    }))
+  }
+
   const generateVisualConfig = () => {
     const names = visualForm.serverNames.trim() || 'example.com'
     const listenPort = visualForm.listenPort || '80'
-    const proxyTarget = `http://${visualForm.proxyHost}:${visualForm.proxyPort}${visualForm.proxyPath || ''}`
+    const rules = visualForm.rules.length ? visualForm.rules : [{ path: '/' }]
+    const proxyTarget = `http://${visualForm.proxyHost}:${visualForm.proxyPort}`
+    const upstreamName = 'lb_targets'
+    const targetLines = visualForm.targets
+      .map((target) => {
+        const weight = target.weight && target.weight !== '1' ? ` weight=${target.weight}` : ''
+        return `    server ${target.host}:${target.port}${weight};`
+      })
+      .join('\n')
+    const upstreamBlock =
+      visualForm.mode === 'balancer'
+        ? `upstream ${upstreamName} {\n${targetLines || '    server 127.0.0.1:3000;'}\n}\n\n`
+        : ''
+    const buildLocations = (target) =>
+      rules
+        .map(
+          (rule) => `    location ${rule.path} {
+        proxy_pass ${target};
+        proxy_http_version 1.1;
+        proxy_set_header Upgrade $http_upgrade;
+        proxy_set_header Connection 'upgrade';
+        proxy_set_header Host $host;
+        proxy_set_header X-Real-IP $remote_addr;
+        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto $scheme;
+        proxy_read_timeout 60s;
+        proxy_send_timeout 60s;
+    }`
+        )
+        .join('\n')
     if (visualForm.sslEnabled) {
       const cert = visualForm.sslCertPath || '/etc/letsencrypt/live/example.com/fullchain.pem'
       const key = visualForm.sslKeyPath || '/etc/letsencrypt/live/example.com/privkey.pem'
-      return `server {
+      return `${upstreamBlock}server {
     listen 80;
     server_name ${names};
     return 301 https://$server_name$request_uri;
@@ -431,22 +516,11 @@ server {
     location / {
         try_files $uri $uri/ =404;
     }`
-      : `location / {
-        proxy_pass ${proxyTarget};
-        proxy_http_version 1.1;
-        proxy_set_header Upgrade $http_upgrade;
-        proxy_set_header Connection 'upgrade';
-        proxy_set_header Host $host;
-        proxy_set_header X-Real-IP $remote_addr;
-        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
-        proxy_set_header X-Forwarded-Proto $scheme;
-        proxy_read_timeout 60s;
-        proxy_send_timeout 60s;
-    }`}
+      : buildLocations(visualForm.mode === 'balancer' ? `http://${upstreamName}` : proxyTarget)}
 }`
     }
 
-    return `server {
+    return `${upstreamBlock}server {
     listen ${listenPort};
     server_name ${names};
 
@@ -457,18 +531,7 @@ server {
     location / {
         try_files $uri $uri/ =404;
     }`
-      : `location / {
-        proxy_pass ${proxyTarget};
-        proxy_http_version 1.1;
-        proxy_set_header Upgrade $http_upgrade;
-        proxy_set_header Connection 'upgrade';
-        proxy_set_header Host $host;
-        proxy_set_header X-Real-IP $remote_addr;
-        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
-        proxy_set_header X-Forwarded-Proto $scheme;
-        proxy_read_timeout 60s;
-        proxy_send_timeout 60s;
-    }`}
+      : buildLocations(visualForm.mode === 'balancer' ? `http://${upstreamName}` : proxyTarget)}
 }`
   }
 
@@ -610,7 +673,7 @@ server {
   }
 
   return (
-    <div className="h-full flex flex-col space-y-4">
+    <div className="h-full w-full max-w-full flex flex-col space-y-4">
       {/* Header */}
       <div className="flex items-center justify-between">
         <div>
@@ -654,9 +717,9 @@ server {
       )}
 
       {/* Main Content */}
-      <div className="flex-1 grid grid-cols-12 gap-4 min-h-0">
+      <div className="flex-1 grid grid-cols-1 lg:grid-cols-12 gap-4 min-h-0">
         {/* Sidebar - Lista de Configs */}
-        <div className="col-span-3 flex flex-col gap-3 overflow-y-auto">
+        <div className="lg:col-span-3 flex flex-col gap-3 overflow-y-auto min-w-0">
           <div className="flex gap-2">
             <button
               onClick={() => setShowTemplates(true)}
@@ -724,7 +787,7 @@ server {
         </div>
 
         {/* Editor */}
-        <div className="col-span-6 flex flex-col gap-3 min-h-0">
+        <div className="lg:col-span-6 flex flex-col gap-3 min-h-0 min-w-0">
           <div className="flex items-center justify-between rounded-2xl border border-slate-800 bg-slate-900/60 px-4 py-3">
             <div>
               <h3 className="text-sm font-semibold text-white">Modo de edição</h3>
@@ -769,7 +832,7 @@ server {
                 </button>
               </div>
 
-              <div className="grid grid-cols-3 gap-3 mb-4">
+              <div className="grid grid-cols-1 md:grid-cols-3 gap-3 mb-4">
                 <div className="rounded-xl border border-blue-900 bg-blue-950/60 p-3 text-xs text-blue-200">
                   <div className="text-xs uppercase text-blue-300">Domínio</div>
                   <div className="mt-1 text-sm text-white">{visualForm.serverNames || '(não definido)'}</div>
@@ -777,17 +840,19 @@ server {
                 </div>
                 <div className="rounded-xl border border-emerald-900 bg-emerald-950/60 p-3 text-xs text-emerald-200">
                   <div className="text-xs uppercase text-emerald-300">
-                    {visualForm.mode === 'static' ? 'Site estático' : 'Proxy'}
+                    {visualForm.mode === 'static' ? 'Site estático' : visualForm.mode === 'balancer' ? 'Load balancer' : 'Proxy'}
                   </div>
                   {visualForm.mode === 'static' ? (
                     <div className="mt-1 text-sm text-white">{visualForm.rootPath}</div>
+                  ) : visualForm.mode === 'balancer' ? (
+                    <div className="mt-1 text-sm text-white">{visualForm.targets.length} destinos</div>
                   ) : (
                     <div className="mt-1 text-sm text-white">
                       {visualForm.proxyHost}:{visualForm.proxyPort}
                     </div>
                   )}
                   {visualForm.mode === 'proxy' && (
-                    <div className="mt-1 text-[11px] text-emerald-300">{visualForm.proxyPath}</div>
+                    <div className="mt-1 text-[11px] text-emerald-300">Regras: {visualForm.rules.length}</div>
                   )}
                 </div>
                 <div className="rounded-xl border border-violet-900 bg-violet-950/60 p-3 text-xs text-violet-200">
@@ -824,6 +889,7 @@ server {
                     onChange={(e) => setVisualForm({ ...visualForm, mode: e.target.value })}
                   >
                     <option value="proxy">Proxy reverso</option>
+                    <option value="balancer">Load balancer</option>
                     <option value="static">Site estático</option>
                   </select>
                 </div>
@@ -845,15 +911,51 @@ server {
                         onChange={(e) => setVisualForm({ ...visualForm, proxyPort: e.target.value })}
                       />
                     </div>
-                    <div className="col-span-2">
-                      <label className="text-xs text-slate-400">Caminho</label>
-                      <input
-                        className="mt-1 w-full rounded-xl border border-slate-700 bg-slate-950 px-3 py-2 text-sm text-white"
-                        value={visualForm.proxyPath}
-                        onChange={(e) => setVisualForm({ ...visualForm, proxyPath: e.target.value })}
-                      />
-                    </div>
                   </>
+                ) : visualForm.mode === 'balancer' ? (
+                  <div className="col-span-2 rounded-xl border border-slate-800 bg-slate-950/70 p-3">
+                    <div className="flex items-center justify-between mb-2">
+                      <div>
+                        <h4 className="text-sm font-semibold text-white">Targets</h4>
+                        <p className="text-xs text-slate-400">Destinos que recebem o tráfego.</p>
+                      </div>
+                      <button
+                        onClick={addVisualTarget}
+                        className="rounded-lg bg-blue-500 px-3 py-1 text-xs font-semibold text-white hover:bg-blue-600"
+                      >
+                        Adicionar
+                      </button>
+                    </div>
+                    <div className="space-y-2">
+                      {visualForm.targets.map((target, index) => (
+                        <div key={`${target.host}-${index}`} className="grid grid-cols-6 gap-2">
+                          <input
+                            className="col-span-2 rounded-lg border border-slate-700 bg-slate-900 px-2 py-1 text-xs text-white"
+                            value={target.host}
+                            onChange={(e) => updateVisualTarget(index, 'host', e.target.value)}
+                          />
+                          <input
+                            className="col-span-1 rounded-lg border border-slate-700 bg-slate-900 px-2 py-1 text-xs text-white"
+                            value={target.port}
+                            onChange={(e) => updateVisualTarget(index, 'port', e.target.value)}
+                          />
+                          <input
+                            className="col-span-1 rounded-lg border border-slate-700 bg-slate-900 px-2 py-1 text-xs text-white"
+                            value={target.weight}
+                            onChange={(e) => updateVisualTarget(index, 'weight', e.target.value)}
+                          />
+                          <div className="col-span-2 flex items-center justify-end">
+                            <button
+                              onClick={() => removeVisualTarget(index)}
+                              className="rounded-lg border border-rose-800 px-2 py-1 text-xs text-rose-200 hover:bg-rose-900"
+                            >
+                              Remover
+                            </button>
+                          </div>
+                        </div>
+                      ))}
+                    </div>
+                  </div>
                 ) : (
                   <div className="col-span-2">
                     <label className="text-xs text-slate-400">Pasta do site</label>
@@ -865,6 +967,42 @@ server {
                   </div>
                 )}
               </div>
+
+              {visualForm.mode !== 'static' && (
+                <div className="mt-4 rounded-xl border border-slate-800 bg-slate-950/70 p-3">
+                  <div className="flex items-center justify-between mb-2">
+                    <div>
+                      <h4 className="text-sm font-semibold text-white">Regras (paths)</h4>
+                      <p className="text-xs text-slate-400">Similar ao AWS: cada regra aponta para o destino.</p>
+                    </div>
+                    <button
+                      onClick={addVisualRule}
+                      className="rounded-lg bg-blue-500 px-3 py-1 text-xs font-semibold text-white hover:bg-blue-600"
+                    >
+                      Adicionar
+                    </button>
+                  </div>
+                  <div className="space-y-2">
+                    {visualForm.rules.map((rule, index) => (
+                      <div key={`${rule.path}-${index}`} className="grid grid-cols-6 gap-2 items-center">
+                        <input
+                          className="col-span-4 rounded-lg border border-slate-700 bg-slate-900 px-2 py-1 text-xs text-white"
+                          value={rule.path}
+                          onChange={(e) => updateVisualRule(index, e.target.value)}
+                        />
+                        <div className="col-span-2 flex justify-end">
+                          <button
+                            onClick={() => removeVisualRule(index)}
+                            className="rounded-lg border border-rose-800 px-2 py-1 text-xs text-rose-200 hover:bg-rose-900"
+                          >
+                            Remover
+                          </button>
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              )}
 
               <div className="mt-4 rounded-xl border border-slate-800 bg-slate-950/70 p-3">
                 <label className="flex items-center gap-2 text-xs text-slate-300">
@@ -910,7 +1048,7 @@ server {
             </div>
           )}
 
-          {viewMode === 'guided' && (
+          {viewMode === 'guided' && !selectedConfig && (
             <div className="rounded-2xl border border-slate-800 bg-slate-900/60 p-4">
               <div className="flex items-center justify-between mb-3">
                 <div>
@@ -1277,7 +1415,7 @@ server {
         </div>
 
         {/* Sidebar Direita - Docker & SSL */}
-        <div className="col-span-3 flex flex-col gap-3 overflow-y-auto">
+        <div className="lg:col-span-3 flex flex-col gap-3 overflow-y-auto min-w-0">
           {/* Docker Containers */}
           <div className="rounded-xl border border-slate-800 bg-slate-900/60 p-4">
             <h4 className="text-sm font-semibold text-white mb-3 flex items-center gap-2">
