@@ -270,4 +270,15 @@ router.get('/health', async (req, res, next) => {
   }
 });
 
+// ==================== IMPORT EXISTING CONFIGS ====================
+
+router.post('/import-configs', async (req, res, next) => {
+  try {
+    const result = await nginxManager.importAllConfigs();
+    res.json(result);
+  } catch (err) {
+    next(err);
+  }
+});
+
 module.exports = router;

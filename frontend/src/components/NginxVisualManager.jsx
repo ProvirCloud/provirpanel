@@ -1125,6 +1125,7 @@ const NginxVisualManager = () => {
   const [activeTab, setActiveTab] = useState('config') // config, logs, metrics, ssl
   const [showNewServer, setShowNewServer] = useState(false)
   const [loading, setLoading] = useState(true)
+  const [importing, setImporting] = useState(false)
   const [error, setError] = useState('')
   const [testResult, setTestResult] = useState(null)
 
@@ -1137,7 +1138,19 @@ const NginxVisualManager = () => {
         api.get('/api/nginx/status'),
         api.get('/nginx/docker-containers')
       ])
-      setServers(serversRes.data.servers || [])
+      let serverList = serversRes.data.servers || []
+      if (serverList.length === 0) {
+        try {
+          const importRes = await api.post('/api/nginx/import-configs')
+          if (importRes.data?.imported?.length) {
+            const refreshed = await api.get('/api/nginx/servers')
+            serverList = refreshed.data.servers || []
+          }
+        } catch (importErr) {
+          console.warn('Failed to import nginx configs:', importErr.message)
+        }
+      }
+      setServers(serverList)
       setStatus(statusRes.data)
       setDockerContainers(dockerRes.data.containers || [])
 
@@ -1214,6 +1227,20 @@ const NginxVisualManager = () => {
     }
   }
 
+  const handleImportConfigs = async () => {
+    setImporting(true)
+    try {
+      const result = await api.post('/api/nginx/import-configs')
+      loadData()
+      const importedCount = result.data?.imported?.length || 0
+      alert(`Importação concluída: ${importedCount} configuração(ões)`)
+    } catch (err) {
+      alert(`Erro ao importar: ${err.response?.data?.error || err.message}`)
+    } finally {
+      setImporting(false)
+    }
+  }
+
   return (
     <div className="h-full w-full max-w-full flex flex-col space-y-4">
       {/* Header */}
@@ -1275,6 +1302,14 @@ const NginxVisualManager = () => {
           >
             <Plus className="h-4 w-4" />
             Novo Virtual Host
+          </button>
+          <button
+            onClick={handleImportConfigs}
+            disabled={importing}
+            className="flex items-center justify-center gap-2 rounded-xl border border-slate-700 bg-slate-900 px-4 py-2 text-sm text-slate-200 hover:bg-slate-800 disabled:opacity-60"
+          >
+            <Download className="h-4 w-4" />
+            {importing ? 'Importando...' : 'Importar configs do Nginx'}
           </button>
 
           <ServersList

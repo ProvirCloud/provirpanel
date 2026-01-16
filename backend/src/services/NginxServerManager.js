@@ -765,6 +765,231 @@ class NginxServerManager {
 
     return checks;
   }
+
+  // ==================== IMPORT EXISTING CONFIGS ====================
+
+  async scanExistingConfigs() {
+    const configs = [];
+    const scannedFiles = new Set();
+
+    // Scan sites-available
+    if (fs.existsSync(this.sitesAvailable)) {
+      const files = fs.readdirSync(this.sitesAvailable);
+      for (const file of files) {
+        if (file === 'default' || file.startsWith('.')) continue;
+        const filePath = path.join(this.sitesAvailable, file);
+        if (fs.statSync(filePath).isFile()) {
+          const parsed = this.parseNginxConfigFile(filePath);
+          if (parsed) {
+            const enabledPath = path.join(this.sitesEnabled, file);
+            parsed.is_enabled = fs.existsSync(enabledPath);
+            configs.push(parsed);
+            scannedFiles.add(file);
+          }
+        }
+      }
+    }
+
+    // Scan conf.d
+    if (fs.existsSync(this.confD)) {
+      const files = fs.readdirSync(this.confD);
+      for (const file of files) {
+        if (!file.endsWith('.conf') || file.startsWith('.') || scannedFiles.has(file)) continue;
+        const filePath = path.join(this.confD, file);
+        if (fs.statSync(filePath).isFile()) {
+          const parsed = this.parseNginxConfigFile(filePath);
+          if (parsed) {
+            parsed.is_enabled = true; // conf.d is always enabled
+            configs.push(parsed);
+          }
+        }
+      }
+    }
+
+    return configs;
+  }
+
+  parseNginxConfigFile(filePath) {
+    try {
+      const content = fs.readFileSync(filePath, 'utf8');
+      const filename = path.basename(filePath);
+
+      // Extract server_name
+      const serverNameMatch = content.match(/server_name\s+([^;]+);/);
+      if (!serverNameMatch) return null;
+
+      const domains = serverNameMatch[1].trim().split(/\s+/).filter(d => d && d !== '_');
+      if (domains.length === 0) return null;
+
+      const primaryDomain = domains[0];
+      const additionalDomains = domains.slice(1);
+
+      // Extract listen port
+      const listenMatch = content.match(/listen\s+(\d+)/);
+      const listenPort = listenMatch ? parseInt(listenMatch[1], 10) : 80;
+
+      // Check for SSL
+      const hasSSL = content.includes('ssl_certificate') || content.includes('listen 443');
+      const sslCertMatch = content.match(/ssl_certificate\s+([^;]+);/);
+      const sslKeyMatch = content.match(/ssl_certificate_key\s+([^;]+);/);
+
+      // Check server type
+      let serverType = 'proxy';
+      if (content.includes('upstream ')) {
+        serverType = 'balancer';
+      } else if (content.includes('root ') && !content.includes('proxy_pass')) {
+        serverType = 'static';
+      }
+
+      // Extract proxy settings
+      const proxyPassMatch = content.match(/proxy_pass\s+http:\/\/([^:\/]+):?(\d+)?/);
+      let proxyHost = 'localhost';
+      let proxyPort = 3000;
+      if (proxyPassMatch) {
+        proxyHost = proxyPassMatch[1];
+        proxyPort = proxyPassMatch[2] ? parseInt(proxyPassMatch[2], 10) : 80;
+      }
+
+      // Extract root path for static sites
+      const rootMatch = content.match(/root\s+([^;]+);/);
+      const rootPath = rootMatch ? rootMatch[1].trim() : '/var/www/html';
+
+      // Extract upstream servers for balancer
+      const upstreamServers = [];
+      if (serverType === 'balancer') {
+        const upstreamMatch = content.match(/upstream\s+\w+\s*\{([^}]+)\}/);
+        if (upstreamMatch) {
+          const upstreamContent = upstreamMatch[1];
+          const serverLines = upstreamContent.match(/server\s+([^;]+);/g);
+          if (serverLines) {
+            for (const line of serverLines) {
+              const serverMatch = line.match(/server\s+([^:\s]+):?(\d+)?(?:\s+weight=(\d+))?(?:\s+(backup))?/);
+              if (serverMatch) {
+                upstreamServers.push({
+                  host: serverMatch[1],
+                  port: serverMatch[2] ? parseInt(serverMatch[2], 10) : 80,
+                  weight: serverMatch[3] ? parseInt(serverMatch[3], 10) : 1,
+                  backup: !!serverMatch[4]
+                });
+              }
+            }
+          }
+        }
+      }
+
+      // Extract timeouts
+      const connectTimeoutMatch = content.match(/proxy_connect_timeout\s+([^;]+);/);
+      const readTimeoutMatch = content.match(/proxy_read_timeout\s+([^;]+);/);
+      const sendTimeoutMatch = content.match(/proxy_send_timeout\s+([^;]+);/);
+      const clientMaxBodyMatch = content.match(/client_max_body_size\s+([^;]+);/);
+
+      // Check for websocket support
+      const websocketEnabled = content.includes('Upgrade') && content.includes('upgrade');
+
+      // Check for forward headers
+      const forwardHeaders = content.includes('X-Real-IP') || content.includes('X-Forwarded-For');
+
+      return {
+        config_file_path: filePath,
+        filename,
+        name: primaryDomain,
+        primary_domain: primaryDomain,
+        additional_domains: additionalDomains,
+        server_type: serverType,
+        listen_port: listenPort,
+        ssl_type: hasSSL ? 'letsencrypt' : 'none',
+        ssl_cert_path: sslCertMatch ? sslCertMatch[1].trim() : null,
+        ssl_key_path: sslKeyMatch ? sslKeyMatch[1].trim() : null,
+        proxy_host: proxyHost,
+        proxy_port: proxyPort,
+        root_path: rootPath,
+        upstream_servers: upstreamServers,
+        websocket_enabled: websocketEnabled,
+        forward_headers: forwardHeaders,
+        client_max_body_size: clientMaxBodyMatch ? clientMaxBodyMatch[1].trim() : '50m',
+        proxy_connect_timeout: connectTimeoutMatch ? connectTimeoutMatch[1].trim() : '5s',
+        proxy_read_timeout: readTimeoutMatch ? readTimeoutMatch[1].trim() : '60s',
+        proxy_send_timeout: sendTimeoutMatch ? sendTimeoutMatch[1].trim() : '60s',
+        raw_config: content
+      };
+    } catch (err) {
+      console.error(`[NginxServerManager] Error parsing ${filePath}:`, err.message);
+      return null;
+    }
+  }
+
+  async importConfig(configData) {
+    // Check if already imported
+    const existing = await prisma.nginxServer.findFirst({
+      where: { primaryDomain: configData.primary_domain }
+    });
+
+    if (existing) {
+      return { success: false, error: 'Server already exists', existing: this.formatServerForApi(existing) };
+    }
+
+    const server = await prisma.nginxServer.create({
+      data: {
+        name: configData.name,
+        primaryDomain: configData.primary_domain,
+        additionalDomains: configData.additional_domains || [],
+        upstreamServers: configData.upstream_servers || [],
+        serverType: configData.server_type || 'proxy',
+        listenPort: configData.listen_port || 80,
+        sslType: configData.ssl_type || 'none',
+        sslCertPath: configData.ssl_cert_path,
+        sslKeyPath: configData.ssl_key_path,
+        proxyHost: configData.proxy_host || 'localhost',
+        proxyPort: configData.proxy_port || 3000,
+        rootPath: configData.root_path || '/var/www/html',
+        websocketEnabled: configData.websocket_enabled ?? true,
+        forwardHeaders: configData.forward_headers ?? true,
+        clientMaxBodySize: configData.client_max_body_size || '50m',
+        proxyConnectTimeout: configData.proxy_connect_timeout || '5s',
+        proxyReadTimeout: configData.proxy_read_timeout || '60s',
+        proxySendTimeout: configData.proxy_send_timeout || '60s',
+        isActive: configData.is_enabled ?? true,
+        configFilePath: configData.config_file_path,
+        notes: `Imported from ${configData.filename}`
+      }
+    });
+
+    // Sync SSL cert if exists
+    if (configData.ssl_cert_path && fs.existsSync(configData.ssl_cert_path)) {
+      await this.syncCertFromFile(
+        server.id,
+        configData.primary_domain,
+        configData.ssl_cert_path,
+        configData.ssl_key_path
+      );
+    }
+
+    return { success: true, server: this.formatServerForApi(server) };
+  }
+
+  async importAllConfigs() {
+    const configs = await this.scanExistingConfigs();
+    const results = {
+      imported: [],
+      skipped: [],
+      errors: []
+    };
+
+    for (const config of configs) {
+      try {
+        const result = await this.importConfig(config);
+        if (result.success) {
+          results.imported.push({ domain: config.primary_domain, server: result.server });
+        } else if (result.existing) {
+          results.skipped.push({ domain: config.primary_domain, reason: result.error });
+        }
+      } catch (err) {
+        results.errors.push({ domain: config.primary_domain, error: err.message });
+      }
+    }
+
+    return results;
+  }
 }
 
 module.exports = NginxServerManager;

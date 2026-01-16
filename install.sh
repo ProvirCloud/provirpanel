@@ -181,6 +181,10 @@ SQL
   sudo -u postgres psql provirpanel -c "GRANT ALL PRIVILEGES ON ALL SEQUENCES IN SCHEMA public TO provirpanel;"
   sudo -u postgres psql provirpanel -c "ALTER DEFAULT PRIVILEGES IN SCHEMA public GRANT ALL ON TABLES TO provirpanel;"
 
+  # Transferir ownership de tabelas existentes para provirpanel
+  sudo -u postgres psql provirpanel -c "DO \$\$ DECLARE r RECORD; BEGIN FOR r IN SELECT tablename FROM pg_tables WHERE schemaname = 'public' LOOP EXECUTE 'ALTER TABLE public.' || quote_ident(r.tablename) || ' OWNER TO provirpanel'; END LOOP; END \$\$;"
+  sudo -u postgres psql provirpanel -c "DO \$\$ DECLARE r RECORD; BEGIN FOR r IN SELECT sequencename FROM pg_sequences WHERE schemaname = 'public' LOOP EXECUTE 'ALTER SEQUENCE public.' || quote_ident(r.sequencename) || ' OWNER TO provirpanel'; END LOOP; END \$\$;"
+
   # Note: Tables are now created via Prisma in setup_prisma()
 }
 
