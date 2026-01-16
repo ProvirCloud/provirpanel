@@ -308,25 +308,79 @@ class NginxServerManager {
         .filter((rule) => rule && rule.path)
         .map((rule) => ({
           path: rule.path.startsWith('/') ? rule.path : `/${rule.path}`,
+          modifier: rule.modifier || '',
+          type: rule.type || 'proxy',
           proxy_host: rule.proxy_host || rule.host || server.proxy_host || 'localhost',
-          proxy_port: rule.proxy_port || rule.port || server.proxy_port || 3000
-        }))
-        .filter((rule) => rule.path !== '/');
+          proxy_port: rule.proxy_port || rule.port || server.proxy_port || 3000,
+          alias_path: rule.alias_path,
+          root_path: rule.root_path,
+          try_files: rule.try_files,
+          return_code: rule.return_code,
+          return_location: rule.return_location
+        }));
 
-      if (normalizedPaths.length > 0) {
-        normalizedPaths.forEach((rule) => {
+      const rootRule = normalizedPaths.find((rule) => rule.path === '/');
+      const nonRootRules = normalizedPaths.filter((rule) => rule.path !== '/');
+
+      if (nonRootRules.length > 0) {
+        nonRootRules.forEach((rule) => {
+          const modifierPart = rule.modifier ? `${rule.modifier} ` : '';
+          if (rule.type === 'redirect' && rule.return_code && rule.return_location) {
+            config += `
+    location ${modifierPart}${rule.path} {
+        return ${rule.return_code} ${rule.return_location};
+    }
+`;
+            return;
+          }
+
+          if (rule.type === 'static' && (rule.alias_path || rule.root_path)) {
+            const tryFiles = rule.try_files || '$uri $uri/ =404';
+            const staticDirective = rule.alias_path
+              ? `alias ${rule.alias_path};`
+              : `root ${rule.root_path};`;
+            config += `
+    location ${modifierPart}${rule.path} {
+        ${staticDirective}
+        try_files ${tryFiles};
+    }
+`;
+            return;
+          }
+
           const target = `http://${rule.proxy_host}:${rule.proxy_port}`;
           config += `
-    location ${rule.path} {
+    location ${modifierPart}${rule.path} {
 ${buildProxyBlock(target)}    }
 `;
         });
       }
 
-      config += `
+      if (rootRule && rootRule.type === 'redirect' && rootRule.return_code && rootRule.return_location) {
+        const modifierPart = rootRule.modifier ? `${rootRule.modifier} ` : '';
+        config += `
+    location ${modifierPart}${rootRule.path} {
+        return ${rootRule.return_code} ${rootRule.return_location};
+    }
+`;
+      } else if (rootRule && rootRule.type === 'static' && (rootRule.alias_path || rootRule.root_path)) {
+        const modifierPart = rootRule.modifier ? `${rootRule.modifier} ` : '';
+        const tryFiles = rootRule.try_files || '$uri $uri/ =404';
+        const staticDirective = rootRule.alias_path
+          ? `alias ${rootRule.alias_path};`
+          : `root ${rootRule.root_path};`;
+        config += `
+    location ${modifierPart}${rootRule.path} {
+        ${staticDirective}
+        try_files ${tryFiles};
+    }
+`;
+      } else {
+        config += `
     location / {
 ${buildProxyBlock(proxyTarget)}    }
 `;
+      }
 
     }
 
@@ -938,14 +992,52 @@ ${buildProxyBlock(proxyTarget)}    }
 
       // Extract additional path rules
       const pathRules = [];
-      const locationRegex = /location\s+([^\s{]+)\s*\{[^}]*proxy_pass\s+http:\/\/([^:\/\s]+):?(\d+)?[^}]*\}/gs;
+      const locationRegex = /location\s+([=~^~*]*)\s*([^\s{]+)\s*\{([\s\S]*?)\}/g;
       let locationMatch;
       while ((locationMatch = locationRegex.exec(content)) !== null) {
-        const locPath = locationMatch[1];
-        const host = locationMatch[2];
-        const port = locationMatch[3] ? parseInt(locationMatch[3], 10) : 80;
-        if (locPath && locPath !== '/') {
-          pathRules.push({ path: locPath, proxy_host: host, proxy_port: port });
+        const modifier = locationMatch[1]?.trim() || '';
+        const locPath = locationMatch[2]?.trim();
+        const block = locationMatch[3] || '';
+        if (!locPath) continue;
+
+        const returnMatch = block.match(/return\s+(\d+)\s+([^;]+);/);
+        if (returnMatch) {
+          pathRules.push({
+            path: locPath,
+            modifier,
+            type: 'redirect',
+            return_code: parseInt(returnMatch[1], 10),
+            return_location: returnMatch[2].trim()
+          });
+          continue;
+        }
+
+        const aliasMatch = block.match(/alias\s+([^;]+);/);
+        const rootMatchInline = block.match(/root\s+([^;]+);/);
+        const tryFilesMatch = block.match(/try_files\s+([^;]+);/);
+        if (aliasMatch || rootMatchInline) {
+          pathRules.push({
+            path: locPath,
+            modifier,
+            type: 'static',
+            alias_path: aliasMatch ? aliasMatch[1].trim() : undefined,
+            root_path: rootMatchInline ? rootMatchInline[1].trim() : undefined,
+            try_files: tryFilesMatch ? tryFilesMatch[1].trim() : undefined
+          });
+          continue;
+        }
+
+        const proxyPassInBlock = block.match(/proxy_pass\s+http:\/\/([^:\/\s]+):?(\d+)?/);
+        if (proxyPassInBlock && locPath !== '/') {
+          const host = proxyPassInBlock[1];
+          const port = proxyPassInBlock[2] ? parseInt(proxyPassInBlock[2], 10) : 80;
+          pathRules.push({
+            path: locPath,
+            modifier,
+            type: 'proxy',
+            proxy_host: host,
+            proxy_port: port
+          });
         }
       }
 

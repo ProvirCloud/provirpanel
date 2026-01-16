@@ -255,7 +255,7 @@ const ServerForm = ({ server, onSave, onCancel, dockerContainers, onNotify }) =>
   const addPathRule = () => {
     setForm({
       ...form,
-      path_rules: [...form.path_rules, { path: '/api', proxy_host: 'localhost', proxy_port: 3000 }]
+      path_rules: [...form.path_rules, { path: '/api', type: 'proxy', proxy_host: 'localhost', proxy_port: 3000 }]
     })
   }
 
@@ -427,23 +427,83 @@ const ServerForm = ({ server, onSave, onCancel, dockerContainers, onNotify }) =>
                     type="text"
                     value={rule.path}
                     onChange={(e) => updatePathRule(index, 'path', e.target.value)}
-                    className="col-span-5 rounded-lg border border-slate-700 bg-slate-950 px-2 py-1 text-xs text-white"
+                    className="col-span-3 rounded-lg border border-slate-700 bg-slate-950 px-2 py-1 text-xs text-white"
                     placeholder="/api"
                   />
-                  <input
-                    type="text"
-                    value={rule.proxy_host}
-                    onChange={(e) => updatePathRule(index, 'proxy_host', e.target.value)}
-                    className="col-span-4 rounded-lg border border-slate-700 bg-slate-950 px-2 py-1 text-xs text-white"
-                    placeholder="Host"
-                  />
-                  <input
-                    type="number"
-                    value={rule.proxy_port}
-                    onChange={(e) => updatePathRule(index, 'proxy_port', parseInt(e.target.value) || 3000)}
+                  <select
+                    value={rule.type || 'proxy'}
+                    onChange={(e) => updatePathRule(index, 'type', e.target.value)}
                     className="col-span-2 rounded-lg border border-slate-700 bg-slate-950 px-2 py-1 text-xs text-white"
-                    placeholder="Porta"
-                  />
+                  >
+                    <option value="proxy">Proxy</option>
+                    <option value="static">Static</option>
+                    <option value="redirect">Redirect</option>
+                  </select>
+                  <select
+                    value={rule.modifier || ''}
+                    onChange={(e) => updatePathRule(index, 'modifier', e.target.value)}
+                    className="col-span-2 rounded-lg border border-slate-700 bg-slate-950 px-2 py-1 text-xs text-white"
+                  >
+                    <option value="">Match</option>
+                    <option value="=">=</option>
+                    <option value="^~">^~</option>
+                    <option value="~">~</option>
+                    <option value="~*">~*</option>
+                  </select>
+                  {(!rule.type || rule.type === 'proxy') && (
+                    <>
+                      <input
+                        type="text"
+                        value={rule.proxy_host}
+                        onChange={(e) => updatePathRule(index, 'proxy_host', e.target.value)}
+                        className="col-span-2 rounded-lg border border-slate-700 bg-slate-950 px-2 py-1 text-xs text-white"
+                        placeholder="Host"
+                      />
+                      <input
+                        type="number"
+                        value={rule.proxy_port}
+                        onChange={(e) => updatePathRule(index, 'proxy_port', parseInt(e.target.value) || 3000)}
+                        className="col-span-1 rounded-lg border border-slate-700 bg-slate-950 px-2 py-1 text-xs text-white"
+                        placeholder="Porta"
+                      />
+                    </>
+                  )}
+                  {rule.type === 'static' && (
+                    <>
+                      <input
+                        type="text"
+                        value={rule.alias_path || ''}
+                        onChange={(e) => updatePathRule(index, 'alias_path', e.target.value)}
+                        className="col-span-3 rounded-lg border border-slate-700 bg-slate-950 px-2 py-1 text-xs text-white"
+                        placeholder="Alias (/var/www/panel/)"
+                      />
+                      <input
+                        type="text"
+                        value={rule.try_files || ''}
+                        onChange={(e) => updatePathRule(index, 'try_files', e.target.value)}
+                        className="col-span-1 rounded-lg border border-slate-700 bg-slate-950 px-2 py-1 text-xs text-white"
+                        placeholder="try_files $uri $uri/ =404"
+                      />
+                    </>
+                  )}
+                  {rule.type === 'redirect' && (
+                    <>
+                      <input
+                        type="number"
+                        value={rule.return_code || 301}
+                        onChange={(e) => updatePathRule(index, 'return_code', parseInt(e.target.value, 10) || 301)}
+                        className="col-span-1 rounded-lg border border-slate-700 bg-slate-950 px-2 py-1 text-xs text-white"
+                        placeholder="301"
+                      />
+                      <input
+                        type="text"
+                        value={rule.return_location || ''}
+                        onChange={(e) => updatePathRule(index, 'return_location', e.target.value)}
+                        className="col-span-3 rounded-lg border border-slate-700 bg-slate-950 px-2 py-1 text-xs text-white"
+                        placeholder="/admin/"
+                      />
+                    </>
+                  )}
                   <button
                     onClick={() => removePathRule(index)}
                     className="col-span-1 rounded-lg border border-rose-800 px-2 py-1 text-xs text-rose-200 hover:bg-rose-900"
