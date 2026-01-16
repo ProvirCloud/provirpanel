@@ -825,6 +825,27 @@ ${buildProxyBlock(proxyTarget)}    }
       }
     }
 
+    // Scan sites-enabled (when configs live only there)
+    if (fs.existsSync(this.sitesEnabled)) {
+      const files = fs.readdirSync(this.sitesEnabled);
+      for (const file of files) {
+        if (file === 'default' || file.startsWith('.') || scannedFiles.has(file)) continue;
+        const filePath = path.join(this.sitesEnabled, file);
+        try {
+          if (fs.statSync(filePath).isFile()) {
+            const parsed = this.parseNginxConfigFile(filePath);
+            if (parsed) {
+              parsed.is_enabled = true;
+              configs.push(parsed);
+              scannedFiles.add(file);
+            }
+          }
+        } catch (err) {
+          console.warn(`[NginxServerManager] Failed to scan ${filePath}:`, err.message);
+        }
+      }
+    }
+
     // Scan conf.d
     if (fs.existsSync(this.confD)) {
       const files = fs.readdirSync(this.confD);
