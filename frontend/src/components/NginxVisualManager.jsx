@@ -118,6 +118,7 @@ const ServerForm = ({ server, onSave, onCancel, dockerContainers }) => {
     primary_domain: '',
     additional_domains: [],
     upstream_servers: [{ ip: '127.0.0.1', port: '3000', weight: '1', backup: false }],
+    path_rules: [],
     server_type: 'proxy',
     listen_port: 80,
     ssl_type: 'none',
@@ -144,7 +145,8 @@ const ServerForm = ({ server, onSave, onCancel, dockerContainers }) => {
       setForm({
         ...form,
         ...server,
-        upstream_servers: server.upstream_servers || [{ ip: '127.0.0.1', port: '3000', weight: '1', backup: false }]
+        upstream_servers: server.upstream_servers || [{ ip: '127.0.0.1', port: '3000', weight: '1', backup: false }],
+        path_rules: server.path_rules || []
       })
     }
   }, [server])
@@ -201,6 +203,23 @@ const ServerForm = ({ server, onSave, onCancel, dockerContainers }) => {
 
   const removeUpstream = (index) => {
     setForm({ ...form, upstream_servers: form.upstream_servers.filter((_, i) => i !== index) })
+  }
+
+  const addPathRule = () => {
+    setForm({
+      ...form,
+      path_rules: [...form.path_rules, { path: '/api', proxy_host: 'localhost', proxy_port: 3000 }]
+    })
+  }
+
+  const updatePathRule = (index, field, value) => {
+    const newRules = [...form.path_rules]
+    newRules[index] = { ...newRules[index], [field]: value }
+    setForm({ ...form, path_rules: newRules })
+  }
+
+  const removePathRule = (index) => {
+    setForm({ ...form, path_rules: form.path_rules.filter((_, i) => i !== index) })
   }
 
   const useDockerContainer = (container) => {
@@ -335,6 +354,57 @@ const ServerForm = ({ server, onSave, onCancel, dockerContainers }) => {
                   className="mt-1 w-full rounded-xl border border-slate-700 bg-slate-950 px-3 py-2 text-sm text-white"
                 />
               </div>
+            </div>
+          </div>
+        )}
+
+        {form.server_type === 'proxy' && (
+          <div className="rounded-2xl border border-slate-800 bg-slate-900/60 p-4">
+            <h3 className="text-sm font-semibold text-white mb-4 flex items-center justify-between">
+              <span className="flex items-center gap-2">
+                <Filter className="h-4 w-4" />
+                Paths do Proxy
+              </span>
+              <button
+                onClick={addPathRule}
+                className="rounded-lg bg-blue-500 px-3 py-1 text-xs font-semibold text-white hover:bg-blue-600"
+              >
+                <Plus className="h-3 w-3 inline mr-1" />
+                Adicionar
+              </button>
+            </h3>
+            <div className="space-y-2">
+              {form.path_rules.map((rule, index) => (
+                <div key={index} className="grid grid-cols-12 gap-2 items-center">
+                  <input
+                    type="text"
+                    value={rule.path}
+                    onChange={(e) => updatePathRule(index, 'path', e.target.value)}
+                    className="col-span-5 rounded-lg border border-slate-700 bg-slate-950 px-2 py-1 text-xs text-white"
+                    placeholder="/api"
+                  />
+                  <input
+                    type="text"
+                    value={rule.proxy_host}
+                    onChange={(e) => updatePathRule(index, 'proxy_host', e.target.value)}
+                    className="col-span-4 rounded-lg border border-slate-700 bg-slate-950 px-2 py-1 text-xs text-white"
+                    placeholder="Host"
+                  />
+                  <input
+                    type="number"
+                    value={rule.proxy_port}
+                    onChange={(e) => updatePathRule(index, 'proxy_port', parseInt(e.target.value) || 3000)}
+                    className="col-span-2 rounded-lg border border-slate-700 bg-slate-950 px-2 py-1 text-xs text-white"
+                    placeholder="Porta"
+                  />
+                  <button
+                    onClick={() => removePathRule(index)}
+                    className="col-span-1 rounded-lg border border-rose-800 px-2 py-1 text-xs text-rose-200 hover:bg-rose-900"
+                  >
+                    <Trash2 className="h-3 w-3" />
+                  </button>
+                </div>
+              ))}
             </div>
           </div>
         )}
@@ -1133,24 +1203,18 @@ const NginxVisualManager = () => {
     setLoading(true)
     setError('')
     try {
+      try {
+        await api.post('/api/nginx/import-configs')
+      } catch (importErr) {
+        console.warn('Failed to import nginx configs:', importErr.message)
+      }
+
       const [serversRes, statusRes, dockerRes] = await Promise.all([
         api.get('/api/nginx/servers'),
         api.get('/api/nginx/status'),
         api.get('/nginx/docker-containers')
       ])
-      let serverList = serversRes.data.servers || []
-      if (serverList.length === 0) {
-        try {
-          const importRes = await api.post('/api/nginx/import-configs')
-          if (importRes.data?.imported?.length) {
-            const refreshed = await api.get('/api/nginx/servers')
-            serverList = refreshed.data.servers || []
-          }
-        } catch (importErr) {
-          console.warn('Failed to import nginx configs:', importErr.message)
-        }
-      }
-      setServers(serverList)
+      setServers(serversRes.data.servers || [])
       setStatus(statusRes.data)
       setDockerContainers(dockerRes.data.containers || [])
 

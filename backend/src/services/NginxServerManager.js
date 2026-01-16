@@ -19,10 +19,17 @@ class NginxServerManager {
 
   async getAllServers() {
     try {
-      const servers = await prisma.nginxServer.findMany({
+      let servers = await prisma.nginxServer.findMany({
         include: { sslCerts: true },
         orderBy: { createdAt: 'desc' }
       });
+      if (servers.length === 0) {
+        await this.importAllConfigs();
+        servers = await prisma.nginxServer.findMany({
+          include: { sslCerts: true },
+          orderBy: { createdAt: 'desc' }
+        });
+      }
       return servers.map(s => this.formatServerForApi(s));
     } catch (err) {
       if (err.code === 'P2021' || err.message?.includes('does not exist')) {
@@ -57,6 +64,7 @@ class NginxServerManager {
         primaryDomain: primaryDomain,
         additionalDomains: data.additional_domains || [],
         upstreamServers: data.upstream_servers || [],
+        pathRules: data.path_rules || [],
         serverType: data.server_type || 'proxy',
         listenPort: data.listen_port || 80,
         sslType: data.ssl_type || 'none',
@@ -88,6 +96,7 @@ class NginxServerManager {
       primary_domain: 'primaryDomain',
       additional_domains: 'additionalDomains',
       upstream_servers: 'upstreamServers',
+      path_rules: 'pathRules',
       server_type: 'serverType',
       listen_port: 'listenPort',
       ssl_type: 'sslType',
@@ -145,6 +154,7 @@ class NginxServerManager {
       primary_domain: server.primaryDomain,
       additional_domains: server.additionalDomains,
       upstream_servers: server.upstreamServers,
+      path_rules: server.pathRules || [],
       server_type: server.serverType,
       listen_port: server.listenPort,
       ssl_type: server.sslType,
@@ -191,6 +201,7 @@ class NginxServerManager {
 
   generateNginxConfig(server) {
     const domains = [server.primary_domain, ...(server.additional_domains || [])].filter(Boolean).join(' ');
+    const pathRules = Array.isArray(server.path_rules) ? server.path_rules : [];
 
     let config = '';
 
@@ -267,32 +278,56 @@ class NginxServerManager {
 
       config += `
     client_max_body_size ${server.client_max_body_size || '50m'};
+`;
 
-    location / {
-        proxy_pass ${proxyTarget};
+      const buildProxyBlock = (target) => {
+        let block = `        proxy_pass ${target};
         proxy_http_version 1.1;
 `;
-
-      if (server.websocket_enabled) {
-        config += `        proxy_set_header Upgrade $http_upgrade;
+        if (server.websocket_enabled) {
+          block += `        proxy_set_header Upgrade $http_upgrade;
         proxy_set_header Connection "upgrade";
 `;
-      }
-
-      if (server.forward_headers) {
-        config += `        proxy_set_header Host $host;
+        }
+        if (server.forward_headers) {
+          block += `        proxy_set_header Host $host;
         proxy_set_header X-Real-IP $remote_addr;
         proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
         proxy_set_header X-Forwarded-Proto $scheme;
 `;
-      }
-
-      config += `        proxy_connect_timeout ${server.proxy_connect_timeout || '5s'};
+        }
+        block += `        proxy_connect_timeout ${server.proxy_connect_timeout || '5s'};
         proxy_read_timeout ${server.proxy_read_timeout || '60s'};
         proxy_send_timeout ${server.proxy_send_timeout || '60s'};
         proxy_buffering off;
-    }
 `;
+        return block;
+      };
+
+      const normalizedPaths = pathRules
+        .filter((rule) => rule && rule.path)
+        .map((rule) => ({
+          path: rule.path.startsWith('/') ? rule.path : `/${rule.path}`,
+          proxy_host: rule.proxy_host || rule.host || server.proxy_host || 'localhost',
+          proxy_port: rule.proxy_port || rule.port || server.proxy_port || 3000
+        }))
+        .filter((rule) => rule.path !== '/');
+
+      if (normalizedPaths.length > 0) {
+        normalizedPaths.forEach((rule) => {
+          const target = `http://${rule.proxy_host}:${rule.proxy_port}`;
+          config += `
+    location ${rule.path} {
+${buildProxyBlock(target)}    }
+`;
+        });
+      }
+
+      config += `
+    location / {
+${buildProxyBlock(proxyTarget)}    }
+`;
+
     }
 
     config += `}
@@ -842,7 +877,8 @@ class NginxServerManager {
       }
 
       // Extract proxy settings
-      const proxyPassMatch = content.match(/proxy_pass\s+http:\/\/([^:\/]+):?(\d+)?/);
+      const proxyPassMatch = content.match(/location\s+\/\s*\{[^}]*proxy_pass\s+http:\/\/([^:\/]+):?(\d+)?/s)
+        || content.match(/proxy_pass\s+http:\/\/([^:\/]+):?(\d+)?/);
       let proxyHost = 'localhost';
       let proxyPort = 3000;
       if (proxyPassMatch) {
@@ -877,6 +913,19 @@ class NginxServerManager {
         }
       }
 
+      // Extract additional path rules
+      const pathRules = [];
+      const locationRegex = /location\s+([^\s{]+)\s*\{[^}]*proxy_pass\s+http:\/\/([^:\/\s]+):?(\d+)?[^}]*\}/gs;
+      let locationMatch;
+      while ((locationMatch = locationRegex.exec(content)) !== null) {
+        const locPath = locationMatch[1];
+        const host = locationMatch[2];
+        const port = locationMatch[3] ? parseInt(locationMatch[3], 10) : 80;
+        if (locPath && locPath !== '/') {
+          pathRules.push({ path: locPath, proxy_host: host, proxy_port: port });
+        }
+      }
+
       // Extract timeouts
       const connectTimeoutMatch = content.match(/proxy_connect_timeout\s+([^;]+);/);
       const readTimeoutMatch = content.match(/proxy_read_timeout\s+([^;]+);/);
@@ -904,6 +953,7 @@ class NginxServerManager {
         proxy_port: proxyPort,
         root_path: rootPath,
         upstream_servers: upstreamServers,
+        path_rules: pathRules,
         websocket_enabled: websocketEnabled,
         forward_headers: forwardHeaders,
         client_max_body_size: clientMaxBodyMatch ? clientMaxBodyMatch[1].trim() : '50m',
@@ -934,6 +984,7 @@ class NginxServerManager {
         primaryDomain: configData.primary_domain,
         additionalDomains: configData.additional_domains || [],
         upstreamServers: configData.upstream_servers || [],
+        pathRules: configData.path_rules || [],
         serverType: configData.server_type || 'proxy',
         listenPort: configData.listen_port || 80,
         sslType: configData.ssl_type || 'none',

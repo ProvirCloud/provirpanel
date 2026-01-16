@@ -30,6 +30,7 @@ model NginxServer {
   primaryDomain        String    @unique @map("primary_domain") @db.VarChar(255)
   additionalDomains    String[]  @default([]) @map("additional_domains")
   upstreamServers      Json      @default("[]") @map("upstream_servers")
+  pathRules            Json      @default("[]") @map("path_rules")
   serverType           String    @default("proxy") @map("server_type") @db.VarChar(50)
   listenPort           Int       @default(80) @map("listen_port")
   sslType              String    @default("none") @map("ssl_type") @db.VarChar(50)
