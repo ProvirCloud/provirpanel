@@ -6,11 +6,11 @@ const { execSync } = require('child_process');
 
 class NginxManager {
   constructor() {
-    this.configPath = '/etc/nginx';
-    this.sitesAvailable = path.join(this.configPath, 'sites-available');
-    this.sitesEnabled = path.join(this.configPath, 'sites-enabled');
-    this.confD = path.join(this.configPath, 'conf.d');
-    this.mainConfig = path.join(this.configPath, 'nginx.conf');
+    this.configPath = process.env.NGINX_CONFIG_PATH || '/etc/nginx';
+    this.sitesAvailable = process.env.NGINX_SITES_AVAILABLE || path.join(this.configPath, 'sites-available');
+    this.sitesEnabled = process.env.NGINX_SITES_ENABLED || path.join(this.configPath, 'sites-enabled');
+    this.confD = process.env.NGINX_CONF_D || path.join(this.configPath, 'conf.d');
+    this.mainConfig = process.env.NGINX_MAIN_CONFIG || path.join(this.configPath, 'nginx.conf');
   }
 
   getOsInfo() {

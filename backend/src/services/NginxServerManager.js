@@ -7,12 +7,12 @@ const prisma = require('../config/prisma');
 
 class NginxServerManager {
   constructor() {
-    this.configPath = '/etc/nginx';
-    this.sitesAvailable = path.join(this.configPath, 'sites-available');
-    this.sitesEnabled = path.join(this.configPath, 'sites-enabled');
-    this.confD = path.join(this.configPath, 'conf.d');
-    this.accessLogPath = '/var/log/nginx/access.log';
-    this.errorLogPath = '/var/log/nginx/error.log';
+    this.configPath = process.env.NGINX_CONFIG_PATH || '/etc/nginx';
+    this.sitesAvailable = process.env.NGINX_SITES_AVAILABLE || path.join(this.configPath, 'sites-available');
+    this.sitesEnabled = process.env.NGINX_SITES_ENABLED || path.join(this.configPath, 'sites-enabled');
+    this.confD = process.env.NGINX_CONF_D || path.join(this.configPath, 'conf.d');
+    this.accessLogPath = process.env.NGINX_ACCESS_LOG || '/var/log/nginx/access.log';
+    this.errorLogPath = process.env.NGINX_ERROR_LOG || '/var/log/nginx/error.log';
   }
 
   // ==================== DATABASE OPERATIONS ====================

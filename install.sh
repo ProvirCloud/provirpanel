@@ -20,6 +20,15 @@ log() {
   printf "\n[cloudpainel] %s\n" "$1"
 }
 
+ensure_env_var() {
+  local file="$1"
+  local key="$2"
+  local value="$3"
+  if [[ -f "${file}" ]] && ! grep -q "^${key}=" "${file}"; then
+    echo "${key}=${value}" >> "${file}"
+  fi
+}
+
 require_root() {
   if [[ "${EUID}" -ne 0 ]]; then
     echo "This installer must be run as root." >&2
@@ -232,7 +241,22 @@ CLOUDPAINEL_PROJECTS_DIR=${INSTALL_DIR}/projects
 DEFAULT_ADMIN_USER=${ADMIN_USER}
 DEFAULT_ADMIN_PASS=${ADMIN_PASS}
 TERMINAL_OS_USER=provirpanel
+NGINX_CONFIG_PATH=/etc/nginx
+NGINX_SITES_AVAILABLE=/etc/nginx/sites-available
+NGINX_SITES_ENABLED=/etc/nginx/sites-enabled
+NGINX_CONF_D=/etc/nginx/conf.d
+NGINX_MAIN_CONFIG=/etc/nginx/nginx.conf
+NGINX_ACCESS_LOG=/var/log/nginx/access.log
+NGINX_ERROR_LOG=/var/log/nginx/error.log
 ENV
+
+  ensure_env_var "${env_file}" "NGINX_CONFIG_PATH" "/etc/nginx"
+  ensure_env_var "${env_file}" "NGINX_SITES_AVAILABLE" "/etc/nginx/sites-available"
+  ensure_env_var "${env_file}" "NGINX_SITES_ENABLED" "/etc/nginx/sites-enabled"
+  ensure_env_var "${env_file}" "NGINX_CONF_D" "/etc/nginx/conf.d"
+  ensure_env_var "${env_file}" "NGINX_MAIN_CONFIG" "/etc/nginx/nginx.conf"
+  ensure_env_var "${env_file}" "NGINX_ACCESS_LOG" "/var/log/nginx/access.log"
+  ensure_env_var "${env_file}" "NGINX_ERROR_LOG" "/var/log/nginx/error.log"
 
   chown provirpanel:provirpanel "${env_file}"
   mkdir -p "${INSTALL_DIR}/projects"
