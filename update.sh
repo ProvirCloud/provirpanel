@@ -24,6 +24,17 @@ git reset --hard origin/main
 log "Atualizando dependências backend"
 npm install
 
+# Verificar se Prisma precisa ser configurado
+if [[ -f "prisma/schema.prisma" ]]; then
+  log "Gerando Prisma Client"
+  npx prisma generate
+
+  log "Sincronizando schema do banco de dados"
+  npx prisma db push --skip-generate --accept-data-loss 2>/dev/null || {
+    log "Aviso: prisma db push falhou (pode ser normal na primeira execução)"
+  }
+fi
+
 log "Atualizando dependências frontend"
 cd frontend && npm install && cd ..
 
