@@ -26,6 +26,7 @@ const MetricsCollector = require('./services/MetricsCollector');
 const DockerManager = require('./services/DockerManager');
 const NginxLogWatcher = require('./services/NginxLogWatcher');
 const pool = require('./config/database');
+const { runMigrations } = require('./config/migrate');
 
 const app = express();
 const appLogsPath = path.join(__dirname, 'logs', 'app.log');
@@ -123,7 +124,10 @@ const ensureDefaultAdmin = async () => {
   }
 };
 
-ensureDefaultAdmin().finally(() => {
+// Run migrations and start server
+runMigrations()
+  .then(() => ensureDefaultAdmin())
+  .finally(() => {
   server.listen(port, () => {
     // eslint-disable-next-line no-console
     console.log(`CloudPainel listening on port ${port}`);

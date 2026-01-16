@@ -43,7 +43,12 @@ class NginxLogWatcher extends EventEmitter {
         }
       }
     } catch (err) {
-      console.error('[NginxLogWatcher] Error refreshing domain map:', err.message);
+      // Table may not exist yet - this is not a fatal error
+      if (err.message?.includes('does not exist')) {
+        console.warn('[NginxLogWatcher] nginx_servers table not found - run schema.sql to create tables');
+      } else {
+        console.error('[NginxLogWatcher] Error refreshing domain map:', err.message);
+      }
     }
   }
 

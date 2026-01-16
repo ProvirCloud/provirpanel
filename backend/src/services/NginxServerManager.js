@@ -2,8 +2,8 @@
 
 const fs = require('fs');
 const path = require('path');
-const { execSync, exec } = require('child_process');
-const pool = require('../config/database');
+const { execSync } = require('child_process');
+const prisma = require('../config/prisma');
 
 class NginxServerManager {
   constructor() {
@@ -18,140 +18,173 @@ class NginxServerManager {
   // ==================== DATABASE OPERATIONS ====================
 
   async getAllServers() {
-    const result = await pool.query(`
-      SELECT
-        s.*,
-        COALESCE(
-          (SELECT json_agg(c.*) FROM nginx_ssl_certs c WHERE c.server_id = s.id),
-          '[]'
-        ) as ssl_certs
-      FROM nginx_servers s
-      ORDER BY s.created_at DESC
-    `);
-    return result.rows;
+    try {
+      const servers = await prisma.nginxServer.findMany({
+        include: { sslCerts: true },
+        orderBy: { createdAt: 'desc' }
+      });
+      return servers.map(s => this.formatServerForApi(s));
+    } catch (err) {
+      if (err.code === 'P2021' || err.message?.includes('does not exist')) {
+        console.warn('[NginxServerManager] Tables not created yet - run prisma db push');
+        return [];
+      }
+      throw err;
+    }
   }
 
   async getServerById(id) {
-    const result = await pool.query(`
-      SELECT
-        s.*,
-        COALESCE(
-          (SELECT json_agg(c.*) FROM nginx_ssl_certs c WHERE c.server_id = s.id),
-          '[]'
-        ) as ssl_certs
-      FROM nginx_servers s
-      WHERE s.id = $1
-    `, [id]);
-    return result.rows[0] || null;
+    try {
+      const server = await prisma.nginxServer.findUnique({
+        where: { id },
+        include: { sslCerts: true }
+      });
+      return server ? this.formatServerForApi(server) : null;
+    } catch (err) {
+      if (err.code === 'P2021') return null;
+      throw err;
+    }
   }
 
   async createServer(data) {
-    const {
-      name,
-      primary_domain,
-      additional_domains = [],
-      upstream_servers = [],
-      server_type = 'proxy',
-      listen_port = 80,
-      ssl_type = 'none',
-      ssl_cert_path,
-      ssl_key_path,
-      proxy_host = 'localhost',
-      proxy_port = 3000,
-      root_path = '/var/www/html',
-      websocket_enabled = true,
-      forward_headers = true,
-      client_max_body_size = '50m',
-      proxy_connect_timeout = '5s',
-      proxy_read_timeout = '60s',
-      proxy_send_timeout = '60s',
-      is_active = true,
-      notes
-    } = data;
-
-    const configFileName = `${primary_domain.replace(/[^a-zA-Z0-9.-]/g, '_')}.conf`;
+    const primaryDomain = data.primary_domain;
+    const configFileName = `${primaryDomain.replace(/[^a-zA-Z0-9.-]/g, '_')}.conf`;
     const configFilePath = path.join(this.getTargetDir(), configFileName);
 
-    const result = await pool.query(`
-      INSERT INTO nginx_servers (
-        name, primary_domain, additional_domains, upstream_servers,
-        server_type, listen_port, ssl_type, ssl_cert_path, ssl_key_path,
-        proxy_host, proxy_port, root_path, websocket_enabled, forward_headers,
-        client_max_body_size, proxy_connect_timeout, proxy_read_timeout,
-        proxy_send_timeout, is_active, config_file_path, notes
-      ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20, $21)
-      RETURNING *
-    `, [
-      name, primary_domain, additional_domains, JSON.stringify(upstream_servers),
-      server_type, listen_port, ssl_type, ssl_cert_path, ssl_key_path,
-      proxy_host, proxy_port, root_path, websocket_enabled, forward_headers,
-      client_max_body_size, proxy_connect_timeout, proxy_read_timeout,
-      proxy_send_timeout, is_active, configFilePath, notes
-    ]);
+    const server = await prisma.nginxServer.create({
+      data: {
+        name: data.name,
+        primaryDomain: primaryDomain,
+        additionalDomains: data.additional_domains || [],
+        upstreamServers: data.upstream_servers || [],
+        serverType: data.server_type || 'proxy',
+        listenPort: data.listen_port || 80,
+        sslType: data.ssl_type || 'none',
+        sslCertPath: data.ssl_cert_path,
+        sslKeyPath: data.ssl_key_path,
+        proxyHost: data.proxy_host || 'localhost',
+        proxyPort: data.proxy_port || 3000,
+        rootPath: data.root_path || '/var/www/html',
+        websocketEnabled: data.websocket_enabled ?? true,
+        forwardHeaders: data.forward_headers ?? true,
+        clientMaxBodySize: data.client_max_body_size || '50m',
+        proxyConnectTimeout: data.proxy_connect_timeout || '5s',
+        proxyReadTimeout: data.proxy_read_timeout || '60s',
+        proxySendTimeout: data.proxy_send_timeout || '60s',
+        isActive: data.is_active ?? true,
+        configFilePath,
+        notes: data.notes
+      }
+    });
 
-    return result.rows[0];
+    return this.formatServerForApi(server);
   }
 
   async updateServer(id, data) {
-    const server = await this.getServerById(id);
-    if (!server) {
-      throw new Error('Server not found');
-    }
+    const updateData = {};
 
-    const fields = [];
-    const values = [];
-    let paramCount = 1;
+    const fieldMap = {
+      name: 'name',
+      primary_domain: 'primaryDomain',
+      additional_domains: 'additionalDomains',
+      upstream_servers: 'upstreamServers',
+      server_type: 'serverType',
+      listen_port: 'listenPort',
+      ssl_type: 'sslType',
+      ssl_cert_path: 'sslCertPath',
+      ssl_key_path: 'sslKeyPath',
+      proxy_host: 'proxyHost',
+      proxy_port: 'proxyPort',
+      root_path: 'rootPath',
+      websocket_enabled: 'websocketEnabled',
+      forward_headers: 'forwardHeaders',
+      client_max_body_size: 'clientMaxBodySize',
+      proxy_connect_timeout: 'proxyConnectTimeout',
+      proxy_read_timeout: 'proxyReadTimeout',
+      proxy_send_timeout: 'proxySendTimeout',
+      is_active: 'isActive',
+      notes: 'notes'
+    };
 
-    const allowedFields = [
-      'name', 'primary_domain', 'additional_domains', 'upstream_servers',
-      'server_type', 'listen_port', 'ssl_type', 'ssl_cert_path', 'ssl_key_path',
-      'proxy_host', 'proxy_port', 'root_path', 'websocket_enabled', 'forward_headers',
-      'client_max_body_size', 'proxy_connect_timeout', 'proxy_read_timeout',
-      'proxy_send_timeout', 'is_active', 'notes'
-    ];
-
-    for (const field of allowedFields) {
-      if (data[field] !== undefined) {
-        fields.push(`${field} = $${paramCount}`);
-        if (field === 'upstream_servers') {
-          values.push(JSON.stringify(data[field]));
-        } else {
-          values.push(data[field]);
-        }
-        paramCount++;
+    for (const [apiField, prismaField] of Object.entries(fieldMap)) {
+      if (data[apiField] !== undefined) {
+        updateData[prismaField] = data[apiField];
       }
     }
 
-    if (fields.length === 0) {
-      return server;
-    }
+    const server = await prisma.nginxServer.update({
+      where: { id },
+      data: updateData,
+      include: { sslCerts: true }
+    });
 
-    values.push(id);
-    const result = await pool.query(`
-      UPDATE nginx_servers
-      SET ${fields.join(', ')}
-      WHERE id = $${paramCount}
-      RETURNING *
-    `, values);
-
-    return result.rows[0];
+    return this.formatServerForApi(server);
   }
 
   async deleteServer(id) {
-    const server = await this.getServerById(id);
+    const server = await prisma.nginxServer.findUnique({ where: { id } });
     if (!server) {
       throw new Error('Server not found');
     }
 
-    // Remove config file if exists
-    if (server.config_file_path && fs.existsSync(server.config_file_path)) {
-      const filename = path.basename(server.config_file_path);
+    if (server.configFilePath && fs.existsSync(server.configFilePath)) {
+      const filename = path.basename(server.configFilePath);
       this.disableConfigFile(filename);
-      fs.unlinkSync(server.config_file_path);
+      fs.unlinkSync(server.configFilePath);
     }
 
-    await pool.query('DELETE FROM nginx_servers WHERE id = $1', [id]);
+    await prisma.nginxServer.delete({ where: { id } });
     return { success: true };
+  }
+
+  formatServerForApi(server) {
+    if (!server) return null;
+    return {
+      id: server.id,
+      name: server.name,
+      primary_domain: server.primaryDomain,
+      additional_domains: server.additionalDomains,
+      upstream_servers: server.upstreamServers,
+      server_type: server.serverType,
+      listen_port: server.listenPort,
+      ssl_type: server.sslType,
+      ssl_cert_path: server.sslCertPath,
+      ssl_key_path: server.sslKeyPath,
+      proxy_host: server.proxyHost,
+      proxy_port: server.proxyPort,
+      root_path: server.rootPath,
+      websocket_enabled: server.websocketEnabled,
+      forward_headers: server.forwardHeaders,
+      client_max_body_size: server.clientMaxBodySize,
+      proxy_connect_timeout: server.proxyConnectTimeout,
+      proxy_read_timeout: server.proxyReadTimeout,
+      proxy_send_timeout: server.proxySendTimeout,
+      is_active: server.isActive,
+      config_file_path: server.configFilePath,
+      notes: server.notes,
+      created_at: server.createdAt,
+      updated_at: server.updatedAt,
+      ssl_certs: server.sslCerts?.map(cert => this.formatCertForApi(cert)) || []
+    };
+  }
+
+  formatCertForApi(cert) {
+    if (!cert) return null;
+    return {
+      id: cert.id,
+      server_id: cert.serverId,
+      domain: cert.domain,
+      cert_path: cert.certPath,
+      key_path: cert.keyPath,
+      issuer: cert.issuer,
+      expires_at: cert.expiresAt,
+      auto_renew: cert.autoRenew,
+      last_renewed: cert.lastRenewed,
+      next_renewal: cert.nextRenewal,
+      status: cert.status,
+      fingerprint: cert.fingerprint,
+      created_at: cert.createdAt
+    };
   }
 
   // ==================== CONFIG GENERATION ====================
@@ -161,7 +194,6 @@ class NginxServerManager {
 
     let config = '';
 
-    // Upstream block for load balancer
     if (server.server_type === 'balancer' && server.upstream_servers?.length > 0) {
       const upstreamName = `upstream_${server.primary_domain.replace(/[^a-zA-Z0-9]/g, '_')}`;
       const upstreamServers = server.upstream_servers.map(s => {
@@ -178,7 +210,6 @@ class NginxServerManager {
       config += `upstream ${upstreamName} {\n${upstreamServers}\n}\n\n`;
     }
 
-    // SSL redirect block
     if (server.ssl_type !== 'none') {
       config += `server {
     listen 80;
@@ -189,7 +220,6 @@ class NginxServerManager {
 `;
     }
 
-    // Main server block
     const listenDirective = server.ssl_type !== 'none'
       ? `listen 443 ssl http2;`
       : `listen ${server.listen_port || 80};`;
@@ -199,7 +229,6 @@ class NginxServerManager {
     server_name ${domains};
 `;
 
-    // SSL configuration
     if (server.ssl_type !== 'none') {
       const certPath = server.ssl_cert_path || `/etc/letsencrypt/live/${server.primary_domain}/fullchain.pem`;
       const keyPath = server.ssl_key_path || `/etc/letsencrypt/live/${server.primary_domain}/privkey.pem`;
@@ -213,7 +242,6 @@ class NginxServerManager {
 `;
     }
 
-    // Location blocks based on server type
     if (server.server_type === 'static') {
       config += `
     root ${server.root_path || '/var/www/html'};
@@ -229,7 +257,6 @@ class NginxServerManager {
     }
 `;
     } else {
-      // Proxy or Load Balancer
       let proxyTarget;
       if (server.server_type === 'balancer') {
         const upstreamName = `upstream_${server.primary_domain.replace(/[^a-zA-Z0-9]/g, '_')}`;
@@ -291,25 +318,20 @@ class NginxServerManager {
     const config = this.generateNginxConfig(server);
     const configFileName = path.basename(server.config_file_path);
 
-    // Write config file
     fs.writeFileSync(server.config_file_path, config);
 
-    // Test configuration
     const testResult = this.testConfig();
     if (!testResult.valid) {
-      // Rollback - delete the file
       if (fs.existsSync(server.config_file_path)) {
         fs.unlinkSync(server.config_file_path);
       }
       throw new Error(`Invalid Nginx configuration: ${testResult.error}`);
     }
 
-    // Enable if active
     if (server.is_active && fs.existsSync(this.sitesAvailable)) {
       this.enableConfigFile(configFileName);
     }
 
-    // Reload Nginx
     this.reload();
 
     return { success: true, config };
@@ -334,154 +356,168 @@ class NginxServerManager {
   async getLogs(serverId, options = {}) {
     const { limit = 100, offset = 0, status, ip, path: reqPath, startDate, endDate } = options;
 
-    let query = 'SELECT * FROM nginx_logs WHERE 1=1';
-    const params = [];
-    let paramCount = 1;
+    try {
+      const where = {};
 
-    if (serverId) {
-      query += ` AND server_id = $${paramCount}`;
-      params.push(serverId);
-      paramCount++;
+      if (serverId) where.serverId = serverId;
+      if (status) where.statusCode = status;
+      if (ip) where.clientIp = ip;
+      if (reqPath) where.requestPath = { contains: reqPath };
+      if (startDate || endDate) {
+        where.timestamp = {};
+        if (startDate) where.timestamp.gte = new Date(startDate);
+        if (endDate) where.timestamp.lte = new Date(endDate);
+      }
+
+      const logs = await prisma.nginxLog.findMany({
+        where,
+        orderBy: { timestamp: 'desc' },
+        take: limit,
+        skip: offset
+      });
+
+      return logs.map(log => ({
+        id: log.id,
+        server_id: log.serverId,
+        client_ip: log.clientIp,
+        request_method: log.requestMethod,
+        request_path: log.requestPath,
+        status_code: log.statusCode,
+        response_time_ms: log.responseTimeMs,
+        bytes_sent: log.bytesSent,
+        user_agent: log.userAgent,
+        referer: log.referer,
+        timestamp: log.timestamp
+      }));
+    } catch (err) {
+      if (err.code === 'P2021') return [];
+      throw err;
     }
-
-    if (status) {
-      query += ` AND status_code = $${paramCount}`;
-      params.push(status);
-      paramCount++;
-    }
-
-    if (ip) {
-      query += ` AND client_ip = $${paramCount}`;
-      params.push(ip);
-      paramCount++;
-    }
-
-    if (reqPath) {
-      query += ` AND request_path LIKE $${paramCount}`;
-      params.push(`%${reqPath}%`);
-      paramCount++;
-    }
-
-    if (startDate) {
-      query += ` AND timestamp >= $${paramCount}`;
-      params.push(startDate);
-      paramCount++;
-    }
-
-    if (endDate) {
-      query += ` AND timestamp <= $${paramCount}`;
-      params.push(endDate);
-      paramCount++;
-    }
-
-    query += ` ORDER BY timestamp DESC LIMIT $${paramCount} OFFSET $${paramCount + 1}`;
-    params.push(limit, offset);
-
-    const result = await pool.query(query, params);
-    return result.rows;
   }
 
   async getMetrics(serverId, period = '24h') {
-    const periodMap = {
-      '1h': '1 hour',
-      '24h': '24 hours',
-      '7d': '7 days',
-      '30d': '30 days'
-    };
-    const interval = periodMap[period] || '24 hours';
+    const periodMap = { '1h': 1, '24h': 24, '7d': 24 * 7, '30d': 24 * 30 };
+    const hours = periodMap[period] || 24;
+    const since = new Date(Date.now() - hours * 60 * 60 * 1000);
 
-    // Get aggregated metrics
-    const metricsQuery = await pool.query(`
-      SELECT
-        COUNT(*) as total_requests,
-        ROUND(AVG(response_time_ms)::numeric, 2) as avg_response_time,
-        ROUND(AVG(CASE WHEN status_code >= 400 THEN 1 ELSE 0 END) * 100, 2) as error_rate,
-        SUM(bytes_sent) as total_bytes,
-        COUNT(DISTINCT client_ip) as unique_visitors
-      FROM nginx_logs
-      WHERE ($1::int IS NULL OR server_id = $1)
-        AND timestamp >= NOW() - INTERVAL '${interval}'
-    `, [serverId || null]);
+    try {
+      const where = { timestamp: { gte: since } };
+      if (serverId) where.serverId = serverId;
 
-    // Get requests per minute/hour based on period
-    const groupBy = period === '1h' ? 'minute' : period === '24h' ? 'hour' : 'day';
-    const timeSeriesQuery = await pool.query(`
-      SELECT
-        date_trunc('${groupBy}', timestamp) as time_bucket,
-        COUNT(*) as requests,
-        ROUND(AVG(response_time_ms)::numeric, 2) as avg_response_time,
-        COUNT(CASE WHEN status_code >= 400 THEN 1 END) as errors
-      FROM nginx_logs
-      WHERE ($1::int IS NULL OR server_id = $1)
-        AND timestamp >= NOW() - INTERVAL '${interval}'
-      GROUP BY time_bucket
-      ORDER BY time_bucket
-    `, [serverId || null]);
+      const logs = await prisma.nginxLog.findMany({ where });
 
-    // Get status code distribution
-    const statusQuery = await pool.query(`
-      SELECT
-        CASE
-          WHEN status_code >= 200 AND status_code < 300 THEN '2xx'
-          WHEN status_code >= 300 AND status_code < 400 THEN '3xx'
-          WHEN status_code >= 400 AND status_code < 500 THEN '4xx'
-          WHEN status_code >= 500 THEN '5xx'
-          ELSE 'other'
-        END as status_group,
-        COUNT(*) as count
-      FROM nginx_logs
-      WHERE ($1::int IS NULL OR server_id = $1)
-        AND timestamp >= NOW() - INTERVAL '${interval}'
-      GROUP BY status_group
-    `, [serverId || null]);
+      const totalRequests = logs.length;
+      const avgResponseTime = logs.length > 0
+        ? Math.round(logs.reduce((sum, l) => sum + (l.responseTimeMs || 0), 0) / logs.length)
+        : 0;
+      const errorCount = logs.filter(l => l.statusCode >= 400).length;
+      const errorRate = totalRequests > 0 ? Math.round((errorCount / totalRequests) * 10000) / 100 : 0;
+      const totalBytes = logs.reduce((sum, l) => sum + (l.bytesSent || 0), 0);
+      const uniqueVisitors = new Set(logs.map(l => l.clientIp)).size;
 
-    return {
-      summary: metricsQuery.rows[0] || {},
-      timeSeries: timeSeriesQuery.rows,
-      statusDistribution: statusQuery.rows
-    };
+      const groupByMinutes = period === '1h' ? 5 : period === '24h' ? 60 : 60 * 24;
+      const timeSeries = this.groupLogsByTime(logs, groupByMinutes);
+
+      const statusGroups = { '2xx': 0, '3xx': 0, '4xx': 0, '5xx': 0 };
+      logs.forEach(l => {
+        const code = l.statusCode;
+        if (code >= 200 && code < 300) statusGroups['2xx']++;
+        else if (code >= 300 && code < 400) statusGroups['3xx']++;
+        else if (code >= 400 && code < 500) statusGroups['4xx']++;
+        else if (code >= 500) statusGroups['5xx']++;
+      });
+
+      const statusDistribution = Object.entries(statusGroups).map(([status_group, count]) => ({
+        status_group,
+        count
+      }));
+
+      return {
+        summary: {
+          total_requests: totalRequests,
+          avg_response_time: avgResponseTime,
+          error_rate: errorRate,
+          total_bytes: totalBytes,
+          unique_visitors: uniqueVisitors
+        },
+        timeSeries,
+        statusDistribution
+      };
+    } catch (err) {
+      if (err.code === 'P2021') {
+        return {
+          summary: { total_requests: 0, avg_response_time: 0, error_rate: 0, total_bytes: 0, unique_visitors: 0 },
+          timeSeries: [],
+          statusDistribution: []
+        };
+      }
+      throw err;
+    }
+  }
+
+  groupLogsByTime(logs, minutesInterval) {
+    const buckets = new Map();
+
+    logs.forEach(log => {
+      const timestamp = new Date(log.timestamp);
+      const bucketTime = new Date(Math.floor(timestamp.getTime() / (minutesInterval * 60 * 1000)) * minutesInterval * 60 * 1000);
+      const key = bucketTime.toISOString();
+
+      if (!buckets.has(key)) {
+        buckets.set(key, { requests: 0, totalResponseTime: 0, errors: 0 });
+      }
+
+      const bucket = buckets.get(key);
+      bucket.requests++;
+      bucket.totalResponseTime += log.responseTimeMs || 0;
+      if (log.statusCode >= 400) bucket.errors++;
+    });
+
+    return Array.from(buckets.entries())
+      .map(([time_bucket, data]) => ({
+        time_bucket,
+        requests: data.requests,
+        avg_response_time: data.requests > 0 ? Math.round(data.totalResponseTime / data.requests) : 0,
+        errors: data.errors
+      }))
+      .sort((a, b) => a.time_bucket.localeCompare(b.time_bucket));
   }
 
   async insertLog(logData) {
-    const {
-      server_id,
-      client_ip,
-      request_method,
-      request_path,
-      status_code,
-      response_time_ms,
-      bytes_sent,
-      user_agent,
-      referer,
-      timestamp
-    } = logData;
-
-    await pool.query(`
-      INSERT INTO nginx_logs (
-        server_id, client_ip, request_method, request_path,
-        status_code, response_time_ms, bytes_sent, user_agent, referer, timestamp
-      ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
-    `, [
-      server_id, client_ip, request_method, request_path,
-      status_code, response_time_ms, bytes_sent, user_agent, referer,
-      timestamp || new Date()
-    ]);
+    try {
+      await prisma.nginxLog.create({
+        data: {
+          serverId: logData.server_id,
+          clientIp: logData.client_ip,
+          requestMethod: logData.request_method,
+          requestPath: logData.request_path,
+          statusCode: logData.status_code,
+          responseTimeMs: logData.response_time_ms,
+          bytesSent: logData.bytes_sent,
+          userAgent: logData.user_agent,
+          referer: logData.referer,
+          timestamp: logData.timestamp || new Date()
+        }
+      });
+    } catch (err) {
+      if (err.code !== 'P2021') {
+        console.error('[NginxServerManager] Error inserting log:', err.message);
+      }
+    }
   }
 
   parseNginxLogLine(line) {
-    // Standard Nginx combined log format:
-    // $remote_addr - $remote_user [$time_local] "$request" $status $body_bytes_sent "$http_referer" "$http_user_agent" $request_time
     const regex = /^(\S+) - \S+ \[([^\]]+)\] "(\S+) ([^"]+)" (\d+) (\d+) "([^"]*)" "([^"]*)"(?: (\d+\.?\d*))?$/;
     const match = line.match(regex);
 
     if (!match) return null;
 
-    const [, clientIp, timeLocal, method, path, status, bytes, referer, userAgent, responseTime] = match;
+    const [, clientIp, timeLocal, method, pathStr, status, bytes, referer, userAgent, responseTime] = match;
 
     return {
       client_ip: clientIp,
       request_method: method,
-      request_path: path.split(' ')[0],
+      request_path: pathStr.split(' ')[0],
       status_code: parseInt(status, 10),
       bytes_sent: parseInt(bytes, 10),
       referer: referer === '-' ? null : referer,
@@ -492,7 +528,6 @@ class NginxServerManager {
   }
 
   parseNginxDate(dateStr) {
-    // Format: 10/Jan/2024:13:55:36 +0000
     const months = {
       Jan: 0, Feb: 1, Mar: 2, Apr: 3, May: 4, Jun: 5,
       Jul: 6, Aug: 7, Sep: 8, Oct: 9, Nov: 10, Dec: 11
@@ -507,22 +542,33 @@ class NginxServerManager {
   // ==================== SSL CERTIFICATE MANAGEMENT ====================
 
   async getAllCerts() {
-    const result = await pool.query(`
-      SELECT c.*, s.name as server_name, s.primary_domain
-      FROM nginx_ssl_certs c
-      LEFT JOIN nginx_servers s ON s.id = c.server_id
-      ORDER BY c.expires_at ASC
-    `);
-    return result.rows;
+    try {
+      const certs = await prisma.nginxSslCert.findMany({
+        include: { server: { select: { name: true, primaryDomain: true } } },
+        orderBy: { expiresAt: 'asc' }
+      });
+      return certs.map(cert => ({
+        ...this.formatCertForApi(cert),
+        server_name: cert.server?.name,
+        primary_domain: cert.server?.primaryDomain
+      }));
+    } catch (err) {
+      if (err.code === 'P2021') return [];
+      throw err;
+    }
   }
 
   async getCertsByServer(serverId) {
-    const result = await pool.query(`
-      SELECT * FROM nginx_ssl_certs
-      WHERE server_id = $1
-      ORDER BY expires_at ASC
-    `, [serverId]);
-    return result.rows;
+    try {
+      const certs = await prisma.nginxSslCert.findMany({
+        where: { serverId },
+        orderBy: { expiresAt: 'asc' }
+      });
+      return certs.map(cert => this.formatCertForApi(cert));
+    } catch (err) {
+      if (err.code === 'P2021') return [];
+      throw err;
+    }
   }
 
   async syncCertFromFile(serverId, domain, certPath, keyPath) {
@@ -531,7 +577,6 @@ class NginxServerManager {
         throw new Error('Certificate file not found');
       }
 
-      // Get certificate info using openssl
       const expiryOutput = execSync(`openssl x509 -in "${certPath}" -noout -enddate`, { encoding: 'utf8' });
       const issuerOutput = execSync(`openssl x509 -in "${certPath}" -noout -issuer`, { encoding: 'utf8' });
       const fingerprintOutput = execSync(`openssl x509 -in "${certPath}" -noout -fingerprint -sha256`, { encoding: 'utf8' });
@@ -544,7 +589,6 @@ class NginxServerManager {
       const issuer = issuerMatch ? issuerMatch[1].trim() : 'Unknown';
       const fingerprint = fingerprintMatch ? fingerprintMatch[1].trim() : null;
 
-      // Calculate status and next renewal
       let status = 'valid';
       const daysLeft = expiresAt ? Math.floor((expiresAt - new Date()) / (1000 * 60 * 60 * 24)) : null;
       if (daysLeft !== null) {
@@ -554,22 +598,30 @@ class NginxServerManager {
 
       const nextRenewal = expiresAt ? new Date(expiresAt.getTime() - (30 * 24 * 60 * 60 * 1000)) : null;
 
-      // Upsert certificate
-      await pool.query(`
-        INSERT INTO nginx_ssl_certs (
-          server_id, domain, cert_path, key_path, issuer,
-          expires_at, status, fingerprint, next_renewal
-        ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
-        ON CONFLICT (domain) DO UPDATE SET
-          server_id = EXCLUDED.server_id,
-          cert_path = EXCLUDED.cert_path,
-          key_path = EXCLUDED.key_path,
-          issuer = EXCLUDED.issuer,
-          expires_at = EXCLUDED.expires_at,
-          status = EXCLUDED.status,
-          fingerprint = EXCLUDED.fingerprint,
-          next_renewal = EXCLUDED.next_renewal
-      `, [serverId, domain, certPath, keyPath, issuer, expiresAt, status, fingerprint, nextRenewal]);
+      await prisma.nginxSslCert.upsert({
+        where: { domain },
+        create: {
+          serverId,
+          domain,
+          certPath,
+          keyPath,
+          issuer,
+          expiresAt,
+          status,
+          fingerprint,
+          nextRenewal
+        },
+        update: {
+          serverId,
+          certPath,
+          keyPath,
+          issuer,
+          expiresAt,
+          status,
+          fingerprint,
+          nextRenewal
+        }
+      });
 
       return { success: true, status, daysLeft, expiresAt, issuer };
     } catch (err) {
@@ -578,33 +630,24 @@ class NginxServerManager {
   }
 
   async renewCert(certId) {
-    const certResult = await pool.query('SELECT * FROM nginx_ssl_certs WHERE id = $1', [certId]);
-    const cert = certResult.rows[0];
-
+    const cert = await prisma.nginxSslCert.findUnique({ where: { id: certId } });
     if (!cert) {
       throw new Error('Certificate not found');
     }
 
     try {
-      // Check if certbot is installed
       execSync('command -v certbot', { stdio: 'pipe' });
-
-      // Run certbot renew for specific domain
       execSync(`certbot certonly --nginx -d ${cert.domain} --non-interactive --agree-tos`, {
         encoding: 'utf8',
         timeout: 120000
       });
 
-      // Update certificate info
-      await pool.query(`
-        UPDATE nginx_ssl_certs
-        SET last_renewed = NOW()
-        WHERE id = $1
-      `, [certId]);
+      await prisma.nginxSslCert.update({
+        where: { id: certId },
+        data: { lastRenewed: new Date() }
+      });
 
-      // Re-sync to get new expiry date
-      await this.syncCertFromFile(cert.server_id, cert.domain, cert.cert_path, cert.key_path);
-
+      await this.syncCertFromFile(cert.serverId, cert.domain, cert.certPath, cert.keyPath);
       return { success: true };
     } catch (err) {
       throw new Error(`Renewal failed: ${err.message}`);
@@ -612,11 +655,10 @@ class NginxServerManager {
   }
 
   async toggleAutoRenew(certId, autoRenew) {
-    await pool.query(`
-      UPDATE nginx_ssl_certs
-      SET auto_renew = $2
-      WHERE id = $1
-    `, [certId, autoRenew]);
+    await prisma.nginxSslCert.update({
+      where: { id: certId },
+      data: { autoRenew }
+    });
     return { success: true };
   }
 
@@ -642,7 +684,6 @@ class NginxServerManager {
       execSync('systemctl reload nginx', { stdio: 'pipe' });
       return { success: true };
     } catch (err) {
-      // Try alternative reload method
       try {
         execSync('nginx -s reload', { stdio: 'pipe' });
         return { success: true };
@@ -666,7 +707,6 @@ class NginxServerManager {
       const output = execSync('systemctl is-active nginx', { encoding: 'utf8' }).trim();
       return { running: output === 'active', status: output };
     } catch {
-      // Check if nginx process is running
       try {
         execSync('pgrep nginx', { stdio: 'pipe' });
         return { running: true, status: 'running' };
@@ -696,8 +736,6 @@ class NginxServerManager {
     }
   }
 
-  // ==================== HEALTH CHECK ====================
-
   async healthCheck() {
     const checks = {
       nginx: { ok: false, message: '' },
@@ -705,26 +743,23 @@ class NginxServerManager {
       configDir: { ok: false, message: '' }
     };
 
-    // Check Nginx status
     const nginxStatus = this.getStatus();
     checks.nginx.ok = nginxStatus.running;
     checks.nginx.message = nginxStatus.running ? 'Nginx is running' : 'Nginx is not running';
 
-    // Check database connection
     try {
-      await pool.query('SELECT 1');
+      await prisma.$queryRaw`SELECT 1`;
       checks.database.ok = true;
       checks.database.message = 'Database connected';
     } catch (err) {
       checks.database.message = `Database error: ${err.message}`;
     }
 
-    // Check config directory
-    const configDir = this.getTargetDir();
-    if (fs.existsSync(configDir)) {
+    try {
+      const configDir = this.getTargetDir();
       checks.configDir.ok = true;
       checks.configDir.message = `Config directory: ${configDir}`;
-    } else {
+    } catch {
       checks.configDir.message = 'Config directory not found';
     }
 

@@ -1,0 +1,97 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+// ==================== EXISTING TABLES ====================
+
+model User {
+  id        String   @id @default(uuid()) @db.Uuid
+  username  String   @unique
+  password  String
+  role      String   @default("viewer")
+  createdAt DateTime @default(now()) @map("created_at")
+
+  @@map("users")
+}
+
+// ==================== NGINX VISUAL MANAGER ====================
+
+model NginxServer {
+  id                   Int       @id @default(autoincrement())
+  name                 String    @db.VarChar(255)
+  primaryDomain        String    @unique @map("primary_domain") @db.VarChar(255)
+  additionalDomains    String[]  @default([]) @map("additional_domains")
+  upstreamServers      Json      @default("[]") @map("upstream_servers")
+  serverType           String    @default("proxy") @map("server_type") @db.VarChar(50)
+  listenPort           Int       @default(80) @map("listen_port")
+  sslType              String    @default("none") @map("ssl_type") @db.VarChar(50)
+  sslCertPath          String?   @map("ssl_cert_path") @db.VarChar(500)
+  sslKeyPath           String?   @map("ssl_key_path") @db.VarChar(500)
+  proxyHost            String    @default("localhost") @map("proxy_host") @db.VarChar(255)
+  proxyPort            Int       @default(3000) @map("proxy_port")
+  rootPath             String    @default("/var/www/html") @map("root_path") @db.VarChar(500)
+  websocketEnabled     Boolean   @default(true) @map("websocket_enabled")
+  forwardHeaders       Boolean   @default(true) @map("forward_headers")
+  clientMaxBodySize    String    @default("50m") @map("client_max_body_size") @db.VarChar(20)
+  proxyConnectTimeout  String    @default("5s") @map("proxy_connect_timeout") @db.VarChar(20)
+  proxyReadTimeout     String    @default("60s") @map("proxy_read_timeout") @db.VarChar(20)
+  proxySendTimeout     String    @default("60s") @map("proxy_send_timeout") @db.VarChar(20)
+  isActive             Boolean   @default(true) @map("is_active")
+  configFilePath       String?   @map("config_file_path") @db.VarChar(500)
+  notes                String?   @db.Text
+  createdAt            DateTime  @default(now()) @map("created_at")
+  updatedAt            DateTime  @updatedAt @map("updated_at")
+
+  logs     NginxLog[]
+  sslCerts NginxSslCert[]
+
+  @@map("nginx_servers")
+}
+
+model NginxLog {
+  id             Int       @id @default(autoincrement())
+  serverId       Int?      @map("server_id")
+  clientIp       String?   @map("client_ip") @db.VarChar(45)
+  requestMethod  String?   @map("request_method") @db.VarChar(10)
+  requestPath    String?   @map("request_path") @db.Text
+  statusCode     Int?      @map("status_code")
+  responseTimeMs Int?      @map("response_time_ms")
+  bytesSent      Int?      @map("bytes_sent")
+  userAgent      String?   @map("user_agent") @db.Text
+  referer        String?   @db.Text
+  timestamp      DateTime  @default(now())
+
+  server NginxServer? @relation(fields: [serverId], references: [id], onDelete: Cascade)
+
+  @@index([serverId, timestamp(sort: Desc)], name: "idx_nginx_logs_server_timestamp")
+  @@index([statusCode], name: "idx_nginx_logs_status")
+  @@index([timestamp(sort: Desc)], name: "idx_nginx_logs_timestamp")
+  @@map("nginx_logs")
+}
+
+model NginxSslCert {
+  id          Int       @id @default(autoincrement())
+  serverId    Int?      @map("server_id")
+  domain      String    @unique @db.VarChar(255)
+  certPath    String?   @map("cert_path") @db.VarChar(500)
+  keyPath     String?   @map("key_path") @db.VarChar(500)
+  issuer      String    @default("Unknown") @db.VarChar(100)
+  expiresAt   DateTime? @map("expires_at")
+  autoRenew   Boolean   @default(true) @map("auto_renew")
+  lastRenewed DateTime? @map("last_renewed")
+  nextRenewal DateTime? @map("next_renewal")
+  status      String    @default("unknown") @db.VarChar(50)
+  fingerprint String?   @db.VarChar(100)
+  createdAt   DateTime  @default(now()) @map("created_at")
+
+  server NginxServer? @relation(fields: [serverId], references: [id], onDelete: Cascade)
+
+  @@index([domain], name: "idx_nginx_ssl_certs_domain")
+  @@index([expiresAt], name: "idx_nginx_ssl_certs_expires")
+  @@map("nginx_ssl_certs")
+}
