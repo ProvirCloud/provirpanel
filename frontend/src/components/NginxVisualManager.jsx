@@ -1243,6 +1243,7 @@ const NginxVisualManager = () => {
   const [showNewServer, setShowNewServer] = useState(false)
   const [loading, setLoading] = useState(true)
   const [importing, setImporting] = useState(false)
+  const [importStatus, setImportStatus] = useState('')
   const [error, setError] = useState('')
   const [testResult, setTestResult] = useState(null)
   const [alertDialog, setAlertDialog] = useState(null)
@@ -1358,22 +1359,29 @@ const NginxVisualManager = () => {
 
   const handleImportConfigs = async () => {
     setImporting(true)
+    setImportStatus('Importando configuracoes do Nginx...')
+    showAlert('Importando configuracoes', 'Aguarde...')
     try {
       const result = await api.post('/api/nginx/import-configs')
-      loadData()
+      await loadData()
       const importedCount = result.data?.imported?.length || 0
       const updatedCount = result.data?.updated?.length || 0
       const skippedCount = result.data?.skipped?.length || 0
       const errorCount = result.data?.errors?.length || 0
-      const message = [
-        `Importados: ${importedCount}`,
-        `Atualizados: ${updatedCount}`,
-        `Ignorados: ${skippedCount}`,
-        `Erros: ${errorCount}`
-      ]
+      const totalCount = importedCount + updatedCount + skippedCount + errorCount
+      const message = totalCount === 0
+        ? ['Nenhuma configuracao encontrada nos arquivos do Nginx']
+        : [
+            `Importados: ${importedCount}`,
+            `Atualizados: ${updatedCount}`,
+            `Ignorados: ${skippedCount}`,
+            `Erros: ${errorCount}`
+          ]
       showAlert('Importacao concluida', message)
+      setImportStatus('Importacao concluida')
     } catch (err) {
       showAlert('Erro ao importar', err.response?.data?.error || err.message)
+      setImportStatus('Falha ao importar configuracoes')
     } finally {
       setImporting(false)
     }
@@ -1449,6 +1457,9 @@ const NginxVisualManager = () => {
             <Download className="h-4 w-4" />
             {importing ? 'Importando...' : 'Importar configs do Nginx'}
           </button>
+          {importStatus && (
+            <p className="text-xs text-slate-500 px-1">{importStatus}</p>
+          )}
 
           <ServersList
             servers={servers}
