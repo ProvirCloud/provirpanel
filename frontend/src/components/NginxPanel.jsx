@@ -16,6 +16,9 @@ const NginxPanel = () => {
   const [sslForm, setSSLForm] = useState({ domain: '', email: '' })
   const [error, setError] = useState('')
   const [dockerError, setDockerError] = useState('')
+  const [certbotStatus, setCertbotStatus] = useState(null)
+  const [installingCertbot, setInstallingCertbot] = useState(false)
+  const [certbotLogs, setCertbotLogs] = useState([])
   const [viewMode, setViewMode] = useState('guided')
   const [nginxTest, setNginxTest] = useState(null)
   const [builderType, setBuilderType] = useState('reverse-proxy')
@@ -56,13 +59,14 @@ const NginxPanel = () => {
 
   const loadAll = async () => {
     try {
-      const [statusRes, configsRes, templatesRes, dockerRes, certsRes] = await Promise.all([
-        api.get('/nginx/status'),
-        api.get('/nginx/configs'),
-        api.get('/nginx/templates'),
-        api.get('/nginx/docker-containers'),
-        api.get('/nginx/ssl/certs')
-      ])
+    const [statusRes, configsRes, templatesRes, dockerRes, certsRes, certbotRes] = await Promise.all([
+      api.get('/nginx/status'),
+      api.get('/nginx/configs'),
+      api.get('/nginx/templates'),
+      api.get('/nginx/docker-containers'),
+      api.get('/nginx/ssl/certs'),
+      api.get('/nginx/ssl/status')
+    ])
       
       setStatus(statusRes.data)
       setConfigs(configsRes.data.configs || [])
@@ -70,6 +74,7 @@ const NginxPanel = () => {
       setDockerContainers(dockerRes.data.containers || [])
       setDockerError(dockerRes.data.error || '')
       setCerts(certsRes.data.certs || [])
+      setCertbotStatus(certbotRes.data || null)
       setError('')
       try {
         const testRes = await api.post('/nginx/test')
@@ -652,6 +657,24 @@ server {
       loadAll()
     } catch (err) {
       alert('❌ Erro: ' + err.message)
+    }
+  }
+
+  const installCertbot = async () => {
+    try {
+      setInstallingCertbot(true)
+      const res = await api.post('/nginx/ssl/install-certbot')
+      setCertbotStatus(res.data)
+      setCertbotLogs(res.data?.logs || [])
+      if (res.data?.success) {
+        alert('✅ Certbot instalado com sucesso!')
+      } else {
+        alert('❌ Erro: ' + (res.data?.error || 'Falha ao instalar'))
+      }
+    } catch (err) {
+      alert('❌ Erro: ' + (err.response?.data?.error || err.message))
+    } finally {
+      setInstallingCertbot(false)
     }
   }
 
@@ -1548,8 +1571,51 @@ server {
         <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50 p-4">
           <div className="bg-slate-900 border border-slate-700 rounded-2xl p-6 max-w-md w-full">
             <h3 className="text-xl font-semibold text-white mb-4">Instalar Certificado SSL</h3>
-            
+
             <div className="space-y-4">
+              <div className="rounded-lg border border-slate-700 bg-slate-950 p-3 text-xs text-slate-300">
+                {certbotStatus?.installed ? (
+                  <div>
+                    <div className="text-emerald-300 font-semibold">Certbot instalado</div>
+                    <div className="mt-1 text-slate-400">{certbotStatus.version}</div>
+                  </div>
+                ) : (
+                  <div className="space-y-2">
+                    <div className="text-rose-300 font-semibold">Certbot não instalado</div>
+                    <button
+                      onClick={installCertbot}
+                      className="rounded-lg bg-blue-500 px-3 py-2 text-xs font-semibold text-white hover:bg-blue-600"
+                      disabled={installingCertbot}
+                    >
+                      {installingCertbot ? 'Instalando...' : 'Instalar Certbot'}
+                    </button>
+                  </div>
+                )}
+              </div>
+              {certbotLogs.length > 0 && (
+                <div className="rounded-lg border border-slate-800 bg-slate-950 p-3 text-xs text-slate-300 max-h-40 overflow-auto">
+                  {certbotLogs.map((entry, index) => (
+                    <div key={`${entry.label}-${index}`} className="mb-2">
+                      <div className="text-slate-200">{entry.command}</div>
+                      {entry.ok ? (
+                        <div className="text-emerald-300">OK</div>
+                      ) : (
+                        <div className="text-rose-300">Falhou</div>
+                      )}
+                      {entry.output && (
+                        <pre className="mt-1 whitespace-pre-wrap text-[11px] text-slate-400">
+                          {entry.output}
+                        </pre>
+                      )}
+                      {entry.error && (
+                        <pre className="mt-1 whitespace-pre-wrap text-[11px] text-rose-300">
+                          {entry.error}
+                        </pre>
+                      )}
+                    </div>
+                  ))}
+                </div>
+              )}
               <div>
                 <label className="block text-sm text-slate-300 mb-2">Domínio</label>
                 <input

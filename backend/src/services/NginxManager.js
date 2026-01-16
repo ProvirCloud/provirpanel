@@ -13,6 +13,36 @@ class NginxManager {
     this.mainConfig = path.join(this.configPath, 'nginx.conf');
   }
 
+  getOsInfo() {
+    let id = '';
+    let like = '';
+    try {
+      if (fs.existsSync('/etc/os-release')) {
+        const content = fs.readFileSync('/etc/os-release', 'utf8');
+        const idMatch = content.match(/^ID=(.+)$/m);
+        const likeMatch = content.match(/^ID_LIKE=(.+)$/m);
+        id = idMatch ? idMatch[1].replace(/"/g, '') : '';
+        like = likeMatch ? likeMatch[1].replace(/"/g, '') : '';
+      }
+    } catch (err) {
+      // ignore
+    }
+    return { id, like, platform: process.platform };
+  }
+
+  runInstallStep(command, args = []) {
+    try {
+      const output = execSync([command, ...args].join(' '), { encoding: 'utf8', stdio: 'pipe' });
+      return { ok: true, output };
+    } catch (err) {
+      return {
+        ok: false,
+        output: err.stdout ? err.stdout.toString() : '',
+        error: err.stderr ? err.stderr.toString() : err.message
+      };
+    }
+  }
+
   isValidFilename(filename) {
     return typeof filename === 'string' && /^[A-Za-z0-9._-]+$/.test(filename);
   }
@@ -285,6 +315,79 @@ server {
       }
       execSync(`certbot certonly --nginx -d ${domain} --email ${email} --agree-tos --non-interactive`, { stdio: 'inherit' });
       return { success: true };
+    } catch (err) {
+      return { success: false, error: err.message };
+    }
+  }
+
+  getCertbotStatus() {
+    try {
+      const pathOutput = execSync('command -v certbot', { encoding: 'utf8' }).trim();
+      const versionOutput = execSync('certbot --version', { encoding: 'utf8' }).trim();
+      return { installed: true, path: pathOutput, version: versionOutput };
+    } catch (err) {
+      return {
+        installed: false,
+        error: err && err.message ? err.message : 'Certbot nao encontrado'
+      };
+    }
+  }
+
+  installCertbot() {
+    try {
+      const status = this.getCertbotStatus();
+      if (status.installed) {
+        return { success: true, message: 'Certbot ja instalado', ...status };
+      }
+      const osInfo = this.getOsInfo();
+      const logs = [];
+      const steps = [];
+
+      const tryStep = (label, command, args) => {
+        steps.push({ label, command, args });
+        const result = this.runInstallStep(command, args);
+        logs.push({
+          label,
+          command: [command, ...(args || [])].join(' '),
+          ok: result.ok,
+          output: result.output || '',
+          error: result.error || ''
+        });
+        return result.ok;
+      };
+
+      const platform = osInfo.platform;
+      const osId = `${osInfo.id} ${osInfo.like}`.toLowerCase();
+
+      if (platform === 'darwin') {
+        const brewOk = tryStep('brew update', 'brew', ['update']);
+        if (brewOk) {
+          tryStep('brew install certbot', 'brew', ['install', 'certbot']);
+          tryStep('brew install certbot nginx', 'brew', ['install', 'certbot-nginx']);
+        }
+      } else if (osId.includes('debian') || osId.includes('ubuntu')) {
+        tryStep('apt-get update', 'apt-get', ['update']);
+        tryStep('apt-get install certbot', 'apt-get', ['install', '-y', 'certbot', 'python3-certbot-nginx']);
+      } else if (osId.includes('fedora') || osId.includes('rhel') || osId.includes('centos')) {
+        const dnfOk = tryStep('dnf install certbot', 'dnf', ['install', '-y', 'certbot', 'python3-certbot-nginx']);
+        if (!dnfOk) {
+          tryStep('yum install certbot', 'yum', ['install', '-y', 'certbot', 'python3-certbot-nginx']);
+        }
+      } else if (osId.includes('alpine')) {
+        tryStep('apk add certbot', 'apk', ['add', 'certbot', 'certbot-nginx']);
+      } else if (osId.includes('arch')) {
+        tryStep('pacman install certbot', 'pacman', ['-S', '--noconfirm', 'certbot', 'certbot-nginx']);
+      }
+
+      // fallback to snap if still not installed
+      const after = this.getCertbotStatus();
+      if (!after.installed) {
+        tryStep('snap install certbot', 'snap', ['install', '--classic', 'certbot']);
+        tryStep('snap link certbot', 'ln', ['-s', '/snap/bin/certbot', '/usr/bin/certbot']);
+      }
+
+      const updated = this.getCertbotStatus();
+      return { success: updated.installed, ...updated, osInfo, steps, logs };
     } catch (err) {
       return { success: false, error: err.message };
     }

@@ -106,6 +106,24 @@ router.post('/ssl/install', (req, res, next) => {
   }
 });
 
+router.get('/ssl/status', (req, res, next) => {
+  try {
+    const status = nginxManager.getCertbotStatus();
+    res.json(status);
+  } catch (err) {
+    next(err);
+  }
+});
+
+router.post('/ssl/install-certbot', (req, res, next) => {
+  try {
+    const result = nginxManager.installCertbot();
+    res.json(result);
+  } catch (err) {
+    next(err);
+  }
+});
+
 router.get('/ssl/certs', (req, res, next) => {
   try {
     const certs = nginxManager.listCerts();
