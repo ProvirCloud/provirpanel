@@ -22,6 +22,53 @@ const STATUS_COLORS = {
 
 const CHART_COLORS = ['#10b981', '#3b82f6', '#f59e0b', '#ef4444']
 
+const AlertDialog = ({ title, message, onClose }) => {
+  const lines = Array.isArray(message) ? message : String(message || '').split('\n')
+  return (
+    <div className="fixed inset-0 z-40 flex items-center justify-center bg-black/60 p-4">
+      <div className="w-full max-w-md rounded-2xl border border-slate-800 bg-slate-900/90 p-6 text-slate-100">
+        <h3 className="text-lg font-semibold">{title}</h3>
+        <div className="mt-3 space-y-1 text-sm text-slate-300">
+          {lines.map((line, idx) => (
+            <p key={idx}>{line}</p>
+          ))}
+        </div>
+        <div className="mt-5 flex justify-end">
+          <button
+            onClick={onClose}
+            className="rounded-xl bg-blue-500 px-4 py-2 text-xs font-semibold text-slate-950"
+          >
+            OK
+          </button>
+        </div>
+      </div>
+    </div>
+  )
+}
+
+const ConfirmDialog = ({ title, message, confirmText = 'Confirmar', onConfirm, onCancel }) => (
+  <div className="fixed inset-0 z-40 flex items-center justify-center bg-black/60 p-4">
+    <div className="w-full max-w-md rounded-2xl border border-slate-800 bg-slate-900/90 p-6 text-slate-100">
+      <h3 className="text-lg font-semibold">{title}</h3>
+      <p className="mt-3 text-sm text-slate-300">{message}</p>
+      <div className="mt-5 flex gap-2 justify-end">
+        <button
+          onClick={onConfirm}
+          className="rounded-xl bg-rose-500 px-4 py-2 text-xs font-semibold text-slate-950"
+        >
+          {confirmText}
+        </button>
+        <button
+          onClick={onCancel}
+          className="rounded-xl border border-slate-800 bg-slate-950 px-4 py-2 text-xs text-slate-200"
+        >
+          Cancelar
+        </button>
+      </div>
+    </div>
+  </div>
+)
+
 // ==================== SERVER LIST COMPONENT ====================
 const ServersList = ({ servers, selectedServer, onSelect, onToggle, onDelete, onRefresh }) => {
   const [searchTerm, setSearchTerm] = useState('')
@@ -112,7 +159,7 @@ const ServersList = ({ servers, selectedServer, onSelect, onToggle, onDelete, on
 }
 
 // ==================== SERVER FORM COMPONENT ====================
-const ServerForm = ({ server, onSave, onCancel, dockerContainers }) => {
+const ServerForm = ({ server, onSave, onCancel, dockerContainers, onNotify }) => {
   const [form, setForm] = useState({
     name: '',
     primary_domain: '',
@@ -166,7 +213,7 @@ const ServerForm = ({ server, onSave, onCancel, dockerContainers }) => {
 
   const handleSave = async () => {
     if (!form.name || !form.primary_domain) {
-      alert('Nome e domínio são obrigatórios')
+      onNotify?.('Campos obrigatorios', 'Nome e dominio sao obrigatorios')
       return
     }
     setSaving(true)
@@ -1044,7 +1091,7 @@ const MetricsPanel = ({ serverId }) => {
 }
 
 // ==================== SSL CERTIFICATES PANEL ====================
-const SSLPanel = ({ serverId }) => {
+const SSLPanel = ({ serverId, onNotify }) => {
   const [certs, setCerts] = useState([])
   const [loading, setLoading] = useState(true)
 
@@ -1068,10 +1115,10 @@ const SSLPanel = ({ serverId }) => {
   const renewCert = async (certId) => {
     try {
       await api.post(`/api/nginx/certs/${certId}/renew`)
-      alert('Certificado renovado!')
+      onNotify?.('Certificado renovado', 'Renovacao concluida com sucesso')
       loadCerts()
     } catch (err) {
-      alert(`Erro: ${err.response?.data?.error || err.message}`)
+      onNotify?.('Erro ao renovar certificado', err.response?.data?.error || err.message)
     }
   }
 
@@ -1080,7 +1127,7 @@ const SSLPanel = ({ serverId }) => {
       await api.patch(`/api/nginx/certs/${certId}/auto-renew`, { autoRenew: !currentValue })
       loadCerts()
     } catch (err) {
-      alert(`Erro: ${err.response?.data?.error || err.message}`)
+      onNotify?.('Erro ao atualizar auto-renovacao', err.response?.data?.error || err.message)
     }
   }
 
@@ -1164,7 +1211,7 @@ const SSLPanel = ({ serverId }) => {
                 <button
                   onClick={() => {
                     navigator.clipboard.writeText(cert.cert_path)
-                    alert('Caminho copiado!')
+                    onNotify?.('Caminho copiado', cert.cert_path || '')
                   }}
                   className="rounded-lg border border-slate-700 bg-slate-800 px-2 py-1 text-xs text-slate-300 hover:bg-slate-700"
                 >
@@ -1198,6 +1245,16 @@ const NginxVisualManager = () => {
   const [importing, setImporting] = useState(false)
   const [error, setError] = useState('')
   const [testResult, setTestResult] = useState(null)
+  const [alertDialog, setAlertDialog] = useState(null)
+  const [confirmDialog, setConfirmDialog] = useState(null)
+
+  const showAlert = (title, message) => {
+    setAlertDialog({ title, message })
+  }
+
+  const showConfirm = (title, message, onConfirm, confirmText) => {
+    setConfirmDialog({ title, message, onConfirm, confirmText })
+  }
 
   const loadData = async () => {
     setLoading(true)
@@ -1242,9 +1299,9 @@ const NginxVisualManager = () => {
       }
       setShowNewServer(false)
       loadData()
-      alert('Servidor salvo!')
+      showAlert('Servidor salvo', 'As configuracoes foram atualizadas')
     } catch (err) {
-      alert(`Erro: ${err.response?.data?.error || err.message}`)
+      showAlert('Erro ao salvar servidor', err.response?.data?.error || err.message)
     }
   }
 
@@ -1253,41 +1310,49 @@ const NginxVisualManager = () => {
       await api.put(`/api/nginx/servers/${server.id}`, { is_active: !server.is_active })
       loadData()
     } catch (err) {
-      alert(`Erro: ${err.response?.data?.error || err.message}`)
+      showAlert('Erro ao alterar status', err.response?.data?.error || err.message)
     }
   }
 
   const handleDeleteServer = async (server) => {
-    if (!confirm(`Deletar ${server.name}?`)) return
-    try {
-      await api.delete(`/api/nginx/servers/${server.id}`)
-      if (selectedServer?.id === server.id) {
-        setSelectedServer(null)
-      }
-      loadData()
-    } catch (err) {
-      alert(`Erro: ${err.response?.data?.error || err.message}`)
-    }
+    showConfirm(
+      'Remover servidor',
+      `Deletar ${server.name}?`,
+      async () => {
+        try {
+          await api.delete(`/api/nginx/servers/${server.id}`)
+          if (selectedServer?.id === server.id) {
+            setSelectedServer(null)
+          }
+          loadData()
+        } catch (err) {
+          showAlert('Erro ao deletar servidor', err.response?.data?.error || err.message)
+        } finally {
+          setConfirmDialog(null)
+        }
+      },
+      'Deletar'
+    )
   }
 
   const handleApplyConfig = async () => {
     if (!selectedServer?.id) return
     try {
       await api.post(`/api/nginx/servers/${selectedServer.id}/apply-config`)
-      alert('Configuração aplicada!')
+      showAlert('Configuracao aplicada', 'O Nginx foi atualizado com sucesso')
       loadData()
     } catch (err) {
-      alert(`Erro: ${err.response?.data?.error || err.message}`)
+      showAlert('Erro ao aplicar configuracao', err.response?.data?.error || err.message)
     }
   }
 
   const handleReload = async () => {
     try {
       await api.post('/api/nginx/reload')
-      alert('Nginx recarregado!')
+      showAlert('Nginx recarregado', 'As configuracoes foram recarregadas')
       loadData()
     } catch (err) {
-      alert(`Erro: ${err.response?.data?.error || err.message}`)
+      showAlert('Erro ao recarregar Nginx', err.response?.data?.error || err.message)
     }
   }
 
@@ -1297,9 +1362,18 @@ const NginxVisualManager = () => {
       const result = await api.post('/api/nginx/import-configs')
       loadData()
       const importedCount = result.data?.imported?.length || 0
-      alert(`Importação concluída: ${importedCount} configuração(ões)`)
+      const updatedCount = result.data?.updated?.length || 0
+      const skippedCount = result.data?.skipped?.length || 0
+      const errorCount = result.data?.errors?.length || 0
+      const message = [
+        `Importados: ${importedCount}`,
+        `Atualizados: ${updatedCount}`,
+        `Ignorados: ${skippedCount}`,
+        `Erros: ${errorCount}`
+      ]
+      showAlert('Importacao concluida', message)
     } catch (err) {
-      alert(`Erro ao importar: ${err.response?.data?.error || err.message}`)
+      showAlert('Erro ao importar', err.response?.data?.error || err.message)
     } finally {
       setImporting(false)
     }
@@ -1471,6 +1545,7 @@ const NginxVisualManager = () => {
                 onSave={handleSaveServer}
                 onCancel={showNewServer ? () => setShowNewServer(false) : null}
                 dockerContainers={dockerContainers}
+                onNotify={showAlert}
               />
             )}
 
@@ -1483,7 +1558,7 @@ const NginxVisualManager = () => {
             )}
 
             {selectedServer && activeTab === 'ssl' && (
-              <SSLPanel serverId={selectedServer.id} />
+              <SSLPanel serverId={selectedServer.id} onNotify={showAlert} />
             )}
 
             {!selectedServer && !showNewServer && (
@@ -1498,6 +1573,22 @@ const NginxVisualManager = () => {
           </div>
         </div>
       </div>
+      {alertDialog && (
+        <AlertDialog
+          title={alertDialog.title}
+          message={alertDialog.message}
+          onClose={() => setAlertDialog(null)}
+        />
+      )}
+      {confirmDialog && (
+        <ConfirmDialog
+          title={confirmDialog.title}
+          message={confirmDialog.message}
+          confirmText={confirmDialog.confirmText}
+          onConfirm={confirmDialog.onConfirm}
+          onCancel={() => setConfirmDialog(null)}
+        />
+      )}
     </div>
   )
 }
