@@ -26,6 +26,14 @@ npm install
 
 # Verificar se Prisma precisa ser configurado
 if [[ -f "prisma/schema.prisma" ]]; then
+  # Carregar variáveis de ambiente do backend
+  if [[ -f "backend/.env" ]]; then
+    log "Carregando variáveis de ambiente"
+    set -a
+    source backend/.env
+    set +a
+  fi
+
   log "Gerando Prisma Client"
   npx prisma generate
 

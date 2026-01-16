@@ -176,17 +176,12 @@ SQL
   sudo -u postgres psql -c "SELECT 1 FROM pg_database WHERE datname = 'provirpanel'" | grep -q 1 || \
     sudo -u postgres createdb -O provirpanel provirpanel
 
-  # Executar schema como root e depois conectar como provirpanel
-  if [[ -f "${INSTALL_DIR}/backend/src/config/schema.sql" ]]; then
-    sudo -u postgres psql provirpanel < "${INSTALL_DIR}/backend/src/config/schema.sql"
-  else
-    log "Warning: schema.sql not found, skipping database schema setup"
-  fi
-  
   # Garantir permissões para o usuário provirpanel
   sudo -u postgres psql provirpanel -c "GRANT ALL PRIVILEGES ON ALL TABLES IN SCHEMA public TO provirpanel;"
   sudo -u postgres psql provirpanel -c "GRANT ALL PRIVILEGES ON ALL SEQUENCES IN SCHEMA public TO provirpanel;"
   sudo -u postgres psql provirpanel -c "ALTER DEFAULT PRIVILEGES IN SCHEMA public GRANT ALL ON TABLES TO provirpanel;"
+
+  # Note: Tables are now created via Prisma in setup_prisma()
 }
 
 install_dependencies() {
@@ -238,6 +233,34 @@ ENV
   chown provirpanel:provirpanel "${env_file}"
   mkdir -p "${INSTALL_DIR}/projects"
   chown -R provirpanel:provirpanel "${INSTALL_DIR}/projects"
+}
+
+setup_prisma() {
+  log "Setting up Prisma ORM"
+
+  # Check if prisma schema exists
+  if [[ -f "${INSTALL_DIR}/prisma/schema.prisma" ]]; then
+    cd "${INSTALL_DIR}"
+
+    # Load environment variables
+    if [[ -f "backend/.env" ]]; then
+      set -a
+      source backend/.env
+      set +a
+    fi
+
+    # Generate Prisma Client
+    log "Generating Prisma Client"
+    npx prisma generate
+
+    # Push schema to database (creates tables)
+    log "Creating database tables via Prisma"
+    npx prisma db push --skip-generate --accept-data-loss || {
+      log "Warning: prisma db push failed, tables may need manual creation"
+    }
+
+    chown -R provirpanel:provirpanel "${INSTALL_DIR}"
+  fi
 }
 
 configure_nginx() {
@@ -362,6 +385,7 @@ main() {
   install_dependencies
   build_frontend
   configure_env
+  setup_prisma
   configure_nginx
   configure_pm2
   create_admin_user

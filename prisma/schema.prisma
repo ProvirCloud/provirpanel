@@ -7,6 +7,9 @@ datasource db {
   url      = env("DATABASE_URL")
 }
 
+// Note: DATABASE_URL is read from backend/.env
+// Format: postgres://user:password@host:port/database
+
 // ==================== EXISTING TABLES ====================
 
 model User {
