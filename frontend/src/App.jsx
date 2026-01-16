@@ -10,6 +10,7 @@ import DomainsPanel from './components/DomainsPanel.jsx'
 import UsersPanel from './components/UsersPanel.jsx'
 import LogsPanel from './components/LogsPanel.jsx'
 import NginxPanel from './components/NginxPanel.jsx'
+import NginxVisualManager from './components/NginxVisualManager.jsx'
 import api from './services/api.js'
 
 const App = () => {
@@ -100,7 +101,8 @@ const App = () => {
           <Route index element={<Dashboard />} />
           <Route path="terminal" element={<Terminal />} />
           <Route path="docker" element={<DockerPanel />} />
-          <Route path="nginx" element={<NginxPanel />} />
+          <Route path="nginx" element={<NginxVisualManager />} />
+          <Route path="nginx-legacy" element={<NginxPanel />} />
           <Route path="domains" element={<DomainsPanel />} />
           <Route path="files" element={<FileManager />} />
           <Route path="users" element={<UsersPanel />} />

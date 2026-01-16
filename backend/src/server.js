@@ -19,10 +19,12 @@ const cicdRoutes = require('./routes/ci-cd');
 const domainsRoutes = require('./routes/domains');
 const logsRoutes = require('./routes/logs');
 const nginxRoutes = require('./routes/nginx');
+const nginxServersRoutes = require('./routes/nginx-servers');
 const authMiddleware = require('./middleware/auth');
 const errorHandler = require('./middleware/errorHandler');
 const MetricsCollector = require('./services/MetricsCollector');
 const DockerManager = require('./services/DockerManager');
+const NginxLogWatcher = require('./services/NginxLogWatcher');
 const pool = require('./config/database');
 
 const app = express();
@@ -52,6 +54,7 @@ app.use('/storage', authMiddleware, storageRoutes);
 app.use('/ci-cd', authMiddleware, cicdRoutes);
 app.use('/domains', authMiddleware, domainsRoutes);
 app.use('/nginx', authMiddleware, nginxRoutes);
+app.use('/api/nginx', authMiddleware, nginxServersRoutes);
 
 app.use(errorHandler);
 
@@ -72,6 +75,12 @@ io.on('connection', (socket) => {
 
 terminalRoutes.initTerminalSocket(io);
 dockerRoutes.initDockerSocket(io);
+
+// Initialize Nginx Log Watcher for real-time logs
+const nginxLogWatcher = new NginxLogWatcher(io);
+nginxLogWatcher.init().catch(err => {
+  console.warn('[NginxLogWatcher] Failed to initialize:', err.message);
+});
 
 const metricsCollector = new MetricsCollector();
 const dockerManager = new DockerManager();

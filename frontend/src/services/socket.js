@@ -37,3 +37,12 @@ export const createMetricsSocket = (token) => {
     auth: { token }
   })
 }
+
+export const createNginxLogsSocket = (token) => {
+  if (!token) {
+    return null
+  }
+  return io(`${baseUrl}/api/nginx/logs`, {
+    auth: { token }
+  })
+}
