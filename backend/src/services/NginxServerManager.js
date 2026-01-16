@@ -969,41 +969,45 @@ ${buildProxyBlock(proxyTarget)}    }
   }
 
   async importConfig(configData) {
-    // Check if already imported
     const existing = await prisma.nginxServer.findFirst({
       where: { primaryDomain: configData.primary_domain }
     });
 
-    if (existing) {
-      return { success: false, error: 'Server already exists', existing: this.formatServerForApi(existing) };
-    }
+    const data = {
+      name: configData.name,
+      primaryDomain: configData.primary_domain,
+      additionalDomains: configData.additional_domains || [],
+      upstreamServers: configData.upstream_servers || [],
+      pathRules: configData.path_rules || [],
+      serverType: configData.server_type || 'proxy',
+      listenPort: configData.listen_port || 80,
+      sslType: configData.ssl_type || 'none',
+      sslCertPath: configData.ssl_cert_path,
+      sslKeyPath: configData.ssl_key_path,
+      proxyHost: configData.proxy_host || 'localhost',
+      proxyPort: configData.proxy_port || 3000,
+      rootPath: configData.root_path || '/var/www/html',
+      websocketEnabled: configData.websocket_enabled ?? true,
+      forwardHeaders: configData.forward_headers ?? true,
+      clientMaxBodySize: configData.client_max_body_size || '50m',
+      proxyConnectTimeout: configData.proxy_connect_timeout || '5s',
+      proxyReadTimeout: configData.proxy_read_timeout || '60s',
+      proxySendTimeout: configData.proxy_send_timeout || '60s',
+      isActive: configData.is_enabled ?? true,
+      configFilePath: configData.config_file_path,
+      notes: `Imported from ${configData.filename}`
+    };
 
-    const server = await prisma.nginxServer.create({
-      data: {
-        name: configData.name,
-        primaryDomain: configData.primary_domain,
-        additionalDomains: configData.additional_domains || [],
-        upstreamServers: configData.upstream_servers || [],
-        pathRules: configData.path_rules || [],
-        serverType: configData.server_type || 'proxy',
-        listenPort: configData.listen_port || 80,
-        sslType: configData.ssl_type || 'none',
-        sslCertPath: configData.ssl_cert_path,
-        sslKeyPath: configData.ssl_key_path,
-        proxyHost: configData.proxy_host || 'localhost',
-        proxyPort: configData.proxy_port || 3000,
-        rootPath: configData.root_path || '/var/www/html',
-        websocketEnabled: configData.websocket_enabled ?? true,
-        forwardHeaders: configData.forward_headers ?? true,
-        clientMaxBodySize: configData.client_max_body_size || '50m',
-        proxyConnectTimeout: configData.proxy_connect_timeout || '5s',
-        proxyReadTimeout: configData.proxy_read_timeout || '60s',
-        proxySendTimeout: configData.proxy_send_timeout || '60s',
-        isActive: configData.is_enabled ?? true,
-        configFilePath: configData.config_file_path,
-        notes: `Imported from ${configData.filename}`
-      }
-    });
+    const server = existing
+      ? await prisma.nginxServer.update({
+          where: { id: existing.id },
+          data,
+          include: { sslCerts: true }
+        })
+      : await prisma.nginxServer.create({
+          data,
+          include: { sslCerts: true }
+        });
 
     // Sync SSL cert if exists
     if (configData.ssl_cert_path && fs.existsSync(configData.ssl_cert_path)) {
@@ -1015,13 +1019,14 @@ ${buildProxyBlock(proxyTarget)}    }
       );
     }
 
-    return { success: true, server: this.formatServerForApi(server) };
+    return { success: true, updated: !!existing, server: this.formatServerForApi(server) };
   }
 
   async importAllConfigs() {
     const configs = await this.scanExistingConfigs();
     const results = {
       imported: [],
+      updated: [],
       skipped: [],
       errors: []
     };
@@ -1030,9 +1035,11 @@ ${buildProxyBlock(proxyTarget)}    }
       try {
         const result = await this.importConfig(config);
         if (result.success) {
-          results.imported.push({ domain: config.primary_domain, server: result.server });
-        } else if (result.existing) {
-          results.skipped.push({ domain: config.primary_domain, reason: result.error });
+          if (result.updated) {
+            results.updated.push({ domain: config.primary_domain, server: result.server });
+          } else {
+            results.imported.push({ domain: config.primary_domain, server: result.server });
+          }
         }
       } catch (err) {
         results.errors.push({ domain: config.primary_domain, error: err.message });
