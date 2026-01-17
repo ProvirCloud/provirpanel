@@ -1174,6 +1174,11 @@ const DockerPanel = () => {
                           {svc.image} • Porta {svc.hostPort} → {svc.containerPort} • Rede: {svc.networkName || 'bridge'}
                           {svc.hasProject && ' • 📁 Com projeto exemplo'}
                         </p>
+                        {!svc.bindLocalOnly && (
+                          <p className="text-[11px] text-rose-300 mt-1">
+                            Porta exposta publicamente. Use apenas se necessario.
+                          </p>
+                        )}
                         <div className="flex flex-wrap gap-2 mt-1">
                           <a
                             className="text-xs text-blue-300 underline"
