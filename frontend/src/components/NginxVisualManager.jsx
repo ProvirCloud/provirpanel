@@ -365,7 +365,7 @@ const ServerForm = ({ server, onSave, onCancel, dockerContainers, onNotify }) =>
         return
       }
       try {
-        const res = await api.get(`/api/nginx/servers/${server.id}/current-config`)
+        const res = await api.get(`/nginx/servers/${server.id}/current-config`)
         setEditorContent(res.data?.content || '')
       } catch (err) {
         setEditorContent('')
@@ -389,7 +389,7 @@ const ServerForm = ({ server, onSave, onCancel, dockerContainers, onNotify }) =>
   const generatePreviewFromForm = async () => {
     setPreviewLoading(true)
     try {
-      const res = await api.post('/api/nginx/preview-config', form)
+      const res = await api.post('/nginx/preview-config', form)
       const content = res.data?.config || ''
       setEditorContent(content)
       setPreviewWarnings(validateConfigText(content))
@@ -406,7 +406,7 @@ const ServerForm = ({ server, onSave, onCancel, dockerContainers, onNotify }) =>
       return
     }
     try {
-      const res = await api.post('/api/nginx/parse-config', {
+      const res = await api.post('/nginx/parse-config', {
         content: editorContent,
         filename: `${form.primary_domain || 'server'}.conf`
       })
@@ -1168,7 +1168,7 @@ const MetricsPanel = ({ serverId }) => {
   const loadMetrics = async () => {
     setLoading(true)
     try {
-      const endpoint = serverId ? `/api/nginx/servers/${serverId}/metrics` : '/api/nginx/metrics'
+      const endpoint = serverId ? `/nginx/servers/${serverId}/metrics` : '/nginx/metrics'
       const res = await api.get(`${endpoint}?period=${period}`)
       setMetrics(res.data)
     } catch (err) {
@@ -1389,7 +1389,7 @@ const SSLPanel = ({ serverId, onNotify }) => {
   const loadCerts = async () => {
     setLoading(true)
     try {
-      const endpoint = serverId ? `/api/nginx/servers/${serverId}/certs` : '/api/nginx/certs'
+      const endpoint = serverId ? `/nginx/servers/${serverId}/certs` : '/nginx/certs'
       const res = await api.get(endpoint)
       setCerts(res.data.certs || [])
     } catch (err) {
@@ -1405,7 +1405,7 @@ const SSLPanel = ({ serverId, onNotify }) => {
 
   const renewCert = async (certId) => {
     try {
-      await api.post(`/api/nginx/certs/${certId}/renew`)
+      await api.post(`/nginx/certs/${certId}/renew`)
       onNotify?.('Certificado renovado', 'Renovacao concluida com sucesso')
       loadCerts()
     } catch (err) {
@@ -1415,7 +1415,7 @@ const SSLPanel = ({ serverId, onNotify }) => {
 
   const toggleAutoRenew = async (certId, currentValue) => {
     try {
-      await api.patch(`/api/nginx/certs/${certId}/auto-renew`, { autoRenew: !currentValue })
+      await api.patch(`/nginx/certs/${certId}/auto-renew`, { autoRenew: !currentValue })
       loadCerts()
     } catch (err) {
       onNotify?.('Erro ao atualizar auto-renovacao', err.response?.data?.error || err.message)
@@ -1553,14 +1553,14 @@ const NginxVisualManager = () => {
     setError('')
     try {
       try {
-        await api.post('/api/nginx/import-configs')
+        await api.post('/nginx/import-configs')
       } catch (importErr) {
         console.warn('Failed to import nginx configs:', importErr.message)
       }
 
       const [serversRes, statusRes, dockerRes] = await Promise.all([
-        api.get('/api/nginx/servers'),
-        api.get('/api/nginx/status'),
+        api.get('/nginx/servers'),
+        api.get('/nginx/status'),
         api.get('/nginx/docker-containers')
       ])
       setServers(serversRes.data.servers || [])
@@ -1568,7 +1568,7 @@ const NginxVisualManager = () => {
       setDockerContainers(dockerRes.data.containers || [])
 
       // Test config
-      const testRes = await api.post('/api/nginx/test')
+      const testRes = await api.post('/nginx/test')
       setTestResult(testRes.data)
     } catch (err) {
       setError(err.response?.data?.error || err.message)
@@ -1584,9 +1584,9 @@ const NginxVisualManager = () => {
   const handleSaveServer = async (form) => {
     try {
       if (selectedServer?.id) {
-        await api.put(`/api/nginx/servers/${selectedServer.id}`, form)
+        await api.put(`/nginx/servers/${selectedServer.id}`, form)
       } else {
-        const res = await api.post('/api/nginx/servers', form)
+        const res = await api.post('/nginx/servers', form)
         setSelectedServer(res.data)
       }
       setShowNewServer(false)
@@ -1599,7 +1599,7 @@ const NginxVisualManager = () => {
 
   const handleToggleServer = async (server) => {
     try {
-      await api.put(`/api/nginx/servers/${server.id}`, { is_active: !server.is_active })
+      await api.put(`/nginx/servers/${server.id}`, { is_active: !server.is_active })
       loadData()
     } catch (err) {
       showAlert('Erro ao alterar status', err.response?.data?.error || err.message)
@@ -1612,7 +1612,7 @@ const NginxVisualManager = () => {
       `Deletar ${server.name}?`,
       async () => {
         try {
-          await api.delete(`/api/nginx/servers/${server.id}`)
+          await api.delete(`/nginx/servers/${server.id}`)
           if (selectedServer?.id === server.id) {
             setSelectedServer(null)
           }
@@ -1630,7 +1630,7 @@ const NginxVisualManager = () => {
   const handleApplyConfig = async () => {
     if (!selectedServer?.id) return
     try {
-      await api.post(`/api/nginx/servers/${selectedServer.id}/apply-config`)
+      await api.post(`/nginx/servers/${selectedServer.id}/apply-config`)
       showAlert('Configuracao aplicada', 'O Nginx foi atualizado com sucesso')
       loadData()
     } catch (err) {
@@ -1640,7 +1640,7 @@ const NginxVisualManager = () => {
 
   const handleReload = async () => {
     try {
-      await api.post('/api/nginx/reload')
+      await api.post('/nginx/reload')
       showAlert('Nginx recarregado', 'As configuracoes foram recarregadas')
       loadData()
     } catch (err) {
@@ -1653,7 +1653,7 @@ const NginxVisualManager = () => {
     setImportStatus('Importando configuracoes do Nginx...')
     showAlert('Importando configuracoes', 'Aguarde...')
     try {
-      const result = await api.post('/api/nginx/import-configs')
+      const result = await api.post('/nginx/import-configs')
       await loadData()
       const importedCount = result.data?.imported?.length || 0
       const updatedCount = result.data?.updated?.length || 0
