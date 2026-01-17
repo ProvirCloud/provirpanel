@@ -1488,32 +1488,6 @@ const ServerForm = ({ server, onSave, onApply, onCancel, dockerContainers, onNot
               <Edit2 className="h-4 w-4" />
               Configuracao avancada
             </h3>
-            <p className="text-xs text-amber-300 mb-3">
-              Alterar a configuracao padrao pode derrubar o painel. Se isso acontecer, use o
-              comando `sudo bash reset-nginx.sh` na instancia para recuperar.
-            </p>
-            {routeWarnings.length > 0 && (
-              <div className="rounded-lg border border-amber-800 bg-amber-950/40 px-3 py-2 text-xs text-amber-200 mb-3">
-                {routeWarnings.map((warn, idx) => (
-                  <p key={idx}>{warn}</p>
-                ))}
-              </div>
-            )}
-            <div className="flex items-center gap-2 mb-3">
-              <button
-                onClick={generatePreviewFromForm}
-                className="rounded-lg bg-blue-500 px-3 py-1 text-xs font-semibold text-white hover:bg-blue-600"
-                disabled={previewLoading}
-              >
-                {previewLoading ? 'Gerando...' : 'Gerar preview'}
-              </button>
-              <button
-                onClick={reloadFieldsFromEditor}
-                className="rounded-lg border border-slate-700 bg-slate-800 px-3 py-1 text-xs text-slate-200 hover:bg-slate-700"
-              >
-                Recarregar campos do editor
-              </button>
-            </div>
             <textarea
               value={editorContent}
               onChange={(e) => {
@@ -1523,13 +1497,6 @@ const ServerForm = ({ server, onSave, onApply, onCancel, dockerContainers, onNot
               className="h-64 w-full rounded-xl border border-slate-800 bg-slate-950 px-3 py-2 text-xs text-slate-100 font-mono"
               placeholder="Clique em Gerar preview para ver a configuracao aqui..."
             />
-            {previewWarnings.length > 0 && (
-              <div className="mt-3 rounded-lg border border-rose-900 bg-rose-950/40 px-3 py-2 text-xs text-rose-200">
-                {previewWarnings.map((warn, idx) => (
-                  <p key={idx}>Validacao: {warn}</p>
-                ))}
-              </div>
-            )}
           </div>
         )}
 
