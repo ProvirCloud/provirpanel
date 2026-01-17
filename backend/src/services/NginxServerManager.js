@@ -30,7 +30,25 @@ class NginxServerManager {
           orderBy: { createdAt: 'desc' }
         });
       }
-      return servers.map(s => this.formatServerForApi(s));
+      const updated = [];
+      for (const server of servers) {
+        const actualActive = this.resolveActiveFromFs(server);
+        if (actualActive !== server.isActive) {
+          try {
+            const refreshed = await prisma.nginxServer.update({
+              where: { id: server.id },
+              data: { isActive: actualActive },
+              include: { sslCerts: true }
+            });
+            updated.push(refreshed);
+            continue;
+          } catch {
+            // ignore sync errors
+          }
+        }
+        updated.push(server);
+      }
+      return updated.map(s => this.formatServerForApi(s));
     } catch (err) {
       if (err.code === 'P2021' || err.message?.includes('does not exist')) {
         console.warn('[NginxServerManager] Tables not created yet - run prisma db push');
@@ -46,7 +64,17 @@ class NginxServerManager {
         where: { id },
         include: { sslCerts: true }
       });
-      return server ? this.formatServerForApi(server) : null;
+      if (!server) return null;
+      const actualActive = this.resolveActiveFromFs(server);
+      if (actualActive !== server.isActive) {
+        const refreshed = await prisma.nginxServer.update({
+          where: { id },
+          data: { isActive: actualActive },
+          include: { sslCerts: true }
+        });
+        return this.formatServerForApi(refreshed);
+      }
+      return this.formatServerForApi(server);
     } catch (err) {
       if (err.code === 'P2021') return null;
       throw err;
@@ -223,6 +251,35 @@ class NginxServerManager {
       fingerprint: cert.fingerprint,
       created_at: cert.createdAt
     };
+  }
+
+  resolveActiveFromFs(server) {
+    try {
+      if (!server?.configFilePath) return server?.isActive ?? false;
+      const filePath = path.resolve(server.configFilePath);
+      const filename = path.basename(filePath);
+
+      if (fs.existsSync(this.confD) && filePath.startsWith(path.resolve(this.confD))) {
+        return true;
+      }
+
+      if (fs.existsSync(this.sitesEnabled)) {
+        const enabledPath = path.join(this.sitesEnabled, filename);
+        if (fs.existsSync(enabledPath)) return true;
+      }
+
+      if (fs.existsSync(this.sitesAvailable)) {
+        const availablePath = path.join(this.sitesAvailable, filename);
+        if (fs.existsSync(availablePath)) {
+          const enabledPath = path.join(this.sitesEnabled, filename);
+          return fs.existsSync(enabledPath);
+        }
+      }
+
+      return server.isActive ?? false;
+    } catch {
+      return server?.isActive ?? false;
+    }
   }
 
   // ==================== CONFIG GENERATION ====================
