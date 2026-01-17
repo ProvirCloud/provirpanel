@@ -260,7 +260,8 @@ const DockerPanel = () => {
       createProject: false,
       createManager: false,
       configureDb: null,
-      networkName: 'bridge'
+      networkName: 'bridge',
+      bindLocalOnly: true
     })
     
     // Scroll para o wizard quando aberto
@@ -495,7 +496,8 @@ const DockerPanel = () => {
         createManager: form.createManager,
         configureDb: form.configureDb,
         networkName: form.networkName,
-        command: form.command
+        command: form.command,
+        bindLocalOnly: form.bindLocalOnly
       }, {
         timeout: 120000 // 2 minute timeout
       })
@@ -634,6 +636,21 @@ const DockerPanel = () => {
                 ? `URL de teste: http://localhost:${serviceForm.hostPort}`
                 : 'Deixe vazio para seleção automática de porta'
               }
+            </p>
+          </div>
+
+          <div className="grid gap-2">
+            <label className="text-xs text-slate-300">Exposição da porta</label>
+            <label className="flex items-center gap-2 text-xs text-slate-300">
+              <input
+                type="checkbox"
+                checked={serviceForm.bindLocalOnly}
+                onChange={(e) => setServiceForm((p) => ({ ...p, bindLocalOnly: e.target.checked }))}
+              />
+              Expor apenas em localhost (recomendado)
+            </label>
+            <p className="text-xs text-slate-400">
+              Quando ativo, a porta não fica acessível pelo IP público.
             </p>
           </div>
 
@@ -1166,7 +1183,7 @@ const DockerPanel = () => {
                           >
                             localhost:{svc.hostPort}
                           </a>
-                          {svc.serverIP && svc.serverIP !== 'localhost' && (
+                          {svc.serverIP && svc.serverIP !== 'localhost' && !svc.bindLocalOnly && (
                             <a
                               className="text-xs text-emerald-300 underline"
                               href={svc.externalUrl}
@@ -1177,6 +1194,9 @@ const DockerPanel = () => {
                             </a>
                           )}
                         </div>
+                        {svc.bindLocalOnly && (
+                          <p className="text-[11px] text-amber-300 mt-1">Acesso publico desativado</p>
+                        )}
                         {managerService && (
                           <div className="mt-2 p-2 rounded-lg border border-emerald-500/30 bg-emerald-500/10">
                             <p className="text-xs text-emerald-300 font-semibold">🔧 pgAdmin disponível:</p>
@@ -1189,7 +1209,7 @@ const DockerPanel = () => {
                               >
                                 localhost:{managerService.hostPort}
                               </a>
-                              {managerService.serverIP && managerService.serverIP !== 'localhost' && (
+                              {managerService.serverIP && managerService.serverIP !== 'localhost' && !managerService.bindLocalOnly && (
                                 <a
                                   className="text-xs text-emerald-400 underline"
                                   href={managerService.externalUrl}
@@ -1230,6 +1250,7 @@ const DockerPanel = () => {
                                 ...env,
                                 value: env.secret ? '******' : env.value
                               })),
+                              newBindLocalOnly: svc.bindLocalOnly ?? false,
                               commandInput: formatCommandForInput(svc.command),
                               newProjectArchive: null
                             })
@@ -1485,6 +1506,20 @@ const DockerPanel = () => {
                   📌 Serviços na mesma rede podem se comunicar pelo nome
                 </p>
               </div>
+              <div>
+                <label className="block text-sm text-slate-300 mb-2">Exposição da porta</label>
+                <label className="flex items-center gap-2 text-xs text-slate-300">
+                  <input
+                    type="checkbox"
+                    checked={editDialog.newBindLocalOnly ?? editDialog.bindLocalOnly ?? false}
+                    onChange={(e) => setEditDialog(prev => ({ ...prev, newBindLocalOnly: e.target.checked }))}
+                  />
+                  Expor apenas em localhost
+                </label>
+                <p className="text-xs text-slate-400 mt-1">
+                  Quando ativo, a porta não fica acessível pelo IP público.
+                </p>
+              </div>
               {editDialog.volumes?.length > 0 && (
                 <div>
                   <label className="block text-sm text-slate-300 mb-2">Volume do projeto</label>
@@ -1724,7 +1759,8 @@ const DockerPanel = () => {
                     hostPort: editDialog.newHostPort || editDialog.hostPort,
                     envVars: editDialog.newEnvVars || [],
                     networkName: editDialog.newNetworkName || editDialog.networkName,
-                    command: editDialog.commandInput || ''
+                    command: editDialog.commandInput || '',
+                    bindLocalOnly: editDialog.newBindLocalOnly ?? editDialog.bindLocalOnly ?? false
                   });
                   setEditDialog(null);
                 }}

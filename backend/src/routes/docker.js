@@ -653,7 +653,19 @@ router.post('/services', async (req, res, next) => {
   const sessionId = crypto.randomUUID();
   
   try {
-    const { templateId, name, hostPort, volumeMappings = [], envVars = [], createProject = false, createManager = false, configureDb = null, networkName = 'bridge', command } = req.body || {};
+    const {
+      templateId,
+      name,
+      hostPort,
+      volumeMappings = [],
+      envVars = [],
+      createProject = false,
+      createManager = false,
+      configureDb = null,
+      networkName = 'bridge',
+      command,
+      bindLocalOnly = true
+    } = req.body || {};
     
     progress.push(`🔍 Validando configuração do serviço ${name}...`);
     
@@ -712,9 +724,12 @@ router.post('/services', async (req, res, next) => {
       progress.push(`✅ Porta ${resolvedPort} selecionada automaticamente`);
     }
 
+    const portBinding = bindLocalOnly
+      ? { HostPort: String(resolvedPort), HostIp: '127.0.0.1' }
+      : { HostPort: String(resolvedPort) };
     const hostConfig = {
       PortBindings: {
-        [`${template.containerPort}/tcp`]: [{ HostPort: String(resolvedPort) }]
+        [`${template.containerPort}/tcp`]: [portBinding]
       },
       Binds: volumeMappings
         .filter((m) => m.hostPath && m.containerPath)
@@ -867,9 +882,10 @@ router.post('/services', async (req, res, next) => {
         envVars: normalizedEnvVars,
         command: containerCmd || null,
         networkName,
+        bindLocalOnly,
         url: `http://localhost:${resolvedPort}`,
         serverIP: getLocalIP(),
-        externalUrl: `http://${getLocalIP()}:${resolvedPort}`,
+        externalUrl: bindLocalOnly ? null : `http://${getLocalIP()}:${resolvedPort}`,
         createdAt: new Date().toISOString(),
         hasProject: createProject && finalizedVolumes.length > 0 && templateId !== 'postgres-db'
       };
@@ -890,13 +906,16 @@ router.post('/services', async (req, res, next) => {
         }
         progress.push(`✅ Usando porta ${pgAdminPort} para pgAdmin`);
         
+        const pgAdminPortBinding = bindLocalOnly
+          ? { HostPort: String(pgAdminPort), HostIp: '127.0.0.1' }
+          : { HostPort: String(pgAdminPort) };
         const pgAdminConfig = {
           name: `${name}-pgadmin`,
           User: 'root',
           HostConfig: {
             NetworkMode: networkName,
             PortBindings: {
-              '80/tcp': [{ HostPort: String(pgAdminPort) }]
+              '80/tcp': [pgAdminPortBinding]
             }
           },
           Env: [
@@ -920,9 +939,10 @@ router.post('/services', async (req, res, next) => {
           containerPort: 80,
           volumes: [],
           networkName,
+          bindLocalOnly,
           url: `http://localhost:${pgAdminPort}`,
           serverIP: getLocalIP(),
-          externalUrl: `http://${getLocalIP()}:${pgAdminPort}`,
+          externalUrl: bindLocalOnly ? null : `http://${getLocalIP()}:${pgAdminPort}`,
           createdAt: new Date().toISOString(),
           parentService: serviceId,
           credentials: {
@@ -1047,7 +1067,7 @@ router.delete('/containers/:id', async (req, res, next) => {
 // Update service
 router.put('/services/:id', async (req, res, next) => {
   try {
-    const { hostPort, envVars = [], networkName, command } = req.body || {};
+    const { hostPort, envVars = [], networkName, command, bindLocalOnly } = req.body || {};
     const services = dockerManager.listServices();
     const service = services.find((s) => s.id === req.params.id);
     if (!service) {
@@ -1091,6 +1111,7 @@ router.put('/services/:id', async (req, res, next) => {
       appendServiceLog('warn', `Nao foi possivel resolver o diretorio do projeto para ${service.name}`);
     }
     const resolvedPort = newPort || service.hostPort;
+    const resolvedBindLocal = bindLocalOnly ?? service.bindLocalOnly ?? false;
     
     const resolvedEnvVars = mergeEnvVars(envVars, service.envVars || []);
     let env = [
@@ -1156,7 +1177,11 @@ router.put('/services/:id', async (req, res, next) => {
       HostConfig: {
         NetworkMode: networkName || service.networkName || 'bridge',
         PortBindings: {
-          [`${service.containerPort}/tcp`]: [{ HostPort: String(resolvedPort) }]
+          [`${service.containerPort}/tcp`]: [
+            resolvedBindLocal
+              ? { HostPort: String(resolvedPort), HostIp: '127.0.0.1' }
+              : { HostPort: String(resolvedPort) }
+          ]
         },
         Binds: service.volumes
           .filter((m) => m.hostPath && m.containerPath)
@@ -1193,9 +1218,10 @@ router.put('/services/:id', async (req, res, next) => {
       envVars: resolvedEnvVars,
       command: containerCmd || null,
       networkName: networkName || service.networkName,
+      bindLocalOnly: resolvedBindLocal,
       url: `http://localhost:${resolvedPort}`,
       serverIP: getLocalIP(),
-      externalUrl: `http://${getLocalIP()}:${resolvedPort}`,
+      externalUrl: resolvedBindLocal ? null : `http://${getLocalIP()}:${resolvedPort}`,
       updatedAt: new Date().toISOString()
     };
 
@@ -1319,7 +1345,11 @@ router.post('/services/:id/project-upload', upload.single('archive'), async (req
       HostConfig: {
         NetworkMode: service.networkName || 'bridge',
         PortBindings: {
-          [`${service.containerPort}/tcp`]: [{ HostPort: String(service.hostPort) }]
+          [`${service.containerPort}/tcp`]: [
+            service.bindLocalOnly
+              ? { HostPort: String(service.hostPort), HostIp: '127.0.0.1' }
+              : { HostPort: String(service.hostPort) }
+          ]
         },
         Binds: service.volumes
           .filter((m) => m.hostPath && m.containerPath)
