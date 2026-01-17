@@ -250,6 +250,7 @@ NGINX_ACCESS_LOG=/var/log/nginx/access.log
 NGINX_ERROR_LOG=/var/log/nginx/error.log
 NGINX_SSL_STORAGE=/etc/nginx/ssl
 NGINX_BACKUP_DIR=/etc/nginx/provirpanel-backups
+LETSENCRYPT_EMAIL=
 ENV
 
   ensure_env_var "${env_file}" "NGINX_CONFIG_PATH" "/etc/nginx"
@@ -261,6 +262,7 @@ ENV
   ensure_env_var "${env_file}" "NGINX_ERROR_LOG" "/var/log/nginx/error.log"
   ensure_env_var "${env_file}" "NGINX_SSL_STORAGE" "/etc/nginx/ssl"
   ensure_env_var "${env_file}" "NGINX_BACKUP_DIR" "/etc/nginx/provirpanel-backups"
+  ensure_env_var "${env_file}" "LETSENCRYPT_EMAIL" ""
 
   chown provirpanel:provirpanel "${env_file}"
   mkdir -p "${INSTALL_DIR}/projects"

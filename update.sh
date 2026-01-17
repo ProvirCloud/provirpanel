@@ -37,6 +37,7 @@ if [[ -f "${ENV_FILE}" ]]; then
   ensure_env_var "${ENV_FILE}" "NGINX_ERROR_LOG" "/var/log/nginx/error.log"
   ensure_env_var "${ENV_FILE}" "NGINX_SSL_STORAGE" "/etc/nginx/ssl"
   ensure_env_var "${ENV_FILE}" "NGINX_BACKUP_DIR" "/etc/nginx/provirpanel-backups"
+  ensure_env_var "${ENV_FILE}" "LETSENCRYPT_EMAIL" ""
 else
   log "Aviso: backend/.env nao encontrado, pulando configuracao do Nginx"
 fi

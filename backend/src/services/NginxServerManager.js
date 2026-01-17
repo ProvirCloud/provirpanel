@@ -529,6 +529,14 @@ ${buildProxyBlock(proxyTarget)}    }
       throw new Error('Server not found');
     }
 
+    let sslResult = null;
+    if (server.ssl_type === 'letsencrypt' && server.primary_domain) {
+      sslResult = this.ensureLetsEncryptCertificate(server.primary_domain);
+      if (!sslResult.success) {
+        throw new Error(sslResult.error || 'Falha ao gerar certificado Lets Encrypt');
+      }
+    }
+
     const config = this.generateNginxConfig(server);
     const configFileName = path.basename(server.config_file_path);
 
@@ -559,7 +567,54 @@ ${buildProxyBlock(proxyTarget)}    }
 
     this.reload();
 
-    return { success: true, config };
+    return { success: true, config, ssl: sslResult };
+  }
+
+  ensureLetsEncryptCertificate(domain) {
+    try {
+      const certPath = `/etc/letsencrypt/live/${domain}/fullchain.pem`;
+      const keyPath = `/etc/letsencrypt/live/${domain}/privkey.pem`;
+      if (fs.existsSync(certPath) && fs.existsSync(keyPath)) {
+        return { success: true, created: false, certPath, keyPath };
+      }
+
+      try {
+        execSync('command -v certbot', { stdio: 'pipe' });
+      } catch (err) {
+        try {
+          const NginxManager = require('./NginxManager');
+          const nginxManager = new NginxManager();
+          const installResult = nginxManager.installCertbot();
+          if (!installResult.success) {
+            return { success: false, error: installResult.error || 'Certbot nao instalado' };
+          }
+        } catch (installErr) {
+          return { success: false, error: installErr.message || 'Certbot nao instalado' };
+        }
+      }
+
+      const email =
+        process.env.LETSENCRYPT_EMAIL ||
+        process.env.SSL_EMAIL ||
+        process.env.DEFAULT_ADMIN_EMAIL ||
+        '';
+
+      const emailArgs = email
+        ? `--email ${email}`
+        : '--register-unsafely-without-email';
+      execSync(
+        `certbot certonly --nginx -d ${domain} --agree-tos --non-interactive ${emailArgs}`,
+        { stdio: 'inherit', timeout: 120000 }
+      );
+
+      if (!fs.existsSync(certPath) || !fs.existsSync(keyPath)) {
+        return { success: false, error: 'Certificado Lets Encrypt nao encontrado apos emissao' };
+      }
+
+      return { success: true, created: true, certPath, keyPath };
+    } catch (err) {
+      return { success: false, error: err.message };
+    }
   }
 
   createBackup(filePath) {
