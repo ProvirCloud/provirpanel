@@ -803,6 +803,7 @@ router.post('/services', async (req, res, next) => {
 
     let finalImageName = imageName;
     const normalizedCommand = normalizeCommand(command);
+    const hasUserCommand = !!normalizedCommand;
     let containerCmd = normalizedCommand || template.command;
     let containerUser = undefined;
 
@@ -830,22 +831,24 @@ router.post('/services', async (req, res, next) => {
     } else if (!createProject && templateId === 'node-app' && !normalizedCommand) {
       containerCmd = resolveNodeCommand(finalizedVolumes) || ['npm', 'start'];
     }
-    containerCmd = ensureCommandWorkdir(containerCmd, template.workdir);
-    const createCmdBefore = stringifyCommand(containerCmd);
-    containerCmd = ensureNpmDevDependencies(containerCmd);
-    const createAfterDev = stringifyCommand(containerCmd);
-    containerCmd = ensureNextBuildTimeout(containerCmd);
-    const createCmdAfter = stringifyCommand(containerCmd);
-    if (createAfterDev !== createCmdBefore) {
-      progress.push('ℹ️ Forcando instalacao de dependencias de desenvolvimento para build');
-    }
-    if (createCmdAfter !== createAfterDev) {
-      progress.push('ℹ️ Ajustando timeout do Next.js para build');
-    }
-    const envBefore = env;
-    env = ensureNextBuildEnv(env, containerCmd);
-    if (env !== envBefore) {
-      progress.push('ℹ️ Variavel de ambiente de timeout do Next.js adicionada');
+    if (!hasUserCommand) {
+      containerCmd = ensureCommandWorkdir(containerCmd, template.workdir);
+      const createCmdBefore = stringifyCommand(containerCmd);
+      containerCmd = ensureNpmDevDependencies(containerCmd);
+      const createAfterDev = stringifyCommand(containerCmd);
+      containerCmd = ensureNextBuildTimeout(containerCmd);
+      const createCmdAfter = stringifyCommand(containerCmd);
+      if (createAfterDev !== createCmdBefore) {
+        progress.push('ℹ️ Forcando instalacao de dependencias de desenvolvimento para build');
+      }
+      if (createCmdAfter !== createAfterDev) {
+        progress.push('ℹ️ Ajustando timeout do Next.js para build');
+      }
+      const envBefore = env;
+      env = ensureNextBuildEnv(env, containerCmd);
+      if (env !== envBefore) {
+        progress.push('ℹ️ Variavel de ambiente de timeout do Next.js adicionada');
+      }
     }
 
     const containerConfig = {
@@ -1162,21 +1165,26 @@ router.put('/services/:id', async (req, res, next) => {
     }
 
     const normalizedCommand = normalizeCommand(command);
+    const hasUserCommand = !!normalizedCommand;
     let containerCmd = normalizedCommand || service.command || template.command;
     if (service.templateId === 'node-app' && !normalizedCommand) {
       containerCmd = resolveNodeCommand(service.volumes) || containerCmd;
     }
-    containerCmd = ensureCommandWorkdir(containerCmd, workdir);
-    const updateCmdBefore = stringifyCommand(containerCmd);
-    containerCmd = ensureNpmDevDependencies(containerCmd);
-    const updateAfterDev = stringifyCommand(containerCmd);
-    containerCmd = ensureNextBuildTimeout(containerCmd);
-    const updateCmdAfter = stringifyCommand(containerCmd);
-    if (updateAfterDev !== updateCmdBefore) {
-      appendServiceLog('info', 'Forcando instalacao de dependencias de desenvolvimento para build');
+    if (!hasUserCommand) {
+    if (!hasUserCommand) {
+      containerCmd = ensureCommandWorkdir(containerCmd, workdir);
+      const updateCmdBefore = stringifyCommand(containerCmd);
+      containerCmd = ensureNpmDevDependencies(containerCmd);
+      const updateAfterDev = stringifyCommand(containerCmd);
+      containerCmd = ensureNextBuildTimeout(containerCmd);
+      const updateCmdAfter = stringifyCommand(containerCmd);
+      if (updateAfterDev !== updateCmdBefore) {
+        appendServiceLog('info', 'Forcando instalacao de dependencias de desenvolvimento para build');
+      }
+      if (updateCmdAfter !== updateAfterDev) {
+        appendServiceLog('info', 'Ajustando timeout do Next.js para build');
+      }
     }
-    if (updateCmdAfter !== updateAfterDev) {
-      appendServiceLog('info', 'Ajustando timeout do Next.js para build');
     }
     appendServiceLog(
       'info',
@@ -1187,10 +1195,14 @@ router.put('/services/:id', async (req, res, next) => {
     } else {
       appendServiceLog('warn', `WorkingDir nao resolvido para ${service.name}`);
     }
-    const envBeforeUpdate = env;
-    env = ensureNextBuildEnv(env, containerCmd);
-    if (env !== envBeforeUpdate) {
-      appendServiceLog('info', 'Variavel de ambiente de timeout do Next.js adicionada');
+    if (!hasUserCommand) {
+    if (!hasUserCommand) {
+      const envBeforeUpdate = env;
+      env = ensureNextBuildEnv(env, containerCmd);
+      if (env !== envBeforeUpdate) {
+        appendServiceLog('info', 'Variavel de ambiente de timeout do Next.js adicionada');
+      }
+    }
     }
 
     const containerConfig = {
@@ -1324,19 +1336,22 @@ router.post('/services/:id/project-upload', upload.single('archive'), async (req
       }
     }
 
+    const hasUserCommand = !!service.command;
     let containerCmd = service.command || template.command;
     containerCmd = resolveNodeCommand(service.volumes) || containerCmd;
-    containerCmd = ensureCommandWorkdir(containerCmd, workdir);
-    const uploadCmdBefore = stringifyCommand(containerCmd);
-    containerCmd = ensureNpmDevDependencies(containerCmd);
-    const uploadAfterDev = stringifyCommand(containerCmd);
-    containerCmd = ensureNextBuildTimeout(containerCmd);
-    const uploadCmdAfter = stringifyCommand(containerCmd);
-    if (uploadAfterDev !== uploadCmdBefore) {
-      appendServiceLog('info', 'Forcando instalacao de dependencias de desenvolvimento para build');
-    }
-    if (uploadCmdAfter !== uploadAfterDev) {
-      appendServiceLog('info', 'Ajustando timeout do Next.js para build');
+    if (!hasUserCommand) {
+      containerCmd = ensureCommandWorkdir(containerCmd, workdir);
+      const uploadCmdBefore = stringifyCommand(containerCmd);
+      containerCmd = ensureNpmDevDependencies(containerCmd);
+      const uploadAfterDev = stringifyCommand(containerCmd);
+      containerCmd = ensureNextBuildTimeout(containerCmd);
+      const uploadCmdAfter = stringifyCommand(containerCmd);
+      if (uploadAfterDev !== uploadCmdBefore) {
+        appendServiceLog('info', 'Forcando instalacao de dependencias de desenvolvimento para build');
+      }
+      if (uploadCmdAfter !== uploadAfterDev) {
+        appendServiceLog('info', 'Ajustando timeout do Next.js para build');
+      }
     }
     appendServiceLog('info', `Comando detectado para ${service.name}: ${containerCmd ? containerCmd.join(' ') : 'padrao'}`);
     if (workdir) {
@@ -1344,10 +1359,12 @@ router.post('/services/:id/project-upload', upload.single('archive'), async (req
     } else {
       appendServiceLog('warn', `WorkingDir nao resolvido para ${service.name}`);
     }
-    const envBeforeUpload = env;
-    env = ensureNextBuildEnv(env, containerCmd);
-    if (env !== envBeforeUpload) {
-      appendServiceLog('info', 'Variavel de ambiente de timeout do Next.js adicionada');
+    if (!hasUserCommand) {
+      const envBeforeUpload = env;
+      env = ensureNextBuildEnv(env, containerCmd);
+      if (env !== envBeforeUpload) {
+        appendServiceLog('info', 'Variavel de ambiente de timeout do Next.js adicionada');
+      }
     }
 
     if (service.containerId) {

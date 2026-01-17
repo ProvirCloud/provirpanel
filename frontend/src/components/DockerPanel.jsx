@@ -23,6 +23,18 @@ const generateUUID = () => {
   })
 }
 
+const stripAnsi = (value) =>
+  String(value || '').replace(/\u001b\[[0-9;]*m/g, '')
+
+const formatLogChunk = (chunk) => {
+  const timestamp = new Date().toISOString().replace('T', ' ').slice(0, 19)
+  return stripAnsi(chunk)
+    .replace(/\r/g, '')
+    .split('\n')
+    .map((line) => (line ? `[${timestamp}] ${line}` : ''))
+    .join('\n')
+}
+
 const presetImages = [
   { name: 'PostgreSQL', image: 'postgres', tag: '16', description: 'Banco relacional' },
   { name: 'MySQL', image: 'mysql', tag: '8', description: 'Banco relacional' },
@@ -127,6 +139,7 @@ const DockerPanel = () => {
   const [projectUploadStatus, setProjectUploadStatus] = useState(null)
   const [removeDialog, setRemoveDialog] = useState(null)
   const [postgresDatabases, setPostgresDatabases] = useState([])
+  const [logsExpanded, setLogsExpanded] = useState(false)
   const token = localStorage.getItem('token')
   const socket = useMemo(() => createDockerLogsSocket(token), [token])
   const progressSocket = useMemo(() => createDockerProgressSocket(token), [token])
@@ -329,7 +342,8 @@ const DockerPanel = () => {
     }
 
     const handleLog = (payload) => {
-      setLogs((prev) => `${prev}${payload.data}`)
+      const chunk = formatLogChunk(payload.data || '')
+      setLogs((prev) => `${prev}${chunk}${chunk.endsWith('\n') ? '' : '\n'}`)
     }
 
     socket.on('log', handleLog)
@@ -1387,18 +1401,64 @@ const DockerPanel = () => {
                     {selectedContainer.Names?.[0]?.replace('/', '') || selectedContainer.Id}
                   </p>
                 </div>
-                <button
-                  className="rounded-xl border border-slate-800 bg-slate-950 px-3 py-1 text-xs text-slate-200"
-                  onClick={() => setLogs('')}
-                >
-                  Limpar
-                </button>
+                <div className="flex items-center gap-2">
+                  <button
+                    className="rounded-xl border border-slate-800 bg-slate-950 px-3 py-1 text-xs text-slate-200"
+                    onClick={() => navigator.clipboard.writeText(logs || '')}
+                  >
+                    Copiar
+                  </button>
+                  <button
+                    className="rounded-xl border border-slate-800 bg-slate-950 px-3 py-1 text-xs text-slate-200"
+                    onClick={() => setLogsExpanded(true)}
+                  >
+                    Expandir
+                  </button>
+                  <button
+                    className="rounded-xl border border-slate-800 bg-slate-950 px-3 py-1 text-xs text-slate-200"
+                    onClick={() => setLogs('')}
+                  >
+                    Limpar
+                  </button>
+                </div>
               </div>
-              <div className="h-64 overflow-y-auto rounded-xl bg-black/80 p-4 text-xs text-emerald-200">
-                <pre className="mono whitespace-pre-wrap">{logs || 'Aguardando logs...'}</pre>
+              <div className="h-64 overflow-y-auto rounded-xl border border-emerald-900/50 bg-gradient-to-b from-black via-black/95 to-slate-950 p-4 text-xs text-emerald-200">
+                <pre className="font-mono whitespace-pre-wrap">{logs || 'Aguardando logs...'}</pre>
               </div>
             </div>
           )}
+        </div>
+      )}
+
+      {logsExpanded && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/70 p-4">
+          <div className="w-full max-w-5xl rounded-2xl border border-slate-800 bg-slate-900/95 p-6 text-slate-100">
+            <div className="mb-4 flex items-center justify-between">
+              <div>
+                <p className="text-xs uppercase tracking-[0.3em] text-slate-400">Logs</p>
+                <p className="text-lg font-semibold text-white">
+                  {selectedContainer?.Names?.[0]?.replace('/', '') || selectedContainer?.Id || 'Container'}
+                </p>
+              </div>
+              <div className="flex items-center gap-2">
+                <button
+                  className="rounded-xl border border-slate-800 bg-slate-950 px-3 py-1 text-xs text-slate-200"
+                  onClick={() => navigator.clipboard.writeText(logs || '')}
+                >
+                  Copiar
+                </button>
+                <button
+                  className="rounded-xl border border-slate-800 bg-slate-950 px-3 py-1 text-xs text-slate-200"
+                  onClick={() => setLogsExpanded(false)}
+                >
+                  Fechar
+                </button>
+              </div>
+            </div>
+            <div className="h-[70vh] overflow-y-auto rounded-xl border border-emerald-900/50 bg-gradient-to-b from-black via-black/95 to-slate-950 p-4 text-xs text-emerald-200">
+              <pre className="font-mono whitespace-pre-wrap">{logs || 'Aguardando logs...'}</pre>
+            </div>
+          </div>
         </div>
       )}
 
