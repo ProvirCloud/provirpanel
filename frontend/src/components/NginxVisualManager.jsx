@@ -594,6 +594,7 @@ const ServerForm = ({ server, onSave, onCancel, dockerContainers, onNotify }) =>
   const [sslSaving, setSslSaving] = useState(false)
   const [pathRuleModal, setPathRuleModal] = useState(null)
   const [editorContent, setEditorContent] = useState('')
+  const [editorTouched, setEditorTouched] = useState(false)
   const [previewLoading, setPreviewLoading] = useState(false)
   const [previewWarnings, setPreviewWarnings] = useState([])
   const [routeWarnings, setRouteWarnings] = useState([])
@@ -618,8 +619,10 @@ const ServerForm = ({ server, onSave, onCancel, dockerContainers, onNotify }) =>
       try {
         const res = await api.get(`/nginx/servers/${server.id}/current-config`)
         setEditorContent(res.data?.content || '')
+        setEditorTouched(false)
       } catch (err) {
         setEditorContent('')
+        setEditorTouched(false)
       }
     }
     loadCurrentConfig()
@@ -643,6 +646,7 @@ const ServerForm = ({ server, onSave, onCancel, dockerContainers, onNotify }) =>
       const res = await api.post('/nginx/preview-config', form)
       const content = res.data?.config || ''
       setEditorContent(content)
+      setEditorTouched(false)
       setPreviewWarnings(validateConfigText(content))
     } catch (err) {
       onNotify?.('Erro ao gerar preview', err.response?.data?.error || err.message)
@@ -669,6 +673,7 @@ const ServerForm = ({ server, onSave, onCancel, dockerContainers, onNotify }) =>
           upstream_servers: parsed.upstream_servers || prev.upstream_servers,
           path_rules: parsed.path_rules || prev.path_rules
         }))
+        setEditorTouched(false)
         onNotify?.('Campos recarregados', 'Os campos foram atualizados a partir do editor')
       }
     } catch (err) {
@@ -685,9 +690,33 @@ const ServerForm = ({ server, onSave, onCancel, dockerContainers, onNotify }) =>
       onNotify?.('Preview obrigatorio', 'Gere o preview ou cole a configuracao antes de salvar')
       return
     }
+    let payload = { ...form }
+    if (editorTouched) {
+      const serverBlocks = (editorContent.match(/server\s*\{/g) || []).length
+      if (serverBlocks > 1) {
+        onNotify?.('Editor invalido', 'Ha mais de um bloco server. Gere o preview novamente.')
+        return
+      }
+      try {
+        const res = await api.post('/nginx/parse-config', {
+          content: editorContent,
+          filename: `${form.primary_domain || 'server'}.conf`
+        })
+        if (res.data?.parsed) {
+          payload = { ...payload, ...res.data.parsed }
+          if (!payload.name) {
+            payload.name = form.name || payload.primary_domain || 'Server'
+          }
+        }
+      } catch (err) {
+        onNotify?.('Erro ao ler editor', err.response?.data?.error || err.message)
+        return
+      }
+    }
     setSaving(true)
     try {
-      await onSave(form)
+      await onSave(payload)
+      setEditorTouched(false)
     } finally {
       setSaving(false)
     }
@@ -1136,7 +1165,10 @@ const ServerForm = ({ server, onSave, onCancel, dockerContainers, onNotify }) =>
             </div>
             <textarea
               value={editorContent}
-              onChange={(e) => setEditorContent(e.target.value)}
+              onChange={(e) => {
+                setEditorContent(e.target.value)
+                setEditorTouched(true)
+              }}
               className="h-64 w-full rounded-xl border border-slate-800 bg-slate-950 px-3 py-2 text-xs text-slate-100 font-mono"
               placeholder="Clique em Gerar preview para ver a configuracao aqui..."
             />
@@ -1991,16 +2023,28 @@ const NginxVisualManager = () => {
 
   const handleSaveServer = async (form) => {
     try {
+      let savedServer = null
       if (selectedServer?.id) {
-        await api.put(`/nginx/servers/${selectedServer.id}`, form)
+        const res = await api.put(`/nginx/servers/${selectedServer.id}`, form)
+        savedServer = res.data
       } else {
         const res = await api.post('/nginx/servers', form)
+        savedServer = res.data
         setSelectedServer(res.data)
       }
       setShowNewServer(false)
       setNewServerDraft(null)
+      if (savedServer?.id) {
+        try {
+          await api.post(`/nginx/servers/${savedServer.id}/apply-config`)
+          showAlert('Servidor salvo', 'Configuracao aplicada com sucesso')
+        } catch (applyErr) {
+          showAlert('Servidor salvo, mas aplicacao falhou', applyErr.response?.data?.error || applyErr.message)
+        }
+      } else {
+        showAlert('Servidor salvo', 'As configuracoes foram atualizadas')
+      }
       loadData()
-      showAlert('Servidor salvo', 'As configuracoes foram atualizadas')
     } catch (err) {
       showAlert('Erro ao salvar servidor', err.response?.data?.error || err.message)
     }
