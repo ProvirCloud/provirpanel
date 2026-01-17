@@ -69,6 +69,18 @@ const ConfirmDialog = ({ title, message, confirmText = 'Confirmar', onConfirm, o
   </div>
 )
 
+const LoadingDialog = ({ title, message }) => (
+  <div className="fixed inset-0 z-40 flex items-center justify-center bg-black/60 p-4">
+    <div className="w-full max-w-md rounded-2xl border border-slate-800 bg-slate-900/90 p-6 text-slate-100">
+      <h3 className="text-lg font-semibold">{title}</h3>
+      <p className="mt-3 text-sm text-slate-300">{message}</p>
+      <div className="mt-5 flex justify-center">
+        <div className="h-6 w-6 animate-spin rounded-full border-2 border-slate-500 border-t-transparent" />
+      </div>
+    </div>
+  </div>
+)
+
 const DiffModal = ({ title, diffLines, onApply, onClose }) => (
   <div className="fixed inset-0 z-40 flex items-center justify-center bg-black/60 p-4">
     <div className="w-full max-w-4xl rounded-2xl border border-slate-800 bg-slate-900/95 p-6 text-slate-100">
@@ -680,6 +692,7 @@ const ServerForm = ({ server, onSave, onApply, onCancel, dockerContainers, docke
   const [currentConfig, setCurrentConfig] = useState('')
   const [diffModal, setDiffModal] = useState(null)
   const [applyConfirm, setApplyConfirm] = useState(null)
+  const [applyLoading, setApplyLoading] = useState(false)
   const [previewLoading, setPreviewLoading] = useState(false)
   const [previewWarnings, setPreviewWarnings] = useState([])
   const [routeWarnings, setRouteWarnings] = useState([])
@@ -769,6 +782,33 @@ const ServerForm = ({ server, onSave, onApply, onCancel, dockerContainers, docke
     }
   }
 
+  const performSave = async (payload, applyConfig) => {
+    setSaving(true)
+    try {
+      const saved = await onSave(payload)
+      if (saved?.id && applyConfig) {
+        setApplyLoading(true)
+        try {
+          await onApply(saved.id)
+        } finally {
+          setApplyLoading(false)
+        }
+      }
+      setForm((prev) => ({ ...prev, ...payload }))
+      setCurrentConfig(editorContent)
+      setEditorTouched(false)
+      if (applyConfig) {
+        setShowAdvanced(false)
+      }
+      if (!applyConfig) {
+        onNotify?.('Configuracao salva', 'Alteracoes salvas sem aplicar no Nginx')
+      }
+      return saved
+    } finally {
+      setSaving(false)
+    }
+  }
+
   const handleSave = async () => {
     if (!form.name || !form.primary_domain) {
       onNotify?.('Campos obrigatorios', 'Nome e dominio sao obrigatorios')
@@ -805,6 +845,7 @@ const ServerForm = ({ server, onSave, onApply, onCancel, dockerContainers, docke
         },
         onCancel: () => {
           setApplyConfirm(null)
+          performSave({ ...form }, false)
         }
       })
     }
@@ -842,22 +883,11 @@ const ServerForm = ({ server, onSave, onApply, onCancel, dockerContainers, docke
             return
           }
         }
-        setSaving(true)
-        try {
-          const saved = await onSave(payload)
-          if (saved?.id) {
-            await onApply(saved.id)
-          }
-          setForm((prev) => ({ ...prev, ...payload }))
-          setCurrentConfig(editorContent)
-          setEditorTouched(false)
-          setShowAdvanced(false)
-        } finally {
-          setSaving(false)
-        }
+        await performSave(payload, true)
       },
       onCancel: () => {
         setApplyConfirm(null)
+        performSave({ ...form }, false)
       }
     })
   }
@@ -1682,7 +1712,10 @@ const ServerForm = ({ server, onSave, onApply, onCancel, dockerContainers, docke
             title="Diferencas na configuracao"
             diffLines={diffModal.diffLines}
             onApply={handleApplyFromDiff}
-            onClose={() => setDiffModal(null)}
+            onClose={() => {
+              setDiffModal(null)
+              performSave({ ...form }, false)
+            }}
           />
         )}
         {applyConfirm && (
@@ -1692,6 +1725,12 @@ const ServerForm = ({ server, onSave, onApply, onCancel, dockerContainers, docke
             confirmText={applyConfirm.confirmText}
             onConfirm={applyConfirm.onConfirm}
             onCancel={applyConfirm.onCancel}
+          />
+        )}
+        {applyLoading && (
+          <LoadingDialog
+            title="Aplicando configuracao"
+            message="Instalando/gerando certificado e recarregando o Nginx..."
           />
         )}
       </div>
