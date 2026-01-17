@@ -198,7 +198,7 @@ const resolveNodeCommand = (volumes = []) => {
     const hasNext = Boolean(deps.next);
     const startScript = typeof scripts.start === 'string' ? scripts.start.trim() : '';
     if (hasNext && startScript.startsWith('next start')) {
-      return ['sh', '-c', 'npm install && npm run build && next start -H 0.0.0.0 -p 3000'];
+      return ['sh', '-c', 'npm install && npm run build && next start'];
     }
     if (scripts.start) {
       return ['sh', '-c', 'npm install && npm run start'];
@@ -1660,7 +1660,7 @@ const initDockerSocket = (io) => {
       try {
         currentStream = await dockerManager.getContainerLogs(containerId, { tail });
         currentStream.on('data', (chunk) => {
-          socket.emit('log', { data: chunk.toString() });
+          socket.emit('log', { data: chunk.toString(), ts: Date.now() });
         });
         currentStream.on('end', () => {
           socket.emit('end', { message: 'Log stream ended' });

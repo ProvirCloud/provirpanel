@@ -29,8 +29,9 @@ const stripAnsi = (value) =>
 const stripControlChars = (value) =>
   String(value || '').replace(/[\x00-\x08\x0B\x0C\x0E-\x1F\x7F-\x9F]/g, '')
 
-const formatLogChunk = (chunk) => {
-  const timestamp = new Date().toISOString().replace('T', ' ').slice(0, 19)
+const formatLogChunk = (chunk, ts) => {
+  const timeValue = typeof ts === 'number' ? ts : Date.now()
+  const timestamp = new Date(timeValue).toISOString().replace('T', ' ').slice(0, 19)
   return stripControlChars(stripAnsi(chunk))
     .replace(/\r/g, '')
     .split('\n')
@@ -345,7 +346,7 @@ const DockerPanel = () => {
     }
 
     const handleLog = (payload) => {
-      const chunk = formatLogChunk(payload.data || '')
+      const chunk = formatLogChunk(payload.data || '', payload.ts)
       setLogs((prev) => `${prev}${chunk}${chunk.endsWith('\n') ? '' : '\n'}`)
     }
 
