@@ -788,6 +788,7 @@ const ServerForm = ({ server, onSave, onApply, onCancel, dockerContainers, docke
     createManager: false
   })
   const [dockerCreateWorking, setDockerCreateWorking] = useState(false)
+  const [dockerUpdating, setDockerUpdating] = useState(new Set())
   const [previewLoading, setPreviewLoading] = useState(false)
   const [previewWarnings, setPreviewWarnings] = useState([])
   const [routeWarnings, setRouteWarnings] = useState([])
@@ -1147,6 +1148,8 @@ const ServerForm = ({ server, onSave, onApply, onCancel, dockerContainers, docke
     return dockerContainers.filter((container) => !configuredIds.has(container.id))
   }
 
+  const isDockerUpdating = (container) => dockerUpdating.has(container.name)
+
   const addDockerPathRule = (container) => {
     const service = getServiceForContainer(container)
     const scriptEnv = service?.envVars?.find((env) => env.key === 'SCRIPT_NAME')?.value
@@ -1181,6 +1184,11 @@ const ServerForm = ({ server, onSave, onApply, onCancel, dockerContainers, docke
       message,
       async () => {
         try {
+          setDockerUpdating((prev) => {
+            const next = new Set(prev)
+            next.add(containerName)
+            return next
+          })
           const service = dockerServices?.find((srv) => srv.name === containerName)
           if (!service?.id) {
             onNotify?.('Servico Docker nao encontrado', 'Nao foi possivel atualizar SCRIPT_NAME')
@@ -1195,8 +1203,15 @@ const ServerForm = ({ server, onSave, onApply, onCancel, dockerContainers, docke
           }
           await api.put(`/docker/services/${service.id}`, { envVars })
           onNotify?.('Servico atualizado', 'SCRIPT_NAME aplicado e servico reiniciado')
+          await onRefreshDocker?.()
         } catch (err) {
           onNotify?.('Erro ao atualizar servico', err.response?.data?.message || err.message)
+        } finally {
+          setDockerUpdating((prev) => {
+            const next = new Set(prev)
+            next.delete(containerName)
+            return next
+          })
         }
       },
       'Atualizar'
@@ -1642,6 +1657,7 @@ const ServerForm = ({ server, onSave, onApply, onCancel, dockerContainers, docke
                         {form.server_type === 'proxy' && (
                           <button
                             onClick={() => removeDockerPathRule(container)}
+                            disabled={isDockerUpdating(container)}
                             className="rounded-lg border border-rose-800 px-2 py-1 text-xs text-rose-200 hover:bg-rose-900"
                           >
                             Remover configuração
@@ -1650,6 +1666,7 @@ const ServerForm = ({ server, onSave, onApply, onCancel, dockerContainers, docke
                         {form.server_type === 'balancer' && (
                           <button
                             onClick={() => removeUpstreamByContainer(container)}
+                            disabled={isDockerUpdating(container)}
                             className="rounded-lg border border-rose-800 px-2 py-1 text-xs text-rose-200 hover:bg-rose-900"
                           >
                             Remover upstream
@@ -1667,6 +1684,12 @@ const ServerForm = ({ server, onSave, onApply, onCancel, dockerContainers, docke
                       {form.server_type === 'balancer' && (
                         <div className="mt-2 text-xs text-emerald-300">
                           Configurado no upstream
+                        </div>
+                      )}
+                      {isDockerUpdating(container) && (
+                        <div className="mt-2 text-xs text-amber-300 flex items-center gap-2">
+                          <span className="h-3 w-3 animate-spin rounded-full border border-amber-300 border-t-transparent" />
+                          Atualizando servico...
                         </div>
                       )}
                     </div>
@@ -1689,6 +1712,7 @@ const ServerForm = ({ server, onSave, onApply, onCancel, dockerContainers, docke
                         {form.server_type === 'proxy' && (
                           <button
                             onClick={() => addDockerPathRule(container)}
+                            disabled={isDockerUpdating(container)}
                             className="rounded-lg bg-blue-500 px-2 py-1 text-xs font-semibold text-white hover:bg-blue-600"
                           >
                             Adicionar path
@@ -1697,6 +1721,7 @@ const ServerForm = ({ server, onSave, onApply, onCancel, dockerContainers, docke
                         {form.server_type === 'balancer' && (
                           <button
                             onClick={() => useDockerContainer(container)}
+                            disabled={isDockerUpdating(container)}
                             className="rounded-lg bg-blue-500 px-2 py-1 text-xs font-semibold text-white hover:bg-blue-600"
                           >
                             Adicionar upstream
@@ -1706,6 +1731,12 @@ const ServerForm = ({ server, onSave, onApply, onCancel, dockerContainers, docke
                           <span className="text-xs text-slate-500">Nao aplicavel</span>
                         )}
                       </div>
+                      {isDockerUpdating(container) && (
+                        <div className="mt-2 text-xs text-amber-300 flex items-center gap-2">
+                          <span className="h-3 w-3 animate-spin rounded-full border border-amber-300 border-t-transparent" />
+                          Atualizando servico...
+                        </div>
+                      )}
                     </div>
                   ))}
                 </div>
@@ -2548,7 +2579,13 @@ const NginxVisualManager = () => {
   }
 
   const showConfirm = (title, message, onConfirm, confirmText) => {
-    setConfirmDialog({ title, message, onConfirm, confirmText })
+    const wrappedConfirm = async () => {
+      setConfirmDialog(null)
+      if (onConfirm) {
+        await onConfirm()
+      }
+    }
+    setConfirmDialog({ title, message, onConfirm: wrappedConfirm, confirmText })
   }
 
   const loadData = async () => {
@@ -2616,6 +2653,14 @@ const NginxVisualManager = () => {
     if (activeTab === 'config' && selectedServer) {
       refreshDockerData()
     }
+  }, [activeTab, selectedServer])
+
+  useEffect(() => {
+    if (activeTab !== 'config' || !selectedServer) return undefined
+    const intervalId = setInterval(() => {
+      refreshDockerData()
+    }, 15000)
+    return () => clearInterval(intervalId)
   }, [activeTab, selectedServer])
 
   const handleSaveServer = async (form) => {
