@@ -85,6 +85,11 @@ class NginxServerManager {
     const primaryDomain = data.primary_domain;
     const configFileName = `${primaryDomain.replace(/[^a-zA-Z0-9.-]/g, '_')}.conf`;
     const configFilePath = path.join(this.getTargetDir(), configFileName);
+    const dockerMeta = this.buildDockerMeta(
+      data.path_rules || [],
+      data.upstream_servers || [],
+      null
+    );
 
     const server = await prisma.nginxServer.create({
       data: {
@@ -109,6 +114,7 @@ class NginxServerManager {
         proxySendTimeout: data.proxy_send_timeout || '60s',
         isActive: data.is_active ?? true,
         configFilePath,
+        dockerMeta,
         notes: data.notes
       }
     });
@@ -177,6 +183,14 @@ class NginxServerManager {
       }
       updateData.pathRules = incoming;
     }
+    if (updateData.pathRules || data.upstream_servers !== undefined) {
+      const currentMeta = existing?.dockerMeta || null;
+      updateData.dockerMeta = this.buildDockerMeta(
+        updateData.pathRules || existingPathRules,
+        data.upstream_servers ?? existing?.upstreamServers ?? [],
+        currentMeta
+      );
+    }
 
     for (const [apiField, prismaField] of Object.entries(fieldMap)) {
       if (data[apiField] !== undefined) {
@@ -239,13 +253,18 @@ class NginxServerManager {
 
   formatServerForApi(server) {
     if (!server) return null;
+    const withDockerMeta = this.applyDockerMeta(
+      server.pathRules || [],
+      server.upstreamServers || [],
+      server.dockerMeta || {}
+    );
     return {
       id: server.id,
       name: server.name,
       primary_domain: server.primaryDomain,
       additional_domains: server.additionalDomains,
-      upstream_servers: server.upstreamServers,
-      path_rules: server.pathRules || [],
+      upstream_servers: withDockerMeta.upstreamServers,
+      path_rules: withDockerMeta.pathRules,
       server_type: server.serverType,
       listen_port: server.listenPort,
       ssl_type: server.sslType,
@@ -262,11 +281,69 @@ class NginxServerManager {
       proxy_send_timeout: server.proxySendTimeout,
       is_active: server.isActive,
       config_file_path: server.configFilePath,
+      docker_meta: server.dockerMeta || {},
       notes: server.notes,
       created_at: server.createdAt,
       updated_at: server.updatedAt,
       ssl_certs: server.sslCerts?.map(cert => this.formatCertForApi(cert)) || []
     };
+  }
+
+  buildDockerMeta(pathRules, upstreamServers, existingMeta) {
+    const meta = {
+      paths: {},
+      upstreams: {},
+      site: null,
+      ...(existingMeta || {})
+    };
+    const rules = Array.isArray(pathRules) ? pathRules : [];
+    rules.forEach((rule) => {
+      if (!rule || rule.type !== 'proxy') return;
+      if (rule.docker || rule.docker_container) {
+        const key = `${rule.path || ''}|${rule.proxy_host || ''}|${rule.proxy_port || ''}`;
+        meta.paths[key] = {
+          docker: true,
+          container: rule.docker_container || null
+        };
+      }
+    });
+    const upstreams = Array.isArray(upstreamServers) ? upstreamServers : [];
+    upstreams.forEach((srv) => {
+      if (!srv) return;
+      if (srv.docker || srv.docker_container) {
+        const key = `${srv.ip || srv.host || ''}|${srv.port || ''}`;
+        meta.upstreams[key] = {
+          docker: true,
+          container: srv.docker_container || null
+        };
+      }
+    });
+    return meta;
+  }
+
+  applyDockerMeta(pathRules, upstreamServers, meta = {}) {
+    const rules = Array.isArray(pathRules) ? pathRules.map((rule) => ({ ...rule })) : [];
+    const upstreams = Array.isArray(upstreamServers) ? upstreamServers.map((srv) => ({ ...srv })) : [];
+    const pathMeta = meta?.paths || {};
+    rules.forEach((rule) => {
+      if (!rule || rule.type !== 'proxy') return;
+      const key = `${rule.path || ''}|${rule.proxy_host || ''}|${rule.proxy_port || ''}`;
+      const match = pathMeta[key];
+      if (match?.docker) {
+        rule.docker = true;
+        rule.docker_container = match.container || rule.docker_container;
+      }
+    });
+    const upstreamMeta = meta?.upstreams || {};
+    upstreams.forEach((srv) => {
+      const key = `${srv.ip || srv.host || ''}|${srv.port || ''}`;
+      const match = upstreamMeta[key];
+      if (match?.docker) {
+        srv.docker = true;
+        srv.docker_container = match.container || srv.docker_container;
+      }
+    });
+    return { pathRules: rules, upstreamServers: upstreams };
   }
 
   formatCertForApi(cert) {
@@ -1378,6 +1455,10 @@ ${buildProxyBlock(proxyTarget)}    }
       configFilePath: configData.config_file_path,
       notes: `Imported from ${configData.filename}`
     };
+
+    if (existing?.dockerMeta) {
+      data.dockerMeta = existing.dockerMeta;
+    }
 
     const server = existing
       ? await prisma.nginxServer.update({

@@ -81,6 +81,91 @@ const LoadingDialog = ({ title, message }) => (
   </div>
 )
 
+const DockerCreateModal = ({ templates, form, onChange, onCreate, onCancel, loading }) => (
+  <div className="fixed inset-0 z-40 flex items-center justify-center bg-black/60 p-4">
+    <div className="w-full max-w-lg rounded-2xl border border-slate-800 bg-slate-900/95 p-6 text-slate-100">
+      <h3 className="text-lg font-semibold">Criar container Docker</h3>
+      <div className="mt-4 space-y-3 text-sm">
+        <div>
+          <label className="text-xs text-slate-400">Template</label>
+          <select
+            className="mt-1 w-full rounded-xl border border-slate-700 bg-slate-950 px-3 py-2 text-sm text-white"
+            value={form.templateId}
+            onChange={(e) => onChange({ ...form, templateId: e.target.value })}
+          >
+            <option value="">Selecione</option>
+            {templates.map((tpl) => (
+              <option key={tpl.id} value={tpl.id}>{tpl.label}</option>
+            ))}
+          </select>
+        </div>
+        <div>
+          <label className="text-xs text-slate-400">Nome</label>
+          <input
+            className="mt-1 w-full rounded-xl border border-slate-700 bg-slate-950 px-3 py-2 text-sm text-white"
+            value={form.name}
+            onChange={(e) => onChange({ ...form, name: e.target.value })}
+            placeholder="meu-servico"
+          />
+        </div>
+        <div className="grid grid-cols-2 gap-3">
+          <div>
+            <label className="text-xs text-slate-400">Porta externa</label>
+            <input
+              type="number"
+              className="mt-1 w-full rounded-xl border border-slate-700 bg-slate-950 px-3 py-2 text-sm text-white"
+              value={form.hostPort}
+              onChange={(e) => onChange({ ...form, hostPort: e.target.value })}
+              placeholder="8081"
+            />
+          </div>
+          <div>
+            <label className="text-xs text-slate-400">Rede Docker</label>
+            <input
+              className="mt-1 w-full rounded-xl border border-slate-700 bg-slate-950 px-3 py-2 text-sm text-white"
+              value={form.networkName}
+              onChange={(e) => onChange({ ...form, networkName: e.target.value })}
+            />
+          </div>
+        </div>
+        <label className="flex items-center gap-2 text-xs text-slate-300">
+          <input
+            type="checkbox"
+            checked={form.bindLocalOnly}
+            onChange={(e) => onChange({ ...form, bindLocalOnly: e.target.checked })}
+          />
+          Expor apenas em localhost
+        </label>
+        {form.templateId === 'postgres-db' && (
+          <label className="flex items-center gap-2 text-xs text-slate-300">
+            <input
+              type="checkbox"
+              checked={form.createManager}
+              onChange={(e) => onChange({ ...form, createManager: e.target.checked })}
+            />
+            Criar pgAdmin
+          </label>
+        )}
+      </div>
+      <div className="mt-5 flex justify-end gap-2">
+        <button
+          onClick={onCancel}
+          className="rounded-xl border border-slate-800 bg-slate-950 px-4 py-2 text-xs text-slate-200"
+        >
+          Cancelar
+        </button>
+        <button
+          onClick={onCreate}
+          disabled={loading || !form.templateId || !form.name}
+          className="rounded-xl bg-blue-500 px-4 py-2 text-xs font-semibold text-white disabled:opacity-60"
+        >
+          {loading ? 'Criando...' : 'Criar'}
+        </button>
+      </div>
+    </div>
+  </div>
+)
+
 const DiffModal = ({ title, diffLines, onApply, onClose }) => (
   <div className="fixed inset-0 z-40 flex items-center justify-center bg-black/60 p-4">
     <div className="w-full max-w-4xl rounded-2xl border border-slate-800 bg-slate-900/95 p-6 text-slate-100">
@@ -653,7 +738,7 @@ const ServersList = ({ servers, selectedServer, onSelect, onToggle, onDelete, on
 }
 
 // ==================== SERVER FORM COMPONENT ====================
-const ServerForm = ({ server, onSave, onApply, onCancel, dockerContainers, dockerServices, onNotify, onConfirm }) => {
+const ServerForm = ({ server, onSave, onApply, onCancel, dockerContainers, dockerServices, dockerTemplates, onNotify, onConfirm, onRefreshDocker, onLoadDockerTemplates }) => {
   const [form, setForm] = useState({
     name: '',
     primary_domain: '',
@@ -693,6 +778,16 @@ const ServerForm = ({ server, onSave, onApply, onCancel, dockerContainers, docke
   const [diffModal, setDiffModal] = useState(null)
   const [applyConfirm, setApplyConfirm] = useState(null)
   const [applyLoading, setApplyLoading] = useState(false)
+  const [showDockerCreate, setShowDockerCreate] = useState(false)
+  const [dockerCreateForm, setDockerCreateForm] = useState({
+    templateId: '',
+    name: '',
+    hostPort: '',
+    networkName: 'provirpanel',
+    bindLocalOnly: true,
+    createManager: false
+  })
+  const [dockerCreateWorking, setDockerCreateWorking] = useState(false)
   const [previewLoading, setPreviewLoading] = useState(false)
   const [previewWarnings, setPreviewWarnings] = useState([])
   const [routeWarnings, setRouteWarnings] = useState([])
@@ -1037,6 +1132,21 @@ const ServerForm = ({ server, onSave, onApply, onCancel, dockerContainers, docke
     })
   }
 
+  const getConfiguredContainers = () => {
+    if (form.server_type === 'proxy') {
+      return dockerContainers.filter((container) => findContainerRuleIndex(container) >= 0)
+    }
+    if (form.server_type === 'balancer') {
+      return dockerContainers.filter((container) => findUpstreamIndex(container) >= 0)
+    }
+    return []
+  }
+
+  const getAvailableContainers = () => {
+    const configuredIds = new Set(getConfiguredContainers().map((c) => c.id))
+    return dockerContainers.filter((container) => !configuredIds.has(container.id))
+  }
+
   const addDockerPathRule = (container) => {
     const service = getServiceForContainer(container)
     const scriptEnv = service?.envVars?.find((env) => env.key === 'SCRIPT_NAME')?.value
@@ -1091,6 +1201,83 @@ const ServerForm = ({ server, onSave, onApply, onCancel, dockerContainers, docke
       },
       'Atualizar'
     )
+  }
+
+  const openDockerCreate = async () => {
+    if (!dockerTemplates || dockerTemplates.length === 0) {
+      await onLoadDockerTemplates?.()
+    }
+    setDockerCreateForm((prev) => ({
+      ...prev,
+      templateId: dockerTemplates?.[0]?.id || '',
+      name: '',
+      hostPort: '',
+      networkName: 'provirpanel',
+      bindLocalOnly: true,
+      createManager: false
+    }))
+    setShowDockerCreate(true)
+  }
+
+  const handleDockerCreate = async () => {
+    if (!dockerCreateForm.templateId || !dockerCreateForm.name) {
+      onNotify?.('Campos obrigatorios', 'Template e nome sao obrigatorios')
+      return
+    }
+    setDockerCreateWorking(true)
+    try {
+      const res = await api.post('/docker/services', {
+        templateId: dockerCreateForm.templateId,
+        name: dockerCreateForm.name,
+        hostPort: dockerCreateForm.hostPort || undefined,
+        networkName: dockerCreateForm.networkName || 'provirpanel',
+        bindLocalOnly: dockerCreateForm.bindLocalOnly,
+        createManager: dockerCreateForm.createManager
+      })
+      const service = res.data?.service
+      await onRefreshDocker?.()
+      if (service?.hostPort) {
+        if (form.server_type === 'proxy') {
+          setForm((prev) => ({
+            ...prev,
+            path_rules: [
+              ...(prev.path_rules || []),
+              {
+                path: `/${service.name}/`,
+                type: 'proxy',
+                proxy_host: '127.0.0.1',
+                proxy_port: service.hostPort,
+                docker: true,
+                docker_container: service.name
+              }
+            ]
+          }))
+        } else if (form.server_type === 'balancer') {
+          setForm((prev) => ({
+            ...prev,
+            upstream_servers: [
+              ...(prev.upstream_servers || []),
+              {
+                ip: '127.0.0.1',
+                port: String(service.hostPort),
+                weight: '1',
+                backup: false,
+                docker: true,
+                docker_container: service.name
+              }
+            ]
+          }))
+        } else {
+          onNotify?.('Container criado', 'Configure manualmente para site estatico')
+        }
+      }
+      setShowDockerCreate(false)
+      onNotify?.('Container criado', `Servico ${service?.name || dockerCreateForm.name} criado`)
+    } catch (err) {
+      onNotify?.('Erro ao criar container', err.response?.data?.message || err.message)
+    } finally {
+      setDockerCreateWorking(false)
+    }
   }
 
   const findUpstreamIndex = (container) => {
@@ -1416,6 +1603,117 @@ const ServerForm = ({ server, onSave, onApply, onCancel, dockerContainers, docke
           </div>
         )}
 
+        {!showAdvanced && dockerContainers.length > 0 && (
+          <div className="rounded-2xl border border-slate-800 bg-slate-900/60 p-4">
+            <div className="flex items-center justify-between mb-3">
+              <h3 className="text-sm font-semibold text-white flex items-center gap-2">
+                <Box className="h-4 w-4" />
+                Containers Docker
+              </h3>
+              <div className="flex items-center gap-2">
+                <button
+                  onClick={onRefreshDocker}
+                  className="rounded-lg border border-slate-700 bg-slate-800 px-2 py-1 text-xs text-slate-200 hover:bg-slate-700"
+                >
+                  Atualizar
+                </button>
+                <button
+                  onClick={openDockerCreate}
+                  className="rounded-lg bg-blue-500 px-2 py-1 text-xs font-semibold text-white hover:bg-blue-600"
+                >
+                  Criar container
+                </button>
+              </div>
+            </div>
+            <div className="space-y-3">
+              <div>
+                <p className="text-xs text-slate-400 mb-2">Configurados</p>
+                <div className="space-y-2">
+                  {getConfiguredContainers().length === 0 && (
+                    <div className="text-xs text-slate-500">Nenhum container configurado.</div>
+                  )}
+                  {getConfiguredContainers().map((container) => (
+                    <div key={container.id} className="rounded-lg border border-slate-800 bg-slate-950 p-2">
+                      <div className="flex items-center justify-between">
+                        <div>
+                          <p className="text-xs font-semibold text-white">{container.name}</p>
+                          <p className="text-xs text-slate-400">{container.ip}:{container.port}</p>
+                        </div>
+                        {form.server_type === 'proxy' && (
+                          <button
+                            onClick={() => removeDockerPathRule(container)}
+                            className="rounded-lg border border-rose-800 px-2 py-1 text-xs text-rose-200 hover:bg-rose-900"
+                          >
+                            Remover configuração
+                          </button>
+                        )}
+                        {form.server_type === 'balancer' && (
+                          <button
+                            onClick={() => removeUpstreamByContainer(container)}
+                            className="rounded-lg border border-rose-800 px-2 py-1 text-xs text-rose-200 hover:bg-rose-900"
+                          >
+                            Remover upstream
+                          </button>
+                        )}
+                        {form.server_type === 'static' && (
+                          <span className="text-xs text-slate-500">Nao aplicavel</span>
+                        )}
+                      </div>
+                      {form.server_type === 'proxy' && (
+                        <div className="mt-2 text-xs text-emerald-300">
+                          Configurado para path {form.path_rules[findContainerRuleIndex(container)]?.path || '-'}
+                        </div>
+                      )}
+                      {form.server_type === 'balancer' && (
+                        <div className="mt-2 text-xs text-emerald-300">
+                          Configurado no upstream
+                        </div>
+                      )}
+                    </div>
+                  ))}
+                </div>
+              </div>
+              <div>
+                <p className="text-xs text-slate-400 mb-2">Disponiveis</p>
+                <div className="space-y-2 max-h-40 overflow-y-auto">
+                  {getAvailableContainers().length === 0 && (
+                    <div className="text-xs text-slate-500">Nenhum container disponivel.</div>
+                  )}
+                  {getAvailableContainers().map((container) => (
+                    <div key={container.id} className="rounded-lg border border-slate-800 bg-slate-950 p-2">
+                      <div className="flex items-center justify-between">
+                        <div>
+                          <p className="text-xs font-semibold text-white">{container.name}</p>
+                          <p className="text-xs text-slate-400">{container.ip}:{container.port}</p>
+                        </div>
+                        {form.server_type === 'proxy' && (
+                          <button
+                            onClick={() => addDockerPathRule(container)}
+                            className="rounded-lg bg-blue-500 px-2 py-1 text-xs font-semibold text-white hover:bg-blue-600"
+                          >
+                            Adicionar path
+                          </button>
+                        )}
+                        {form.server_type === 'balancer' && (
+                          <button
+                            onClick={() => useDockerContainer(container)}
+                            className="rounded-lg bg-blue-500 px-2 py-1 text-xs font-semibold text-white hover:bg-blue-600"
+                          >
+                            Adicionar upstream
+                          </button>
+                        )}
+                        {form.server_type === 'static' && (
+                          <span className="text-xs text-slate-500">Nao aplicavel</span>
+                        )}
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              </div>
+            </div>
+          </div>
+        )}
+
         {/* SSL Configuration */}
         {!showAdvanced && (
         <div className="rounded-2xl border border-slate-800 bg-slate-900/60 p-4">
@@ -1597,79 +1895,6 @@ const ServerForm = ({ server, onSave, onApply, onCancel, dockerContainers, docke
         </details>
         )}
 
-        {/* Docker Containers */}
-        {!showAdvanced && dockerContainers.length > 0 && (
-          <div className="rounded-2xl border border-slate-800 bg-slate-900/60 p-4">
-            <h3 className="text-sm font-semibold text-white mb-3 flex items-center gap-2">
-              <Box className="h-4 w-4" />
-              Containers Docker
-            </h3>
-            <div className="space-y-2 max-h-40 overflow-y-auto">
-              {dockerContainers.map((container) => (
-                <div key={container.id} className="rounded-lg border border-slate-800 bg-slate-950 p-2">
-                  <div className="flex items-center justify-between">
-                    <div>
-                      <p className="text-xs font-semibold text-white">{container.name}</p>
-                      <p className="text-xs text-slate-400">{container.ip}:{container.port}</p>
-                    </div>
-                    {form.server_type === 'proxy' && (
-                      <>
-                        {findContainerRuleIndex(container) >= 0 ? (
-                          <button
-                            onClick={() => removeDockerPathRule(container)}
-                            className="rounded-lg border border-rose-800 px-2 py-1 text-xs text-rose-200 hover:bg-rose-900"
-                          >
-                            Remover configuração
-                          </button>
-                        ) : (
-                          <button
-                            onClick={() => addDockerPathRule(container)}
-                            className="rounded-lg bg-blue-500 px-2 py-1 text-xs font-semibold text-white hover:bg-blue-600"
-                          >
-                            Adicionar path
-                          </button>
-                        )}
-                      </>
-                    )}
-                    {form.server_type === 'balancer' && (
-                      <>
-                        {findUpstreamIndex(container) >= 0 ? (
-                          <button
-                            onClick={() => removeUpstreamByContainer(container)}
-                            className="rounded-lg border border-rose-800 px-2 py-1 text-xs text-rose-200 hover:bg-rose-900"
-                          >
-                            Remover upstream
-                          </button>
-                        ) : (
-                          <button
-                            onClick={() => useDockerContainer(container)}
-                            className="rounded-lg bg-blue-500 px-2 py-1 text-xs font-semibold text-white hover:bg-blue-600"
-                          >
-                            Adicionar upstream
-                          </button>
-                        )}
-                      </>
-                    )}
-                    {form.server_type === 'static' && (
-                      <span className="text-xs text-slate-500">Nao aplicavel</span>
-                    )}
-                  </div>
-                  {form.server_type === 'proxy' && findContainerRuleIndex(container) >= 0 && (
-                    <div className="mt-2 text-xs text-emerald-300">
-                      Configurado para path {form.path_rules[findContainerRuleIndex(container)]?.path || '-'}
-                    </div>
-                  )}
-                  {form.server_type === 'balancer' && findUpstreamIndex(container) >= 0 && (
-                    <div className="mt-2 text-xs text-emerald-300">
-                      Configurado no upstream
-                    </div>
-                  )}
-                </div>
-              ))}
-            </div>
-          </div>
-        )}
-
         {showAdvanced && (
           <div className="rounded-2xl border border-slate-800 bg-slate-900/60 p-4">
             <h3 className="text-sm font-semibold text-white mb-2 flex items-center gap-2">
@@ -1725,6 +1950,16 @@ const ServerForm = ({ server, onSave, onApply, onCancel, dockerContainers, docke
             confirmText={applyConfirm.confirmText}
             onConfirm={applyConfirm.onConfirm}
             onCancel={applyConfirm.onCancel}
+          />
+        )}
+        {showDockerCreate && (
+          <DockerCreateModal
+            templates={dockerTemplates || []}
+            form={dockerCreateForm}
+            onChange={setDockerCreateForm}
+            onCreate={handleDockerCreate}
+            onCancel={() => setShowDockerCreate(false)}
+            loading={dockerCreateWorking}
           />
         )}
         {applyLoading && (
@@ -2294,6 +2529,7 @@ const NginxVisualManager = () => {
   const [status, setStatus] = useState(null)
   const [dockerContainers, setDockerContainers] = useState([])
   const [dockerServices, setDockerServices] = useState([])
+  const [dockerTemplates, setDockerTemplates] = useState([])
   const [activeTab, setActiveTab] = useState('config') // config, logs, metrics, ssl
   const [showNewServer, setShowNewServer] = useState(false)
   const [newServerDraft, setNewServerDraft] = useState(null)
@@ -2350,9 +2586,37 @@ const NginxVisualManager = () => {
     }
   }
 
+  const refreshDockerData = async () => {
+    try {
+      const [containersRes, servicesRes] = await Promise.all([
+        api.get('/nginx/docker-containers'),
+        api.get('/docker/services')
+      ])
+      setDockerContainers(containersRes.data.containers || [])
+      setDockerServices(servicesRes.data.services || [])
+    } catch (err) {
+      showAlert('Erro ao atualizar containers', err.response?.data?.error || err.message)
+    }
+  }
+
+  const loadDockerTemplates = async () => {
+    try {
+      const response = await api.get('/docker/templates')
+      setDockerTemplates(response.data.templates || [])
+    } catch (err) {
+      showAlert('Erro ao carregar templates', err.response?.data?.message || err.message)
+    }
+  }
+
   useEffect(() => {
     loadData()
   }, [])
+
+  useEffect(() => {
+    if (activeTab === 'config' && selectedServer) {
+      refreshDockerData()
+    }
+  }, [activeTab, selectedServer])
 
   const handleSaveServer = async (form) => {
     try {
@@ -2668,8 +2932,11 @@ const NginxVisualManager = () => {
                 } : null}
                 dockerContainers={dockerContainers}
                 dockerServices={dockerServices}
+                dockerTemplates={dockerTemplates}
                 onNotify={showAlert}
                 onConfirm={showConfirm}
+                onRefreshDocker={refreshDockerData}
+                onLoadDockerTemplates={loadDockerTemplates}
               />
             )}
 

@@ -47,6 +47,7 @@ model NginxServer {
   proxySendTimeout     String    @default("60s") @map("proxy_send_timeout") @db.VarChar(20)
   isActive             Boolean   @default(true) @map("is_active")
   configFilePath       String?   @map("config_file_path") @db.VarChar(500)
+  dockerMeta           Json      @default("{}") @map("docker_meta")
   notes                String?   @db.Text
   createdAt            DateTime  @default(now()) @map("created_at")
   updatedAt            DateTime  @updatedAt @map("updated_at")
