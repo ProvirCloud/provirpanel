@@ -503,9 +503,17 @@ ${buildProxyBlock(proxyTarget)}    }
       throw new Error(`Invalid Nginx configuration: ${testResult.error}`);
     }
 
-    if (server.is_active && fs.existsSync(this.sitesAvailable)) {
+    if (fs.existsSync(this.sitesAvailable)) {
       if (path.resolve(server.config_file_path).startsWith(path.resolve(this.sitesAvailable))) {
         this.enableConfigFile(configFileName);
+        try {
+          await prisma.nginxServer.update({
+            where: { id: serverId },
+            data: { isActive: true }
+          });
+        } catch {
+          // ignore sync errors
+        }
       }
     }
 
@@ -971,7 +979,7 @@ ${buildProxyBlock(proxyTarget)}    }
     if (fs.existsSync(this.sitesAvailable)) {
       const files = fs.readdirSync(this.sitesAvailable);
       for (const file of files) {
-        if (file === 'default' || file.startsWith('.')) continue;
+        if (file === 'default' || file.startsWith('.') || file.includes('.bak')) continue;
         const filePath = path.join(this.sitesAvailable, file);
         if (fs.statSync(filePath).isFile()) {
           const parsed = this.parseNginxConfigFile(filePath);
@@ -989,7 +997,7 @@ ${buildProxyBlock(proxyTarget)}    }
     if (fs.existsSync(this.sitesEnabled)) {
       const files = fs.readdirSync(this.sitesEnabled);
       for (const file of files) {
-        if (file === 'default' || file.startsWith('.') || scannedFiles.has(file)) continue;
+        if (file === 'default' || file.startsWith('.') || file.includes('.bak') || scannedFiles.has(file)) continue;
         const filePath = path.join(this.sitesEnabled, file);
         try {
           if (fs.statSync(filePath).isFile()) {
@@ -1010,7 +1018,7 @@ ${buildProxyBlock(proxyTarget)}    }
     if (fs.existsSync(this.confD)) {
       const files = fs.readdirSync(this.confD);
       for (const file of files) {
-        if (!file.endsWith('.conf') || file.startsWith('.') || scannedFiles.has(file)) continue;
+        if (!file.endsWith('.conf') || file.startsWith('.') || file.includes('.bak') || scannedFiles.has(file)) continue;
         const filePath = path.join(this.confD, file);
         if (fs.statSync(filePath).isFile()) {
           const parsed = this.parseNginxConfigFile(filePath);
