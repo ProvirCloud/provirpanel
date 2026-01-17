@@ -73,14 +73,14 @@ install_packages() {
   log "Installing base packages"
   if [[ "${PKG_MANAGER}" == "apt" ]]; then
     apt-get update -y
-    apt-get install -y curl wget git ca-certificates gnupg lsb-release openssl nginx
+    apt-get install -y curl wget git ca-certificates gnupg lsb-release openssl nginx unzip tar
   elif [[ "${PKG_MANAGER}" == "dnf" ]]; then
-    dnf install -y curl wget git ca-certificates gnupg2 openssl nginx
+    dnf install -y curl wget git ca-certificates gnupg2 openssl nginx unzip tar
   elif [[ "${PKG_MANAGER}" == "yum" ]]; then
-    yum install -y curl wget git ca-certificates gnupg2 openssl nginx
+    yum install -y curl wget git ca-certificates gnupg2 openssl nginx unzip tar
   elif [[ "${PKG_MANAGER}" == "zypper" ]]; then
     zypper refresh
-    zypper install -y curl wget git ca-certificates gpg2 openssl nginx
+    zypper install -y curl wget git ca-certificates gpg2 openssl nginx unzip tar
   fi
 }
 
