@@ -76,6 +76,30 @@ router.post('/servers/:id/generate-preview', async (req, res, next) => {
   }
 });
 
+// Generate config preview from payload (without saving)
+router.post('/preview-config', async (req, res, next) => {
+  try {
+    const config = nginxManager.generatePreviewFromPayload(req.body || {});
+    res.json({ config });
+  } catch (err) {
+    next(err);
+  }
+});
+
+// Parse config content into fields
+router.post('/parse-config', async (req, res, next) => {
+  try {
+    const { content, filename } = req.body || {};
+    if (!content) {
+      return res.status(400).json({ error: 'content is required' });
+    }
+    const parsed = nginxManager.parseNginxConfigContent(content, filename || 'manual.conf', null);
+    res.json({ parsed });
+  } catch (err) {
+    next(err);
+  }
+});
+
 // Apply config (generate, validate, enable, reload)
 router.post('/servers/:id/apply-config', async (req, res, next) => {
   try {

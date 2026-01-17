@@ -69,6 +69,162 @@ const ConfirmDialog = ({ title, message, confirmText = 'Confirmar', onConfirm, o
   </div>
 )
 
+const PathRuleModal = ({ initialRule, onSave, onCancel }) => {
+  const [rule, setRule] = useState({
+    path: '/api',
+    type: 'proxy',
+    modifier: '',
+    proxy_host: 'localhost',
+    proxy_port: 3000,
+    alias_path: '',
+    root_path: '',
+    try_files: '',
+    return_code: 301,
+    return_location: '/admin/',
+    ...initialRule
+  })
+
+  const isProxy = !rule.type || rule.type === 'proxy'
+  const isStatic = rule.type === 'static'
+  const isRedirect = rule.type === 'redirect'
+
+  return (
+    <div className="fixed inset-0 z-40 flex items-center justify-center bg-black/60 p-4">
+      <div className="w-full max-w-xl rounded-2xl border border-slate-800 bg-slate-900/90 p-6 text-slate-100">
+        <h3 className="text-lg font-semibold">Editar path</h3>
+        <div className="mt-4 grid grid-cols-2 gap-3">
+          <div className="col-span-2">
+            <label className="text-xs text-slate-400">Path</label>
+            <input
+              className="mt-1 w-full rounded-xl border border-slate-800 bg-slate-950 px-3 py-2 text-sm"
+              value={rule.path}
+              onChange={(e) => setRule({ ...rule, path: e.target.value })}
+              placeholder="/api"
+            />
+          </div>
+          <div>
+            <label className="text-xs text-slate-400">Tipo</label>
+            <select
+              className="mt-1 w-full rounded-xl border border-slate-800 bg-slate-950 px-3 py-2 text-sm"
+              value={rule.type}
+              onChange={(e) => setRule({ ...rule, type: e.target.value })}
+            >
+              <option value="proxy">Proxy</option>
+              <option value="static">Static</option>
+              <option value="redirect">Redirect</option>
+            </select>
+          </div>
+          <div>
+            <label className="text-xs text-slate-400">Match</label>
+            <select
+              className="mt-1 w-full rounded-xl border border-slate-800 bg-slate-950 px-3 py-2 text-sm"
+              value={rule.modifier || ''}
+              onChange={(e) => setRule({ ...rule, modifier: e.target.value })}
+            >
+              <option value="">Match</option>
+              <option value="=">=</option>
+              <option value="^~">^~</option>
+              <option value="~">~</option>
+              <option value="~*">~*</option>
+            </select>
+          </div>
+          {isProxy && (
+            <>
+              <div>
+                <label className="text-xs text-slate-400">Host</label>
+                <input
+                  className="mt-1 w-full rounded-xl border border-slate-800 bg-slate-950 px-3 py-2 text-sm"
+                  value={rule.proxy_host}
+                  onChange={(e) => setRule({ ...rule, proxy_host: e.target.value })}
+                  placeholder="localhost"
+                />
+              </div>
+              <div>
+                <label className="text-xs text-slate-400">Porta</label>
+                <input
+                  type="number"
+                  className="mt-1 w-full rounded-xl border border-slate-800 bg-slate-950 px-3 py-2 text-sm"
+                  value={rule.proxy_port}
+                  onChange={(e) => setRule({ ...rule, proxy_port: parseInt(e.target.value, 10) || 3000 })}
+                  placeholder="3000"
+                />
+              </div>
+            </>
+          )}
+          {isStatic && (
+            <>
+              <div className="col-span-2">
+                <label className="text-xs text-slate-400">Alias</label>
+                <input
+                  className="mt-1 w-full rounded-xl border border-slate-800 bg-slate-950 px-3 py-2 text-sm"
+                  value={rule.alias_path}
+                  onChange={(e) => setRule({ ...rule, alias_path: e.target.value })}
+                  placeholder="/var/www/panel/"
+                />
+              </div>
+              <div className="col-span-2">
+                <label className="text-xs text-slate-400">Root (opcional)</label>
+                <input
+                  className="mt-1 w-full rounded-xl border border-slate-800 bg-slate-950 px-3 py-2 text-sm"
+                  value={rule.root_path}
+                  onChange={(e) => setRule({ ...rule, root_path: e.target.value })}
+                  placeholder="/var/www/panel"
+                />
+              </div>
+              <div className="col-span-2">
+                <label className="text-xs text-slate-400">try_files</label>
+                <input
+                  className="mt-1 w-full rounded-xl border border-slate-800 bg-slate-950 px-3 py-2 text-sm"
+                  value={rule.try_files}
+                  onChange={(e) => setRule({ ...rule, try_files: e.target.value })}
+                  placeholder="$uri $uri/ /admin/index.html"
+                />
+              </div>
+            </>
+          )}
+          {isRedirect && (
+            <>
+              <div>
+                <label className="text-xs text-slate-400">Status</label>
+                <input
+                  type="number"
+                  className="mt-1 w-full rounded-xl border border-slate-800 bg-slate-950 px-3 py-2 text-sm"
+                  value={rule.return_code}
+                  onChange={(e) => setRule({ ...rule, return_code: parseInt(e.target.value, 10) || 301 })}
+                  placeholder="301"
+                />
+              </div>
+              <div>
+                <label className="text-xs text-slate-400">Destino</label>
+                <input
+                  className="mt-1 w-full rounded-xl border border-slate-800 bg-slate-950 px-3 py-2 text-sm"
+                  value={rule.return_location}
+                  onChange={(e) => setRule({ ...rule, return_location: e.target.value })}
+                  placeholder="/admin/"
+                />
+              </div>
+            </>
+          )}
+        </div>
+        <div className="mt-5 flex gap-2 justify-end">
+          <button
+            onClick={() => onSave(rule)}
+            className="rounded-xl bg-blue-500 px-4 py-2 text-xs font-semibold text-slate-950"
+          >
+            Salvar
+          </button>
+          <button
+            onClick={onCancel}
+            className="rounded-xl border border-slate-800 bg-slate-950 px-4 py-2 text-xs text-slate-200"
+          >
+            Cancelar
+          </button>
+        </div>
+      </div>
+    </div>
+  )
+}
+
 // ==================== SERVER LIST COMPONENT ====================
 const ServersList = ({ servers, selectedServer, onSelect, onToggle, onDelete, onRefresh }) => {
   const [searchTerm, setSearchTerm] = useState('')
@@ -183,9 +339,13 @@ const ServerForm = ({ server, onSave, onCancel, dockerContainers, onNotify }) =>
     is_active: true,
     notes: ''
   })
-  const [preview, setPreview] = useState('')
   const [saving, setSaving] = useState(false)
   const [newDomain, setNewDomain] = useState('')
+  const [pathRuleModal, setPathRuleModal] = useState(null)
+  const [editorContent, setEditorContent] = useState('')
+  const [previewLoading, setPreviewLoading] = useState(false)
+  const [previewWarnings, setPreviewWarnings] = useState([])
+  const [routeWarnings, setRouteWarnings] = useState([])
 
   useEffect(() => {
     if (server) {
@@ -198,22 +358,80 @@ const ServerForm = ({ server, onSave, onCancel, dockerContainers, onNotify }) =>
     }
   }, [server])
 
-  const generatePreview = async () => {
-    if (!server?.id) {
-      setPreview('Salve o servidor primeiro para gerar preview')
+  useEffect(() => {
+    const loadCurrentConfig = async () => {
+      if (!server?.id) {
+        setEditorContent('')
+        return
+      }
+      try {
+        const res = await api.get(`/api/nginx/servers/${server.id}/current-config`)
+        setEditorContent(res.data?.content || '')
+      } catch (err) {
+        setEditorContent('')
+      }
+    }
+    loadCurrentConfig()
+  }, [server?.id])
+
+  useEffect(() => {
+    setRouteWarnings(getRouteWarnings(form))
+  }, [form])
+
+  useEffect(() => {
+    if (editorContent) {
+      setPreviewWarnings(validateConfigText(editorContent))
+    } else {
+      setPreviewWarnings([])
+    }
+  }, [editorContent])
+
+  const generatePreviewFromForm = async () => {
+    setPreviewLoading(true)
+    try {
+      const res = await api.post('/api/nginx/preview-config', form)
+      const content = res.data?.config || ''
+      setEditorContent(content)
+      setPreviewWarnings(validateConfigText(content))
+    } catch (err) {
+      onNotify?.('Erro ao gerar preview', err.response?.data?.error || err.message)
+    } finally {
+      setPreviewLoading(false)
+    }
+  }
+
+  const reloadFieldsFromEditor = async () => {
+    if (!editorContent.trim()) {
+      onNotify?.('Editor vazio', 'Cole a configuracao antes de recarregar os campos')
       return
     }
     try {
-      const res = await api.post(`/api/nginx/servers/${server.id}/generate-preview`)
-      setPreview(res.data.config)
+      const res = await api.post('/api/nginx/parse-config', {
+        content: editorContent,
+        filename: `${form.primary_domain || 'server'}.conf`
+      })
+      if (res.data?.parsed) {
+        const parsed = res.data.parsed
+        setForm((prev) => ({
+          ...prev,
+          ...parsed,
+          upstream_servers: parsed.upstream_servers || prev.upstream_servers,
+          path_rules: parsed.path_rules || prev.path_rules
+        }))
+        onNotify?.('Campos recarregados', 'Os campos foram atualizados a partir do editor')
+      }
     } catch (err) {
-      setPreview(`Erro: ${err.response?.data?.error || err.message}`)
+      onNotify?.('Erro ao recarregar campos', err.response?.data?.error || err.message)
     }
   }
 
   const handleSave = async () => {
     if (!form.name || !form.primary_domain) {
       onNotify?.('Campos obrigatorios', 'Nome e dominio sao obrigatorios')
+      return
+    }
+    if (!editorContent.trim()) {
+      onNotify?.('Preview obrigatorio', 'Gere o preview ou cole a configuracao antes de salvar')
       return
     }
     setSaving(true)
@@ -253,20 +471,68 @@ const ServerForm = ({ server, onSave, onCancel, dockerContainers, onNotify }) =>
   }
 
   const addPathRule = () => {
-    setForm({
-      ...form,
-      path_rules: [...form.path_rules, { path: '/api', type: 'proxy', proxy_host: 'localhost', proxy_port: 3000 }]
+    setPathRuleModal({
+      mode: 'create',
+      index: null,
+      rule: { path: '/api', type: 'proxy', proxy_host: 'localhost', proxy_port: 3000 }
     })
-  }
-
-  const updatePathRule = (index, field, value) => {
-    const newRules = [...form.path_rules]
-    newRules[index] = { ...newRules[index], [field]: value }
-    setForm({ ...form, path_rules: newRules })
   }
 
   const removePathRule = (index) => {
     setForm({ ...form, path_rules: form.path_rules.filter((_, i) => i !== index) })
+  }
+
+  const savePathRule = (rule) => {
+    if (pathRuleModal?.mode === 'edit') {
+      const newRules = [...form.path_rules]
+      newRules[pathRuleModal.index] = rule
+      setForm({ ...form, path_rules: newRules })
+    } else {
+      setForm({ ...form, path_rules: [...form.path_rules, rule] })
+    }
+    setPathRuleModal(null)
+  }
+
+  const summarizePathRule = (rule) => {
+    const type = rule.type || 'proxy'
+    if (type === 'redirect') {
+      return `${rule.path} -> ${rule.return_code || 301} ${rule.return_location || ''}`.trim()
+    }
+    if (type === 'static') {
+      return `${rule.path} -> ${rule.alias_path || rule.root_path || ''}`.trim()
+    }
+    return `${rule.path} -> ${rule.proxy_host || 'localhost'}:${rule.proxy_port || 3000}`
+  }
+
+  const validateConfigText = (text) => {
+    const warnings = []
+    if (!text.includes('server_name')) warnings.push('Falta server_name')
+    if (!/listen\s+\d+/.test(text)) warnings.push('Falta listen')
+    if (!/location\s+/.test(text)) warnings.push('Falta location')
+    const openCount = (text.match(/{/g) || []).length
+    const closeCount = (text.match(/}/g) || []).length
+    if (openCount !== closeCount) warnings.push('Chaves desbalanceadas')
+    return warnings
+  }
+
+  const getRouteWarnings = (data) => {
+    const rules = data.path_rules || []
+    const hasApi = rules.some((r) => r.type === 'proxy' && String(r.path || '').startsWith('/api'))
+    const hasSocket = rules.some((r) => r.type === 'proxy' && String(r.path || '').startsWith('/socket.io'))
+    const hasAdminStatic = rules.some((r) => r.type === 'static' && String(r.path || '').startsWith('/admin'))
+    const hasRootRedirect = rules.some(
+      (r) => r.type === 'redirect' && String(r.path || '') === '/' && String(r.return_location || '').startsWith('/admin')
+    )
+    const warnings = []
+    if (!hasApi) warnings.push('Rota /api nao configurada pode quebrar o painel.')
+    if (!hasSocket) warnings.push('Rota /socket.io nao configurada pode quebrar o painel.')
+    if (!hasAdminStatic && !hasRootRedirect) {
+      warnings.push('Sem /admin (static) ou redirect de / para /admin, painel pode parar.')
+    }
+    if (data.primary_domain === '_') {
+      warnings.push('server_name "_" usado. Alterar pode causar conflito com outros hosts.')
+    }
+    return warnings
   }
 
   const useDockerContainer = (container) => {
@@ -288,7 +554,8 @@ const ServerForm = ({ server, onSave, onCancel, dockerContainers, onNotify }) =>
   }
 
   return (
-    <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
+    <>
+      <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
       {/* Left: Form */}
       <div className="space-y-4">
         <div className="rounded-2xl border border-slate-800 bg-slate-900/60 p-4">
@@ -422,94 +689,27 @@ const ServerForm = ({ server, onSave, onCancel, dockerContainers, onNotify }) =>
             </h3>
             <div className="space-y-2">
               {form.path_rules.map((rule, index) => (
-                <div key={index} className="grid grid-cols-12 gap-2 items-center">
-                  <input
-                    type="text"
-                    value={rule.path}
-                    onChange={(e) => updatePathRule(index, 'path', e.target.value)}
-                    className="col-span-3 rounded-lg border border-slate-700 bg-slate-950 px-2 py-1 text-xs text-white"
-                    placeholder="/api"
-                  />
-                  <select
-                    value={rule.type || 'proxy'}
-                    onChange={(e) => updatePathRule(index, 'type', e.target.value)}
-                    className="col-span-2 rounded-lg border border-slate-700 bg-slate-950 px-2 py-1 text-xs text-white"
-                  >
-                    <option value="proxy">Proxy</option>
-                    <option value="static">Static</option>
-                    <option value="redirect">Redirect</option>
-                  </select>
-                  <select
-                    value={rule.modifier || ''}
-                    onChange={(e) => updatePathRule(index, 'modifier', e.target.value)}
-                    className="col-span-2 rounded-lg border border-slate-700 bg-slate-950 px-2 py-1 text-xs text-white"
-                  >
-                    <option value="">Match</option>
-                    <option value="=">=</option>
-                    <option value="^~">^~</option>
-                    <option value="~">~</option>
-                    <option value="~*">~*</option>
-                  </select>
-                  {(!rule.type || rule.type === 'proxy') && (
-                    <>
-                      <input
-                        type="text"
-                        value={rule.proxy_host}
-                        onChange={(e) => updatePathRule(index, 'proxy_host', e.target.value)}
-                        className="col-span-2 rounded-lg border border-slate-700 bg-slate-950 px-2 py-1 text-xs text-white"
-                        placeholder="Host"
-                      />
-                      <input
-                        type="number"
-                        value={rule.proxy_port}
-                        onChange={(e) => updatePathRule(index, 'proxy_port', parseInt(e.target.value) || 3000)}
-                        className="col-span-1 rounded-lg border border-slate-700 bg-slate-950 px-2 py-1 text-xs text-white"
-                        placeholder="Porta"
-                      />
-                    </>
-                  )}
-                  {rule.type === 'static' && (
-                    <>
-                      <input
-                        type="text"
-                        value={rule.alias_path || ''}
-                        onChange={(e) => updatePathRule(index, 'alias_path', e.target.value)}
-                        className="col-span-3 rounded-lg border border-slate-700 bg-slate-950 px-2 py-1 text-xs text-white"
-                        placeholder="Alias (/var/www/panel/)"
-                      />
-                      <input
-                        type="text"
-                        value={rule.try_files || ''}
-                        onChange={(e) => updatePathRule(index, 'try_files', e.target.value)}
-                        className="col-span-1 rounded-lg border border-slate-700 bg-slate-950 px-2 py-1 text-xs text-white"
-                        placeholder="try_files $uri $uri/ =404"
-                      />
-                    </>
-                  )}
-                  {rule.type === 'redirect' && (
-                    <>
-                      <input
-                        type="number"
-                        value={rule.return_code || 301}
-                        onChange={(e) => updatePathRule(index, 'return_code', parseInt(e.target.value, 10) || 301)}
-                        className="col-span-1 rounded-lg border border-slate-700 bg-slate-950 px-2 py-1 text-xs text-white"
-                        placeholder="301"
-                      />
-                      <input
-                        type="text"
-                        value={rule.return_location || ''}
-                        onChange={(e) => updatePathRule(index, 'return_location', e.target.value)}
-                        className="col-span-3 rounded-lg border border-slate-700 bg-slate-950 px-2 py-1 text-xs text-white"
-                        placeholder="/admin/"
-                      />
-                    </>
-                  )}
-                  <button
-                    onClick={() => removePathRule(index)}
-                    className="col-span-1 rounded-lg border border-rose-800 px-2 py-1 text-xs text-rose-200 hover:bg-rose-900"
-                  >
-                    <Trash2 className="h-3 w-3" />
-                  </button>
+                <div key={index} className="flex items-center justify-between rounded-xl border border-slate-800 bg-slate-950 px-3 py-2">
+                  <div>
+                    <p className="text-sm text-white">{summarizePathRule(rule)}</p>
+                    <p className="text-xs text-slate-500">
+                      {rule.type || 'proxy'} {rule.modifier ? `(${rule.modifier})` : ''}
+                    </p>
+                  </div>
+                  <div className="flex items-center gap-2">
+                    <button
+                      onClick={() => setPathRuleModal({ mode: 'edit', index, rule })}
+                      className="rounded-lg border border-slate-700 bg-slate-800 px-2 py-1 text-xs text-slate-200 hover:bg-slate-700"
+                    >
+                      Editar
+                    </button>
+                    <button
+                      onClick={() => removePathRule(index)}
+                      className="rounded-lg border border-rose-800 px-2 py-1 text-xs text-rose-200 hover:bg-rose-900"
+                    >
+                      <Trash2 className="h-3 w-3" />
+                    </button>
+                  </div>
                 </div>
               ))}
             </div>
@@ -588,6 +788,54 @@ const ServerForm = ({ server, onSave, onCancel, dockerContainers, onNotify }) =>
               className="w-full rounded-xl border border-slate-700 bg-slate-950 px-3 py-2 text-sm text-white"
               placeholder="/var/www/html"
             />
+          </div>
+        )}
+
+        {form.server_type === 'proxy' && (
+          <div className="rounded-2xl border border-slate-800 bg-slate-900/60 p-4">
+            <h3 className="text-sm font-semibold text-white mb-2 flex items-center gap-2">
+              <Edit2 className="h-4 w-4" />
+              Editor da Configuracao
+            </h3>
+            <p className="text-xs text-amber-300 mb-3">
+              Alterar a configuracao padrao pode derrubar o painel. Se isso acontecer, use o
+              comando `sudo bash reset-nginx.sh` na instancia para recuperar.
+            </p>
+            {routeWarnings.length > 0 && (
+              <div className="rounded-lg border border-amber-800 bg-amber-950/40 px-3 py-2 text-xs text-amber-200 mb-3">
+                {routeWarnings.map((warn, idx) => (
+                  <p key={idx}>{warn}</p>
+                ))}
+              </div>
+            )}
+            <div className="flex items-center gap-2 mb-3">
+              <button
+                onClick={generatePreviewFromForm}
+                className="rounded-lg bg-blue-500 px-3 py-1 text-xs font-semibold text-white hover:bg-blue-600"
+                disabled={previewLoading}
+              >
+                {previewLoading ? 'Gerando...' : 'Gerar preview'}
+              </button>
+              <button
+                onClick={reloadFieldsFromEditor}
+                className="rounded-lg border border-slate-700 bg-slate-800 px-3 py-1 text-xs text-slate-200 hover:bg-slate-700"
+              >
+                Recarregar campos do editor
+              </button>
+            </div>
+            <textarea
+              value={editorContent}
+              onChange={(e) => setEditorContent(e.target.value)}
+              className="h-64 w-full rounded-xl border border-slate-800 bg-slate-950 px-3 py-2 text-xs text-slate-100 font-mono"
+              placeholder="Clique em Gerar preview para ver a configuracao aqui..."
+            />
+            {previewWarnings.length > 0 && (
+              <div className="mt-3 rounded-lg border border-rose-900 bg-rose-950/40 px-3 py-2 text-xs text-rose-200">
+                {previewWarnings.map((warn, idx) => (
+                  <p key={idx}>Validacao: {warn}</p>
+                ))}
+              </div>
+            )}
           </div>
         )}
 
@@ -730,12 +978,6 @@ const ServerForm = ({ server, onSave, onCancel, dockerContainers, onNotify }) =>
             <Save className="h-4 w-4" />
             {saving ? 'Salvando...' : 'Salvar'}
           </button>
-          <button
-            onClick={generatePreview}
-            className="rounded-xl border border-slate-700 bg-slate-800 px-4 py-2 text-sm text-slate-300 hover:bg-slate-700"
-          >
-            <Eye className="h-4 w-4" />
-          </button>
           {onCancel && (
             <button
               onClick={onCancel}
@@ -746,26 +988,15 @@ const ServerForm = ({ server, onSave, onCancel, dockerContainers, onNotify }) =>
           )}
         </div>
       </div>
-
-      {/* Right: Preview */}
-      <div className="rounded-2xl border border-slate-800 bg-slate-900/60 p-4">
-        <h3 className="text-sm font-semibold text-white mb-4 flex items-center justify-between">
-          <span className="flex items-center gap-2">
-            <Eye className="h-4 w-4" />
-            Nginx Config Preview
-          </span>
-          <button
-            onClick={generatePreview}
-            className="rounded-lg bg-slate-800 px-2 py-1 text-xs text-slate-300 hover:bg-slate-700"
-          >
-            <RefreshCw className="h-3 w-3" />
-          </button>
-        </h3>
-        <pre className="h-[calc(100%-3rem)] overflow-auto rounded-xl border border-slate-800 bg-slate-950 p-4 text-xs text-slate-300 font-mono">
-          {preview || 'Clique em "Preview" para gerar a configuração'}
-        </pre>
       </div>
-    </div>
+      {pathRuleModal && (
+        <PathRuleModal
+          initialRule={pathRuleModal.rule}
+          onSave={savePathRule}
+          onCancel={() => setPathRuleModal(null)}
+        />
+      )}
+    </>
   )
 }
 

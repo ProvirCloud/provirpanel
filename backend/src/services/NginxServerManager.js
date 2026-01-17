@@ -407,12 +407,13 @@ ${buildProxyBlock(proxyTarget)}    }
     const config = this.generateNginxConfig(server);
     const configFileName = path.basename(server.config_file_path);
 
+    const backupPath = this.createBackup(server.config_file_path);
     fs.writeFileSync(server.config_file_path, config);
 
     const testResult = this.testConfig();
     if (!testResult.valid) {
-      if (fs.existsSync(server.config_file_path)) {
-        fs.unlinkSync(server.config_file_path);
+      if (backupPath) {
+        fs.copyFileSync(backupPath, server.config_file_path);
       }
       throw new Error(`Invalid Nginx configuration: ${testResult.error}`);
     }
@@ -424,6 +425,14 @@ ${buildProxyBlock(proxyTarget)}    }
     this.reload();
 
     return { success: true, config };
+  }
+
+  createBackup(filePath) {
+    if (!filePath || !fs.existsSync(filePath)) return null;
+    const stamp = new Date().toISOString().replace(/[-:]/g, '').replace(/\..+/, '');
+    const backupPath = `${filePath}.bak-${stamp}`;
+    fs.copyFileSync(filePath, backupPath);
+    return backupPath;
   }
 
   async getCurrentConfig(serverId) {
@@ -919,12 +928,9 @@ ${buildProxyBlock(proxyTarget)}    }
     return configs;
   }
 
-  parseNginxConfigFile(filePath) {
+  parseNginxConfigContent(content, filename = 'nginx.conf', filePath = null) {
     try {
-      const content = fs.readFileSync(filePath, 'utf8');
-      const filename = path.basename(filePath);
-
-      // Extract server_name (fallback to filename when server_name is "_")
+      // Extract server_name (fallback to filename, preserve "_" when explicit)
       const serverNameMatch = content.match(/server_name\s+([^;]+);/);
       let domains = [];
       if (serverNameMatch) {
@@ -932,8 +938,9 @@ ${buildProxyBlock(proxyTarget)}    }
       }
       const sanitizedFilename = filename.replace(/\.conf$/i, '').replace(/[^a-zA-Z0-9.-]/g, '_');
       const fallbackDomain = sanitizedFilename || 'default';
+      const hasUnderscore = domains.includes('_');
       const normalizedDomains = domains.filter(d => d && d !== '_');
-      const primaryDomain = normalizedDomains[0] || fallbackDomain;
+      const primaryDomain = normalizedDomains[0] || (hasUnderscore ? '_' : fallbackDomain);
       const additionalDomains = normalizedDomains.length > 0 ? normalizedDomains.slice(1) : [];
 
       // Extract listen port
@@ -1078,9 +1085,50 @@ ${buildProxyBlock(proxyTarget)}    }
         raw_config: content
       };
     } catch (err) {
+      console.error(`[NginxServerManager] Error parsing ${filePath || filename}:`, err.message);
+      return null;
+    }
+  }
+
+  parseNginxConfigFile(filePath) {
+    try {
+      const content = fs.readFileSync(filePath, 'utf8');
+      const filename = path.basename(filePath);
+      return this.parseNginxConfigContent(content, filename, filePath);
+    } catch (err) {
       console.error(`[NginxServerManager] Error parsing ${filePath}:`, err.message);
       return null;
     }
+  }
+
+  normalizeServerPayload(data) {
+    return {
+      name: data.name || data.primary_domain || 'Server',
+      primary_domain: data.primary_domain || data.primaryDomain || '',
+      additional_domains: data.additional_domains || data.additionalDomains || [],
+      upstream_servers: data.upstream_servers || data.upstreamServers || [],
+      path_rules: data.path_rules || data.pathRules || [],
+      server_type: data.server_type || data.serverType || 'proxy',
+      listen_port: data.listen_port || data.listenPort || 80,
+      ssl_type: data.ssl_type || data.sslType || 'none',
+      ssl_cert_path: data.ssl_cert_path || data.sslCertPath,
+      ssl_key_path: data.ssl_key_path || data.sslKeyPath,
+      proxy_host: data.proxy_host || data.proxyHost || 'localhost',
+      proxy_port: data.proxy_port || data.proxyPort || 3000,
+      root_path: data.root_path || data.rootPath || '/var/www/html',
+      websocket_enabled: data.websocket_enabled ?? data.websocketEnabled ?? true,
+      forward_headers: data.forward_headers ?? data.forwardHeaders ?? true,
+      client_max_body_size: data.client_max_body_size || data.clientMaxBodySize || '50m',
+      proxy_connect_timeout: data.proxy_connect_timeout || data.proxyConnectTimeout || '5s',
+      proxy_read_timeout: data.proxy_read_timeout || data.proxyReadTimeout || '60s',
+      proxy_send_timeout: data.proxy_send_timeout || data.proxySendTimeout || '60s',
+      is_active: data.is_active ?? data.isActive ?? true
+    };
+  }
+
+  generatePreviewFromPayload(data) {
+    const normalized = this.normalizeServerPayload(data);
+    return this.generateNginxConfig(normalized);
   }
 
   async importConfig(configData) {

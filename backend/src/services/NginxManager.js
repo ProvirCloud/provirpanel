@@ -145,8 +145,13 @@ class NginxManager {
     if (!fs.existsSync(filePath)) {
       throw new Error('Arquivo nao encontrado para edicao');
     }
+    const backupPath = this.createBackup(filePath);
     fs.writeFileSync(filePath, content);
-    return this.testConfig();
+    const result = this.testConfig();
+    if (!result.valid && backupPath) {
+      fs.copyFileSync(backupPath, filePath);
+    }
+    return result;
   }
 
   // Criar novo arquivo
@@ -174,6 +179,14 @@ class NginxManager {
       this.disableConfig(filename);
     }
     fs.unlinkSync(filePath);
+  }
+
+  createBackup(filePath) {
+    if (!fs.existsSync(filePath)) return null;
+    const stamp = new Date().toISOString().replace(/[-:]/g, '').replace(/\..+/, '');
+    const backupPath = `${filePath}.bak-${stamp}`;
+    fs.copyFileSync(filePath, backupPath);
+    return backupPath;
   }
 
   // Enable/Disable
