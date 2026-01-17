@@ -26,9 +26,12 @@ const generateUUID = () => {
 const stripAnsi = (value) =>
   String(value || '').replace(/\u001b\[[0-9;]*m/g, '')
 
+const stripControlChars = (value) =>
+  String(value || '').replace(/[\x00-\x08\x0B\x0C\x0E-\x1F\x7F-\x9F]/g, '')
+
 const formatLogChunk = (chunk) => {
   const timestamp = new Date().toISOString().replace('T', ' ').slice(0, 19)
-  return stripAnsi(chunk)
+  return stripControlChars(stripAnsi(chunk))
     .replace(/\r/g, '')
     .split('\n')
     .map((line) => (line ? `[${timestamp}] ${line}` : ''))

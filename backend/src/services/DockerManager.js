@@ -221,13 +221,26 @@ class DockerManager {
     return this.docker.getContainer(containerId).remove({ force: true });
   }
 
-  getContainerLogs(containerId, options = {}) {
-    return this.docker.getContainer(containerId).logs({
+  async getContainerLogs(containerId, options = {}) {
+    const container = this.docker.getContainer(containerId);
+    const stream = await container.logs({
       stdout: true,
       stderr: true,
       follow: true,
       tail: options.tail || 100
     });
+    const info = await container.inspect();
+
+    if (info?.Config?.Tty) {
+      return stream;
+    }
+
+    const { PassThrough } = require('stream');
+    const output = new PassThrough();
+    this.docker.modem.demuxStream(stream, output, output);
+    stream.on('end', () => output.end());
+    stream.on('error', (err) => output.emit('error', err));
+    return output;
   }
 
   async getContainerStats(containerId) {
