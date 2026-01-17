@@ -9,6 +9,7 @@ const cors = require('cors');
 const helmet = require('helmet');
 const { Server } = require('socket.io');
 const bcrypt = require('bcrypt');
+const crypto = require('crypto');
 
 const authRoutes = require('./routes/auth');
 const metricsRoutes = require('./routes/metrics');
@@ -113,8 +114,8 @@ const ensureDefaultAdmin = async () => {
     }
     const passwordHash = await bcrypt.hash(password, 12);
     await pool.query(
-      'INSERT INTO users (username, password, role) VALUES ($1, $2, $3)',
-      [username, passwordHash, 'admin']
+      'INSERT INTO users (id, username, password, role) VALUES ($1, $2, $3, $4)',
+      [crypto.randomUUID(), username, passwordHash, 'admin']
     );
     // eslint-disable-next-line no-console
     console.log('Default admin user created');
