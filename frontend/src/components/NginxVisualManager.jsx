@@ -879,6 +879,9 @@ const ServerForm = ({ server, onSave, onApply, onCancel, dockerContainers, docke
   }
 
   const performSave = async (payload, applyConfig) => {
+    if (Array.isArray(payload.path_rules) && payload.path_rules.length === 0) {
+      payload.clear_path_rules = true
+    }
     setSaving(true)
     try {
       const saved = await onSave(payload)
@@ -2588,14 +2591,16 @@ const NginxVisualManager = () => {
     setConfirmDialog({ title, message, onConfirm: wrappedConfirm, confirmText })
   }
 
-  const loadData = async () => {
+  const loadData = async ({ importConfigs = true } = {}) => {
     setLoading(true)
     setError('')
     try {
-      try {
-        await api.post('/nginx/import-configs')
-      } catch (importErr) {
-        console.warn('Failed to import nginx configs:', importErr.message)
+      if (importConfigs) {
+        try {
+          await api.post('/nginx/import-configs')
+        } catch (importErr) {
+          console.warn('Failed to import nginx configs:', importErr.message)
+        }
       }
 
       const [serversRes, statusRes, dockerRes] = await Promise.all([
@@ -2676,7 +2681,7 @@ const NginxVisualManager = () => {
       }
       setShowNewServer(false)
       setNewServerDraft(null)
-      loadData()
+      loadData({ importConfigs: false })
       return savedServer
     } catch (err) {
       showAlert('Erro ao salvar servidor', err.response?.data?.error || err.message)
