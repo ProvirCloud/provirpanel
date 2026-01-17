@@ -254,6 +254,10 @@ const PathRuleModal = ({ initialRule, onSave, onCancel }) => {
     modifier: '',
     proxy_host: 'localhost',
     proxy_port: 3000,
+    rewrite_enabled: false,
+    rewrite_from: '',
+    rewrite_to: '',
+    rewrite_flag: 'break',
     alias_path: '',
     root_path: '',
     try_files: '',
@@ -327,6 +331,47 @@ const PathRuleModal = ({ initialRule, onSave, onCancel }) => {
                   placeholder="3000"
                 />
               </div>
+              <div className="col-span-2 flex items-center gap-2">
+                <input
+                  type="checkbox"
+                  checked={Boolean(rule.rewrite_enabled)}
+                  onChange={(e) => setRule({ ...rule, rewrite_enabled: e.target.checked })}
+                />
+                <span className="text-xs text-slate-300">Aplicar rewrite</span>
+              </div>
+              {rule.rewrite_enabled && (
+                <>
+                  <div>
+                    <label className="text-xs text-slate-400">Rewrite de</label>
+                    <input
+                      className="mt-1 w-full rounded-xl border border-slate-800 bg-slate-950 px-3 py-2 text-sm"
+                      value={rule.rewrite_from}
+                      onChange={(e) => setRule({ ...rule, rewrite_from: e.target.value })}
+                      placeholder="^/integra/?(.*)$"
+                    />
+                  </div>
+                  <div>
+                    <label className="text-xs text-slate-400">Rewrite para</label>
+                    <input
+                      className="mt-1 w-full rounded-xl border border-slate-800 bg-slate-950 px-3 py-2 text-sm"
+                      value={rule.rewrite_to}
+                      onChange={(e) => setRule({ ...rule, rewrite_to: e.target.value })}
+                      placeholder="/$1"
+                    />
+                  </div>
+                  <div>
+                    <label className="text-xs text-slate-400">Flag</label>
+                    <select
+                      className="mt-1 w-full rounded-xl border border-slate-800 bg-slate-950 px-3 py-2 text-sm"
+                      value={rule.rewrite_flag || 'break'}
+                      onChange={(e) => setRule({ ...rule, rewrite_flag: e.target.value })}
+                    >
+                      <option value="break">break</option>
+                      <option value="last">last</option>
+                    </select>
+                  </div>
+                </>
+              )}
             </>
           )}
           {isStatic && (
@@ -1083,7 +1128,16 @@ const ServerForm = ({ server, onSave, onApply, onCancel, dockerContainers, docke
     setPathRuleModal({
       mode: 'create',
       index: null,
-      rule: { path: '/api', type: 'proxy', proxy_host: 'localhost', proxy_port: 3000 }
+      rule: {
+        path: '/api',
+        type: 'proxy',
+        proxy_host: 'localhost',
+        proxy_port: 3000,
+        rewrite_enabled: false,
+        rewrite_from: '',
+        rewrite_to: '',
+        rewrite_flag: 'break'
+      }
     })
   }
 
@@ -1337,7 +1391,8 @@ const ServerForm = ({ server, onSave, onApply, onCancel, dockerContainers, docke
       return `${rule.path} -> ${rule.alias_path || rule.root_path || ''}`.trim()
     }
     const dockerLabel = rule.docker_container ? ` (${rule.docker_container})` : ''
-    return `${rule.path} -> ${rule.proxy_host || 'localhost'}:${rule.proxy_port || 3000}${dockerLabel}`
+    const rewriteLabel = rule.rewrite_enabled ? ' rewrite' : ''
+    return `${rule.path} -> ${rule.proxy_host || 'localhost'}:${rule.proxy_port || 3000}${dockerLabel}${rewriteLabel}`
   }
 
   const validateConfigText = (text) => {

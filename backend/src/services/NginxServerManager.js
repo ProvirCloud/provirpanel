@@ -510,6 +510,10 @@ class NginxServerManager {
           proxy_host: rule.proxy_host || rule.host || server.proxy_host || 'localhost',
           proxy_port: rule.proxy_port || rule.port || server.proxy_port || 3000,
           proxy_pass_path: rule.proxy_pass_path,
+          rewrite_enabled: rule.rewrite_enabled,
+          rewrite_from: rule.rewrite_from,
+          rewrite_to: rule.rewrite_to,
+          rewrite_flag: rule.rewrite_flag,
           alias_path: rule.alias_path,
           root_path: rule.root_path,
           try_files: rule.try_files,
@@ -551,9 +555,13 @@ class NginxServerManager {
             pathSuffix = rule.proxy_pass_path.startsWith('/') ? rule.proxy_pass_path : `/${rule.proxy_pass_path}`;
           }
           const target = `http://${rule.proxy_host}:${rule.proxy_port}${pathSuffix}`;
+          const rewriteFlag = rule.rewrite_flag || 'break';
+          const rewriteLine = rule.rewrite_enabled && rule.rewrite_from && rule.rewrite_to
+            ? `        rewrite ${rule.rewrite_from} ${rule.rewrite_to} ${rewriteFlag};\n`
+            : '';
           config += `
     location ${modifierPart}${rule.path} {
-${buildProxyBlock(target)}    }
+${rewriteLine}${buildProxyBlock(target)}    }
 `;
         });
       }
@@ -1327,6 +1335,17 @@ ${buildProxyBlock(proxyTarget)}    }
           continue;
         }
 
+        const rewriteMatch = block.match(/rewrite\s+([^;]+);/);
+        let rewriteFrom;
+        let rewriteTo;
+        let rewriteFlag;
+        if (rewriteMatch) {
+          const parts = rewriteMatch[1].trim().split(/\s+/);
+          rewriteFrom = parts[0];
+          rewriteTo = parts[1];
+          rewriteFlag = parts[2];
+        }
+
         const proxyPassInBlock = block.match(/proxy_pass\s+http:\/\/([^:\/\s]+):?(\d+)?([^;\s]*)?/);
         if (proxyPassInBlock && locPath !== '/') {
           const host = proxyPassInBlock[1];
@@ -1338,7 +1357,11 @@ ${buildProxyBlock(proxyTarget)}    }
             type: 'proxy',
             proxy_host: host,
             proxy_port: port,
-            proxy_pass_path: pathSuffix
+            proxy_pass_path: pathSuffix,
+            rewrite_enabled: Boolean(rewriteFrom && rewriteTo),
+            rewrite_from: rewriteFrom,
+            rewrite_to: rewriteTo,
+            rewrite_flag: rewriteFlag
           });
         }
       }
