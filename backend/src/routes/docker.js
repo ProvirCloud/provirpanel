@@ -386,6 +386,29 @@ const stringifyCommand = (command) => {
   return Array.isArray(command) ? command.join(' ') : String(command);
 };
 
+const stripNextStartFlags = (command) => {
+  if (!command) return command;
+  const normalize = (value) =>
+    value.replace(/\bnext start\b\s+-H\s+0\.0\.0\.0\s+-p\s+3000\b/g, 'next start');
+
+  if (Array.isArray(command)) {
+    if (command[0] === 'sh' && command[1] === '-c') {
+      const cmd = command.slice(2).join(' ');
+      const updated = normalize(cmd);
+      if (updated === cmd) return command;
+      return ['sh', '-c', updated];
+    }
+    const cmd = command.join(' ');
+    const updated = normalize(cmd);
+    if (updated === cmd) return command;
+    return ['sh', '-c', updated];
+  }
+  if (typeof command === 'string') {
+    return normalize(command);
+  }
+  return command;
+};
+
 const addNpmIncludeDev = (cmd) => {
   let updated = cmd;
   if (!updated.includes('--include=dev')) {
@@ -832,6 +855,7 @@ router.post('/services', async (req, res, next) => {
       containerCmd = resolveNodeCommand(finalizedVolumes) || ['npm', 'start'];
     }
     if (!hasUserCommand) {
+      containerCmd = stripNextStartFlags(containerCmd);
       containerCmd = ensureCommandWorkdir(containerCmd, template.workdir);
       const createCmdBefore = stringifyCommand(containerCmd);
       containerCmd = ensureNpmDevDependencies(containerCmd);
@@ -1167,11 +1191,12 @@ router.put('/services/:id', async (req, res, next) => {
     const normalizedCommand = normalizeCommand(command);
     const hasUserCommand = !!normalizedCommand;
     let containerCmd = normalizedCommand || service.command || template.command;
-    if (service.templateId === 'node-app' && !normalizedCommand) {
+    if (service.templateId === 'node-app' && !normalizedCommand && !service.command) {
       containerCmd = resolveNodeCommand(service.volumes) || containerCmd;
     }
     if (!hasUserCommand) {
     if (!hasUserCommand) {
+      containerCmd = stripNextStartFlags(containerCmd);
       containerCmd = ensureCommandWorkdir(containerCmd, workdir);
       const updateCmdBefore = stringifyCommand(containerCmd);
       containerCmd = ensureNpmDevDependencies(containerCmd);
@@ -1338,7 +1363,9 @@ router.post('/services/:id/project-upload', upload.single('archive'), async (req
 
     const hasUserCommand = !!service.command;
     let containerCmd = service.command || template.command;
-    containerCmd = resolveNodeCommand(service.volumes) || containerCmd;
+    if (!service.command) {
+      containerCmd = resolveNodeCommand(service.volumes) || containerCmd;
+    }
     if (!hasUserCommand) {
       containerCmd = ensureCommandWorkdir(containerCmd, workdir);
       const uploadCmdBefore = stringifyCommand(containerCmd);
