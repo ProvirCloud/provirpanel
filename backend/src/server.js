@@ -55,6 +55,7 @@ app.use('/docker', authMiddleware, dockerRoutes.router);
 app.use('/storage', authMiddleware, storageRoutes);
 app.use('/ci-cd', authMiddleware, cicdRoutes);
 app.use('/domains', authMiddleware, domainsRoutes);
+app.use('/nginx', authMiddleware, nginxServersRoutes);
 app.use('/nginx', authMiddleware, nginxRoutes);
 app.use('/api/nginx', authMiddleware, nginxServersRoutes);
 
