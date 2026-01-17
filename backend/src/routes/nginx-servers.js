@@ -29,6 +29,20 @@ const ensureStorageDir = (dir) => {
   fs.mkdirSync(dir, { recursive: true });
 };
 
+const removeNonOriginalFiles = (dirPath, keepName) => {
+  if (!dirPath || !fs.existsSync(dirPath)) return [];
+  const removed = [];
+  const entries = fs.readdirSync(dirPath, { withFileTypes: true });
+  entries.forEach((entry) => {
+    if (!entry.isFile() && !entry.isSymbolicLink()) return;
+    if (entry.name === keepName) return;
+    const fullPath = path.join(dirPath, entry.name);
+    fs.unlinkSync(fullPath);
+    removed.push(fullPath);
+  });
+  return removed;
+};
+
 // ==================== SERVER CRUD ====================
 
 // List all servers
@@ -385,6 +399,12 @@ router.post('/import-configs', async (req, res, next) => {
 // Reset Nginx configs and clear DB data
 router.post('/reset-configs', async (req, res, next) => {
   try {
+    const originalName = 'provirpanel';
+    const removed = {
+      sites_available: removeNonOriginalFiles(nginxManager.sitesAvailable, originalName),
+      sites_enabled: removeNonOriginalFiles(nginxManager.sitesEnabled, originalName),
+      conf_d: removeNonOriginalFiles(nginxManager.confD, null)
+    };
     const scriptPath = path.join(__dirname, '../../..', 'reset-nginx.sh');
     if (!fs.existsSync(scriptPath)) {
       return res.status(404).json({ error: 'reset-nginx.sh not found' });
@@ -392,7 +412,7 @@ router.post('/reset-configs', async (req, res, next) => {
     execSync(`bash "${scriptPath}"`, { stdio: 'pipe' });
     const resetDb = await nginxManager.resetNginxData();
     const importResult = await nginxManager.importAllConfigs();
-    res.json({ reset: true, db: resetDb, import: importResult });
+    res.json({ reset: true, removed, db: resetDb, import: importResult });
   } catch (err) {
     next(err);
   }
