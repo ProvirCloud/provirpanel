@@ -1341,6 +1341,38 @@ ${buildProxyBlock(proxyTarget)}    }
       results.errors.push({ domain: 'cleanup', error: err.message });
     }
 
+    // Remove duplicates by primaryDomain (keep most recently updated)
+    try {
+      const dbServers = await prisma.nginxServer.findMany({
+        select: { id: true, primaryDomain: true, updatedAt: true, createdAt: true }
+      });
+      const byDomain = new Map();
+      const duplicates = [];
+
+      dbServers.forEach((srv) => {
+        if (!srv.primaryDomain) return;
+        const existing = byDomain.get(srv.primaryDomain);
+        if (!existing) {
+          byDomain.set(srv.primaryDomain, srv);
+          return;
+        }
+        const existingTime = existing.updatedAt || existing.createdAt || new Date(0);
+        const currentTime = srv.updatedAt || srv.createdAt || new Date(0);
+        if (currentTime > existingTime) {
+          duplicates.push(existing.id);
+          byDomain.set(srv.primaryDomain, srv);
+        } else {
+          duplicates.push(srv.id);
+        }
+      });
+
+      if (duplicates.length > 0) {
+        await prisma.nginxServer.deleteMany({ where: { id: { in: duplicates } } });
+      }
+    } catch (err) {
+      results.errors.push({ domain: 'dedupe', error: err.message });
+    }
+
     return results;
   }
 
