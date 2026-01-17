@@ -48,7 +48,7 @@ log "Atualizando dependências backend"
 npm install
 
 # Verificar se Prisma precisa ser configurado
-if [[ -f "prisma/schema.prisma" ]]; then
+if [[ -f "backend/prisma/schema.prisma" ]]; then
   # Carregar variáveis de ambiente do backend
   if [[ -f "backend/.env" ]]; then
     log "Carregando variáveis de ambiente"
@@ -58,10 +58,10 @@ if [[ -f "prisma/schema.prisma" ]]; then
   fi
 
   log "Gerando Prisma Client"
-  npx prisma generate
+  npx prisma generate --schema backend/prisma/schema.prisma
 
   log "Sincronizando schema do banco de dados"
-  npx prisma db push --skip-generate --accept-data-loss 2>/dev/null || {
+  npx prisma db push --schema backend/prisma/schema.prisma --skip-generate --accept-data-loss 2>/dev/null || {
     log "Aviso: prisma db push falhou (pode ser normal na primeira execução)"
   }
 fi

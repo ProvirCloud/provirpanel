@@ -267,7 +267,7 @@ setup_prisma() {
   log "Setting up Prisma ORM"
 
   # Check if prisma schema exists
-  if [[ -f "${INSTALL_DIR}/prisma/schema.prisma" ]]; then
+  if [[ -f "${INSTALL_DIR}/backend/prisma/schema.prisma" ]]; then
     cd "${INSTALL_DIR}"
 
     # Load environment variables
@@ -279,11 +279,11 @@ setup_prisma() {
 
     # Generate Prisma Client
     log "Generating Prisma Client"
-    npx prisma generate
+    npx prisma generate --schema backend/prisma/schema.prisma
 
     # Push schema to database (creates tables)
     log "Creating database tables via Prisma"
-    npx prisma db push --skip-generate --accept-data-loss || {
+    npx prisma db push --schema backend/prisma/schema.prisma --skip-generate --accept-data-loss || {
       log "Warning: prisma db push failed, tables may need manual creation"
     }
 

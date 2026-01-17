@@ -7,13 +7,13 @@ async function runMigrations() {
   try {
     console.log('[Migrate] Running Prisma database sync...');
 
-    // Get the prisma schema path (in the painel root)
-    const prismaSchemaPath = path.join(__dirname, '../../../prisma/schema.prisma');
+    // Get the prisma schema path (inside backend)
+    const prismaSchemaPath = path.join(__dirname, '../../prisma/schema.prisma');
 
     // Run prisma db push to sync schema with database
     // This creates tables if they don't exist and updates schema
     execSync(`npx prisma db push --schema="${prismaSchemaPath}" --skip-generate`, {
-      cwd: path.join(__dirname, '../../..'),
+      cwd: path.join(__dirname, '../..'),
       stdio: 'inherit',
       env: { ...process.env }
     });
