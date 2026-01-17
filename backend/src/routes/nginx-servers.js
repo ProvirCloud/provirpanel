@@ -4,6 +4,7 @@ const express = require('express');
 const fs = require('fs');
 const os = require('os');
 const path = require('path');
+const { execSync } = require('child_process');
 const multer = require('multer');
 const NginxServerManager = require('../services/NginxServerManager');
 
@@ -376,6 +377,22 @@ router.post('/import-configs', async (req, res, next) => {
   try {
     const result = await nginxManager.importAllConfigs();
     res.json(result);
+  } catch (err) {
+    next(err);
+  }
+});
+
+// Reset Nginx configs and clear DB data
+router.post('/reset-configs', async (req, res, next) => {
+  try {
+    const scriptPath = path.join(__dirname, '../../..', 'reset-nginx.sh');
+    if (!fs.existsSync(scriptPath)) {
+      return res.status(404).json({ error: 'reset-nginx.sh not found' });
+    }
+    execSync(`bash "${scriptPath}"`, { stdio: 'pipe' });
+    const resetDb = await nginxManager.resetNginxData();
+    const importResult = await nginxManager.importAllConfigs();
+    res.json({ reset: true, db: resetDb, import: importResult });
   } catch (err) {
     next(err);
   }

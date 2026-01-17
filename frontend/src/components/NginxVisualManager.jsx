@@ -1695,6 +1695,7 @@ const NginxVisualManager = () => {
   const [loading, setLoading] = useState(true)
   const [importing, setImporting] = useState(false)
   const [importStatus, setImportStatus] = useState('')
+  const [resetting, setResetting] = useState(false)
   const [error, setError] = useState('')
   const [testResult, setTestResult] = useState(null)
   const [alertDialog, setAlertDialog] = useState(null)
@@ -1838,6 +1839,27 @@ const NginxVisualManager = () => {
     }
   }
 
+  const handleResetConfigs = () => {
+    showConfirm(
+      'Resetar configuracao do Nginx',
+      'Isso vai restaurar a configuracao original e apagar dados do banco de dados do Nginx. Deseja continuar?',
+      async () => {
+        setConfirmDialog(null)
+        setResetting(true)
+        try {
+          await api.post('/nginx/reset-configs')
+          await loadData()
+          showAlert('Reset concluido', 'Configuracao restaurada e banco limpo')
+        } catch (err) {
+          showAlert('Erro ao resetar', err.response?.data?.error || err.message)
+        } finally {
+          setResetting(false)
+        }
+      },
+      'Resetar'
+    )
+  }
+
   return (
     <div className="h-full w-full max-w-full flex flex-col space-y-4">
       {/* Header */}
@@ -1907,6 +1929,14 @@ const NginxVisualManager = () => {
           >
             <Download className="h-4 w-4" />
             {importing ? 'Importando...' : 'Importar configs do Nginx'}
+          </button>
+          <button
+            onClick={handleResetConfigs}
+            disabled={resetting}
+            className="flex items-center justify-center gap-2 rounded-xl border border-rose-800 bg-rose-950 px-4 py-2 text-sm text-rose-200 hover:bg-rose-900 disabled:opacity-60"
+          >
+            <Trash2 className="h-4 w-4" />
+            {resetting ? 'Resetando...' : 'Resetar configuracao'}
           </button>
           {importStatus && (
             <p className="text-xs text-slate-500 px-1">{importStatus}</p>

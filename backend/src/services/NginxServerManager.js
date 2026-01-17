@@ -1250,6 +1250,20 @@ ${buildProxyBlock(proxyTarget)}    }
 
     return results;
   }
+
+  async resetNginxData() {
+    try {
+      await prisma.nginxLog.deleteMany();
+      await prisma.nginxSslCert.deleteMany();
+      await prisma.nginxServer.deleteMany();
+      return { success: true };
+    } catch (err) {
+      if (err.code === 'P2021') {
+        return { success: false, error: 'Tables not found' };
+      }
+      throw err;
+    }
+  }
 }
 
 module.exports = NginxServerManager;
