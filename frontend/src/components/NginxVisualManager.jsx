@@ -848,7 +848,10 @@ const ServerForm = ({ server, onSave, onApply, onCancel, dockerContainers, onNot
           if (saved?.id) {
             await onApply(saved.id)
           }
+          setForm((prev) => ({ ...prev, ...payload }))
+          setCurrentConfig(editorContent)
           setEditorTouched(false)
+          setShowAdvanced(false)
         } finally {
           setSaving(false)
         }
@@ -1043,6 +1046,7 @@ const ServerForm = ({ server, onSave, onApply, onCancel, dockerContainers, onNot
             {showAdvanced ? 'Ocultar configuracao avancada' : 'Configuracao avancada'}
           </button>
         </div>
+        {!showAdvanced && (
         <div className="rounded-2xl border border-slate-800 bg-slate-900/60 p-4">
           <h3 className="text-sm font-semibold text-white mb-4 flex items-center gap-2">
             <Settings className="h-4 w-4" />
@@ -1126,9 +1130,10 @@ const ServerForm = ({ server, onSave, onApply, onCancel, dockerContainers, onNot
             </div>
           </div>
         </div>
+        )}
 
         {/* Proxy / Balancer / Static config */}
-        {form.server_type === 'proxy' && (
+        {!showAdvanced && form.server_type === 'proxy' && (
           <div className="rounded-2xl border border-slate-800 bg-slate-900/60 p-4">
             <h3 className="text-sm font-semibold text-white mb-4 flex items-center gap-2">
               <ArrowRight className="h-4 w-4" />
@@ -1201,7 +1206,7 @@ const ServerForm = ({ server, onSave, onApply, onCancel, dockerContainers, onNot
           </div>
         )}
 
-        {form.server_type === 'balancer' && (
+        {!showAdvanced && form.server_type === 'balancer' && (
           <div className="rounded-2xl border border-slate-800 bg-slate-900/60 p-4">
             <h3 className="text-sm font-semibold text-white mb-4 flex items-center justify-between">
               <span className="flex items-center gap-2">
@@ -1260,7 +1265,7 @@ const ServerForm = ({ server, onSave, onApply, onCancel, dockerContainers, onNot
           </div>
         )}
 
-        {form.server_type === 'static' && (
+        {!showAdvanced && form.server_type === 'static' && (
           <div className="rounded-2xl border border-slate-800 bg-slate-900/60 p-4">
             <h3 className="text-sm font-semibold text-white mb-4 flex items-center gap-2">
               <Globe className="h-4 w-4" />
@@ -1277,6 +1282,7 @@ const ServerForm = ({ server, onSave, onApply, onCancel, dockerContainers, onNot
         )}
 
         {/* SSL Configuration */}
+        {!showAdvanced && (
         <div className="rounded-2xl border border-slate-800 bg-slate-900/60 p-4">
           <h3 className="text-sm font-semibold text-white mb-4 flex items-center gap-2">
             <Shield className="h-4 w-4" />
@@ -1399,8 +1405,10 @@ const ServerForm = ({ server, onSave, onApply, onCancel, dockerContainers, onNot
             )}
           </div>
         </div>
+        )}
 
         {/* Advanced Options */}
+        {!showAdvanced && (
         <details className="rounded-2xl border border-slate-800 bg-slate-900/60">
           <summary className="cursor-pointer p-4 text-sm font-semibold text-white flex items-center gap-2">
             <ChevronRight className="h-4 w-4" />
@@ -1452,9 +1460,10 @@ const ServerForm = ({ server, onSave, onApply, onCancel, dockerContainers, onNot
             </div>
           </div>
         </details>
+        )}
 
         {/* Docker Containers */}
-        {dockerContainers.length > 0 && (
+        {!showAdvanced && dockerContainers.length > 0 && (
           <div className="rounded-2xl border border-slate-800 bg-slate-900/60 p-4">
             <h3 className="text-sm font-semibold text-white mb-3 flex items-center gap-2">
               <Box className="h-4 w-4" />
@@ -1494,7 +1503,7 @@ const ServerForm = ({ server, onSave, onApply, onCancel, dockerContainers, onNot
                 setEditorContent(e.target.value)
                 setEditorTouched(true)
               }}
-              className="h-64 w-full rounded-xl border border-slate-800 bg-slate-950 px-3 py-2 text-xs text-slate-100 font-mono"
+              className="h-[70vh] w-full rounded-xl border border-slate-800 bg-slate-950 px-3 py-2 text-xs text-slate-100 font-mono"
               placeholder="Clique em Gerar preview para ver a configuracao aqui..."
             />
           </div>
