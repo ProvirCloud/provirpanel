@@ -341,6 +341,12 @@ const ServerForm = ({ server, onSave, onCancel, dockerContainers, onNotify }) =>
   })
   const [saving, setSaving] = useState(false)
   const [newDomain, setNewDomain] = useState('')
+  const [sslInputMode, setSslInputMode] = useState('path')
+  const [sslCertPem, setSslCertPem] = useState('')
+  const [sslKeyPem, setSslKeyPem] = useState('')
+  const [sslCertFile, setSslCertFile] = useState(null)
+  const [sslKeyFile, setSslKeyFile] = useState(null)
+  const [sslSaving, setSslSaving] = useState(false)
   const [pathRuleModal, setPathRuleModal] = useState(null)
   const [editorContent, setEditorContent] = useState('')
   const [previewLoading, setPreviewLoading] = useState(false)
@@ -451,6 +457,66 @@ const ServerForm = ({ server, onSave, onCancel, dockerContainers, onNotify }) =>
 
   const removeDomain = (domain) => {
     setForm({ ...form, additional_domains: form.additional_domains.filter(d => d !== domain) })
+  }
+
+  const handleStoreSslPem = async () => {
+    if (!form.primary_domain) {
+      onNotify?.('Dominio obrigatorio', 'Defina o dominio principal antes de salvar o certificado')
+      return
+    }
+    if (!sslCertPem.trim() || !sslKeyPem.trim()) {
+      onNotify?.('Dados incompletos', 'Cole o certificado e a chave')
+      return
+    }
+    setSslSaving(true)
+    try {
+      const res = await api.post('/nginx/ssl/store', {
+        domain: form.primary_domain,
+        certPem: sslCertPem,
+        keyPem: sslKeyPem
+      })
+      setForm((prev) => ({
+        ...prev,
+        ssl_cert_path: res.data.cert_path,
+        ssl_key_path: res.data.key_path
+      }))
+      onNotify?.('Certificado salvo', 'Os caminhos foram preenchidos automaticamente')
+    } catch (err) {
+      onNotify?.('Erro ao salvar certificado', err.response?.data?.error || err.message)
+    } finally {
+      setSslSaving(false)
+    }
+  }
+
+  const handleUploadSslFiles = async () => {
+    if (!form.primary_domain) {
+      onNotify?.('Dominio obrigatorio', 'Defina o dominio principal antes de enviar os arquivos')
+      return
+    }
+    if (!sslCertFile || !sslKeyFile) {
+      onNotify?.('Arquivos obrigatorios', 'Selecione o certificado e a chave')
+      return
+    }
+    setSslSaving(true)
+    try {
+      const formData = new FormData()
+      formData.append('domain', form.primary_domain)
+      formData.append('certFile', sslCertFile)
+      formData.append('keyFile', sslKeyFile)
+      const res = await api.post('/nginx/ssl/upload', formData, {
+        headers: { 'Content-Type': 'multipart/form-data' }
+      })
+      setForm((prev) => ({
+        ...prev,
+        ssl_cert_path: res.data.cert_path,
+        ssl_key_path: res.data.key_path
+      }))
+      onNotify?.('Arquivos enviados', 'Os caminhos foram preenchidos automaticamente')
+    } catch (err) {
+      onNotify?.('Erro ao enviar arquivos', err.response?.data?.error || err.message)
+    } finally {
+      setSslSaving(false)
+    }
   }
 
   const addUpstream = () => {
@@ -860,27 +926,104 @@ const ServerForm = ({ server, onSave, onCancel, dockerContainers, onNotify }) =>
             </div>
 
             {form.ssl_type === 'manual' && (
-              <div className="grid grid-cols-2 gap-3">
+              <div className="space-y-3">
                 <div>
-                  <label className="text-xs text-slate-400">Caminho do Certificado</label>
-                  <input
-                    type="text"
-                    value={form.ssl_cert_path}
-                    onChange={(e) => setForm({ ...form, ssl_cert_path: e.target.value })}
+                  <label className="text-xs text-slate-400">Modo de configuracao</label>
+                  <select
+                    value={sslInputMode}
+                    onChange={(e) => setSslInputMode(e.target.value)}
                     className="mt-1 w-full rounded-xl border border-slate-700 bg-slate-950 px-3 py-2 text-sm text-white"
-                    placeholder="/etc/ssl/certs/cert.pem"
-                  />
+                  >
+                    <option value="path">Usar caminho no servidor</option>
+                    <option value="paste">Colar certificado e chave</option>
+                    <option value="upload">Upload de arquivos</option>
+                  </select>
                 </div>
-                <div>
-                  <label className="text-xs text-slate-400">Caminho da Chave</label>
-                  <input
-                    type="text"
-                    value={form.ssl_key_path}
-                    onChange={(e) => setForm({ ...form, ssl_key_path: e.target.value })}
-                    className="mt-1 w-full rounded-xl border border-slate-700 bg-slate-950 px-3 py-2 text-sm text-white"
-                    placeholder="/etc/ssl/private/key.pem"
-                  />
-                </div>
+
+                {sslInputMode === 'path' && (
+                  <div className="grid grid-cols-2 gap-3">
+                    <div>
+                      <label className="text-xs text-slate-400">Caminho do Certificado</label>
+                      <input
+                        type="text"
+                        value={form.ssl_cert_path}
+                        onChange={(e) => setForm({ ...form, ssl_cert_path: e.target.value })}
+                        className="mt-1 w-full rounded-xl border border-slate-700 bg-slate-950 px-3 py-2 text-sm text-white"
+                        placeholder="/etc/ssl/certs/cert.pem"
+                      />
+                    </div>
+                    <div>
+                      <label className="text-xs text-slate-400">Caminho da Chave</label>
+                      <input
+                        type="text"
+                        value={form.ssl_key_path}
+                        onChange={(e) => setForm({ ...form, ssl_key_path: e.target.value })}
+                        className="mt-1 w-full rounded-xl border border-slate-700 bg-slate-950 px-3 py-2 text-sm text-white"
+                        placeholder="/etc/ssl/private/key.pem"
+                      />
+                    </div>
+                  </div>
+                )}
+
+                {sslInputMode === 'paste' && (
+                  <div className="space-y-3">
+                    <div>
+                      <label className="text-xs text-slate-400">Certificado (.pem)</label>
+                      <textarea
+                        value={sslCertPem}
+                        onChange={(e) => setSslCertPem(e.target.value)}
+                        className="mt-1 h-28 w-full rounded-xl border border-slate-700 bg-slate-950 px-3 py-2 text-xs text-white font-mono"
+                        placeholder="-----BEGIN CERTIFICATE-----"
+                      />
+                    </div>
+                    <div>
+                      <label className="text-xs text-slate-400">Chave (.key)</label>
+                      <textarea
+                        value={sslKeyPem}
+                        onChange={(e) => setSslKeyPem(e.target.value)}
+                        className="mt-1 h-28 w-full rounded-xl border border-slate-700 bg-slate-950 px-3 py-2 text-xs text-white font-mono"
+                        placeholder="-----BEGIN PRIVATE KEY-----"
+                      />
+                    </div>
+                    <button
+                      onClick={handleStoreSslPem}
+                      disabled={sslSaving}
+                      className="rounded-lg bg-blue-500 px-3 py-2 text-xs font-semibold text-white hover:bg-blue-600 disabled:opacity-60"
+                    >
+                      {sslSaving ? 'Salvando...' : 'Salvar certificado no servidor'}
+                    </button>
+                  </div>
+                )}
+
+                {sslInputMode === 'upload' && (
+                  <div className="space-y-3">
+                    <div>
+                      <label className="text-xs text-slate-400">Arquivo do certificado</label>
+                      <input
+                        type="file"
+                        accept=".pem,.crt"
+                        onChange={(e) => setSslCertFile(e.target.files?.[0] || null)}
+                        className="mt-1 w-full text-xs text-slate-300"
+                      />
+                    </div>
+                    <div>
+                      <label className="text-xs text-slate-400">Arquivo da chave</label>
+                      <input
+                        type="file"
+                        accept=".key"
+                        onChange={(e) => setSslKeyFile(e.target.files?.[0] || null)}
+                        className="mt-1 w-full text-xs text-slate-300"
+                      />
+                    </div>
+                    <button
+                      onClick={handleUploadSslFiles}
+                      disabled={sslSaving}
+                      className="rounded-lg bg-blue-500 px-3 py-2 text-xs font-semibold text-white hover:bg-blue-600 disabled:opacity-60"
+                    >
+                      {sslSaving ? 'Enviando...' : 'Enviar arquivos'}
+                    </button>
+                  </div>
+                )}
               </div>
             )}
           </div>

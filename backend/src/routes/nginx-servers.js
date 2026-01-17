@@ -1,10 +1,32 @@
 'use strict';
 
 const express = require('express');
+const fs = require('fs');
+const os = require('os');
+const path = require('path');
+const multer = require('multer');
 const NginxServerManager = require('../services/NginxServerManager');
 
 const router = express.Router();
 const nginxManager = new NginxServerManager();
+const upload = multer({ dest: path.join(os.tmpdir(), 'nginx-ssl') });
+
+const getSslStorageDir = () => process.env.NGINX_SSL_STORAGE || '/etc/nginx/ssl';
+const sanitizeName = (value) => value.replace(/[^a-zA-Z0-9.-]/g, '_');
+const buildSslPaths = (domain) => {
+  const safe = sanitizeName(domain || 'default');
+  const stamp = new Date().toISOString().replace(/[-:]/g, '').replace(/\..+/, '');
+  const dir = getSslStorageDir();
+  return {
+    dir,
+    certPath: path.join(dir, `${safe}-${stamp}.crt`),
+    keyPath: path.join(dir, `${safe}-${stamp}.key`)
+  };
+};
+
+const ensureStorageDir = (dir) => {
+  fs.mkdirSync(dir, { recursive: true });
+};
 
 // ==================== SERVER CRUD ====================
 
@@ -215,6 +237,50 @@ router.post('/servers/:id/certs/sync', async (req, res, next) => {
       keyPath
     );
     res.json(result);
+  } catch (err) {
+    next(err);
+  }
+});
+
+// Upload SSL certificate/key files
+router.post('/ssl/upload', upload.fields([{ name: 'certFile' }, { name: 'keyFile' }]), (req, res, next) => {
+  try {
+    const { domain } = req.body || {};
+    if (!domain) {
+      return res.status(400).json({ error: 'domain is required' });
+    }
+    const certFile = req.files?.certFile?.[0];
+    const keyFile = req.files?.keyFile?.[0];
+    if (!certFile || !keyFile) {
+      return res.status(400).json({ error: 'certFile and keyFile are required' });
+    }
+    const { dir, certPath, keyPath } = buildSslPaths(domain);
+    ensureStorageDir(dir);
+    fs.renameSync(certFile.path, certPath);
+    fs.renameSync(keyFile.path, keyPath);
+    fs.chmodSync(certPath, 0o600);
+    fs.chmodSync(keyPath, 0o600);
+    res.json({ cert_path: certPath, key_path: keyPath });
+  } catch (err) {
+    next(err);
+  }
+});
+
+// Store SSL certificate/key content
+router.post('/ssl/store', (req, res, next) => {
+  try {
+    const { domain, certPem, keyPem } = req.body || {};
+    if (!domain) {
+      return res.status(400).json({ error: 'domain is required' });
+    }
+    if (!certPem || !keyPem) {
+      return res.status(400).json({ error: 'certPem and keyPem are required' });
+    }
+    const { dir, certPath, keyPath } = buildSslPaths(domain);
+    ensureStorageDir(dir);
+    fs.writeFileSync(certPath, certPem, { mode: 0o600 });
+    fs.writeFileSync(keyPath, keyPem, { mode: 0o600 });
+    res.json({ cert_path: certPath, key_path: keyPath });
   } catch (err) {
     next(err);
   }

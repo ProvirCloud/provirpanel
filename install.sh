@@ -248,6 +248,7 @@ NGINX_CONF_D=/etc/nginx/conf.d
 NGINX_MAIN_CONFIG=/etc/nginx/nginx.conf
 NGINX_ACCESS_LOG=/var/log/nginx/access.log
 NGINX_ERROR_LOG=/var/log/nginx/error.log
+NGINX_SSL_STORAGE=/etc/nginx/ssl
 ENV
 
   ensure_env_var "${env_file}" "NGINX_CONFIG_PATH" "/etc/nginx"
@@ -257,6 +258,7 @@ ENV
   ensure_env_var "${env_file}" "NGINX_MAIN_CONFIG" "/etc/nginx/nginx.conf"
   ensure_env_var "${env_file}" "NGINX_ACCESS_LOG" "/var/log/nginx/access.log"
   ensure_env_var "${env_file}" "NGINX_ERROR_LOG" "/var/log/nginx/error.log"
+  ensure_env_var "${env_file}" "NGINX_SSL_STORAGE" "/etc/nginx/ssl"
 
   chown provirpanel:provirpanel "${env_file}"
   mkdir -p "${INSTALL_DIR}/projects"
