@@ -307,6 +307,16 @@ router.patch('/certs/:id/auto-renew', async (req, res, next) => {
   }
 });
 
+// Delete certificate
+router.delete('/certs/:id', async (req, res, next) => {
+  try {
+    const result = await nginxManager.deleteCert(parseInt(req.params.id, 10));
+    res.json(result);
+  } catch (err) {
+    next(err);
+  }
+});
+
 // ==================== NGINX CONTROL ====================
 
 // Get Nginx status

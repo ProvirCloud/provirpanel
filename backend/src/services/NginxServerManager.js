@@ -419,7 +419,9 @@ ${buildProxyBlock(proxyTarget)}    }
     }
 
     if (server.is_active && fs.existsSync(this.sitesAvailable)) {
-      this.enableConfigFile(configFileName);
+      if (path.resolve(server.config_file_path).startsWith(path.resolve(this.sitesAvailable))) {
+        this.enableConfigFile(configFileName);
+      }
     }
 
     this.reload();
@@ -760,6 +762,16 @@ ${buildProxyBlock(proxyTarget)}    }
     return { success: true };
   }
 
+  async deleteCert(certId) {
+    try {
+      await prisma.nginxSslCert.delete({ where: { id: certId } });
+      return { success: true };
+    } catch (err) {
+      if (err.code === 'P2021') return { success: false, error: 'Table not found' };
+      throw err;
+    }
+  }
+
   // ==================== NGINX CONTROL ====================
 
   getTargetDir() {
@@ -951,6 +963,11 @@ ${buildProxyBlock(proxyTarget)}    }
       const hasSSL = content.includes('ssl_certificate') || content.includes('listen 443');
       const sslCertMatch = content.match(/ssl_certificate\s+([^;]+);/);
       const sslKeyMatch = content.match(/ssl_certificate_key\s+([^;]+);/);
+      const sslCertPath = sslCertMatch ? sslCertMatch[1].trim() : null;
+      const sslKeyPath = sslKeyMatch ? sslKeyMatch[1].trim() : null;
+      const sslType = hasSSL
+        ? (sslCertPath && sslCertPath.includes('/etc/letsencrypt/') ? 'letsencrypt' : 'manual')
+        : 'none';
 
       // Check server type
       let serverType = 'proxy';
@@ -1068,9 +1085,9 @@ ${buildProxyBlock(proxyTarget)}    }
         additional_domains: additionalDomains,
         server_type: serverType,
         listen_port: listenPort,
-        ssl_type: hasSSL ? 'letsencrypt' : 'none',
-        ssl_cert_path: sslCertMatch ? sslCertMatch[1].trim() : null,
-        ssl_key_path: sslKeyMatch ? sslKeyMatch[1].trim() : null,
+        ssl_type: sslType,
+        ssl_cert_path: sslCertPath,
+        ssl_key_path: sslKeyPath,
         proxy_host: proxyHost,
         proxy_port: proxyPort,
         root_path: rootPath,

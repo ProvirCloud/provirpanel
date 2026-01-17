@@ -1565,6 +1565,17 @@ const SSLPanel = ({ serverId, onNotify }) => {
     }
   }
 
+  const deleteCert = async (certId) => {
+    if (!confirm('Remover este certificado?')) return
+    try {
+      await api.delete(`/nginx/certs/${certId}`)
+      onNotify?.('Certificado removido', 'Registro removido com sucesso')
+      loadCerts()
+    } catch (err) {
+      onNotify?.('Erro ao remover certificado', err.response?.data?.error || err.message)
+    }
+  }
+
   const getStatusBadge = (status, daysLeft) => {
     if (status === 'expired' || daysLeft <= 0) {
       return <span className="px-2 py-0.5 rounded-full text-xs bg-rose-500/10 text-rose-300">Expirado</span>
@@ -1633,6 +1644,12 @@ const SSLPanel = ({ serverId, onNotify }) => {
                 >
                   <RefreshCw className="h-3 w-3 inline mr-1" />
                   Renovar
+                </button>
+                <button
+                  onClick={() => deleteCert(cert.id)}
+                  className="rounded-lg border border-rose-800 bg-rose-950 px-2 py-1 text-xs text-rose-200 hover:bg-rose-900"
+                >
+                  <Trash2 className="h-3 w-3" />
                 </button>
                 <label className="flex items-center gap-2 text-xs text-slate-300">
                   <input
