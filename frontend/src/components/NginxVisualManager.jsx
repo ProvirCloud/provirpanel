@@ -641,7 +641,7 @@ const ServersList = ({ servers, selectedServer, onSelect, onToggle, onDelete, on
 }
 
 // ==================== SERVER FORM COMPONENT ====================
-const ServerForm = ({ server, onSave, onApply, onCancel, dockerContainers, onNotify }) => {
+const ServerForm = ({ server, onSave, onApply, onCancel, dockerContainers, dockerServices, onNotify, onConfirm }) => {
   const [form, setForm] = useState({
     name: '',
     primary_domain: '',
@@ -971,11 +971,28 @@ const ServerForm = ({ server, onSave, onApply, onCancel, dockerContainers, onNot
       setForm({ ...form, path_rules: [...form.path_rules, rule] })
     }
     setPathRuleModal(null)
+    if (rule?.docker_container) {
+      const scriptName = normalizeScriptName(rule.path || '/')
+      requestDockerScriptNameUpdate(rule.docker_container, scriptName)
+    }
+  }
+
+  const normalizeScriptName = (value) => {
+    if (!value || value === '/') return ''
+    const trimmed = value.endsWith('/') ? value.slice(0, -1) : value
+    return trimmed.startsWith('/') ? trimmed : `/${trimmed}`
   }
 
   const normalizePath = (value) => {
     if (!value) return '/'
     return value.startsWith('/') ? value : `/${value}`
+  }
+
+  const getServiceForContainer = (container) => {
+    if (!container || !dockerServices) return null
+    return dockerServices.find((service) =>
+      service.name === container.name || service.containerId === container.id
+    ) || null
   }
 
   const findContainerRuleIndex = (container) => {
@@ -991,7 +1008,9 @@ const ServerForm = ({ server, onSave, onApply, onCancel, dockerContainers, onNot
   }
 
   const addDockerPathRule = (container) => {
-    const suggestedPath = normalizePath(container.path || container.name)
+    const service = getServiceForContainer(container)
+    const scriptEnv = service?.envVars?.find((env) => env.key === 'SCRIPT_NAME')?.value
+    const suggestedPath = normalizePath(scriptEnv || container.path || container.name)
     setPathRuleModal({
       mode: 'create',
       index: null,
@@ -1010,7 +1029,38 @@ const ServerForm = ({ server, onSave, onApply, onCancel, dockerContainers, onNot
     const idx = findContainerRuleIndex(container)
     if (idx >= 0) {
       removePathRule(idx)
+      requestDockerScriptNameUpdate(container.name, '')
     }
+  }
+
+  const requestDockerScriptNameUpdate = (containerName, scriptName) => {
+    if (!onConfirm) return
+    const message = 'O servico Docker sera reinicializado para aplicar SCRIPT_NAME e pode ficar indisponivel.'
+    onConfirm(
+      'Atualizar servico Docker',
+      message,
+      async () => {
+        try {
+          const service = dockerServices?.find((srv) => srv.name === containerName)
+          if (!service?.id) {
+            onNotify?.('Servico Docker nao encontrado', 'Nao foi possivel atualizar SCRIPT_NAME')
+            return
+          }
+          const envVars = Array.isArray(service.envVars) ? service.envVars.map((env) => ({ ...env })) : []
+          const idx = envVars.findIndex((env) => env.key === 'SCRIPT_NAME')
+          if (idx >= 0) {
+            envVars[idx].value = scriptName
+          } else {
+            envVars.push({ key: 'SCRIPT_NAME', value: scriptName })
+          }
+          await api.put(`/docker/services/${service.id}`, { envVars })
+          onNotify?.('Servico atualizado', 'SCRIPT_NAME aplicado e servico reiniciado')
+        } catch (err) {
+          onNotify?.('Erro ao atualizar servico', err.response?.data?.message || err.message)
+        }
+      },
+      'Atualizar'
+    )
   }
 
   const findUpstreamIndex = (container) => {
@@ -1036,7 +1086,8 @@ const ServerForm = ({ server, onSave, onApply, onCancel, dockerContainers, onNot
     if (type === 'static') {
       return `${rule.path} -> ${rule.alias_path || rule.root_path || ''}`.trim()
     }
-    return `${rule.path} -> ${rule.proxy_host || 'localhost'}:${rule.proxy_port || 3000}`
+    const dockerLabel = rule.docker_container ? ` (${rule.docker_container})` : ''
+    return `${rule.path} -> ${rule.proxy_host || 'localhost'}:${rule.proxy_port || 3000}${dockerLabel}`
   }
 
   const validateConfigText = (text) => {
@@ -2203,6 +2254,7 @@ const NginxVisualManager = () => {
   const [selectedServer, setSelectedServer] = useState(null)
   const [status, setStatus] = useState(null)
   const [dockerContainers, setDockerContainers] = useState([])
+  const [dockerServices, setDockerServices] = useState([])
   const [activeTab, setActiveTab] = useState('config') // config, logs, metrics, ssl
   const [showNewServer, setShowNewServer] = useState(false)
   const [newServerDraft, setNewServerDraft] = useState(null)
@@ -2242,6 +2294,12 @@ const NginxVisualManager = () => {
       setServers(serversRes.data.servers || [])
       setStatus(statusRes.data)
       setDockerContainers(dockerRes.data.containers || [])
+      try {
+        const servicesRes = await api.get('/docker/services')
+        setDockerServices(servicesRes.data.services || [])
+      } catch (err) {
+        setDockerServices([])
+      }
 
       // Test config
       const testRes = await api.post('/nginx/test')
@@ -2570,7 +2628,9 @@ const NginxVisualManager = () => {
                   setNewServerDraft(null)
                 } : null}
                 dockerContainers={dockerContainers}
+                dockerServices={dockerServices}
                 onNotify={showAlert}
+                onConfirm={showConfirm}
               />
             )}
 
