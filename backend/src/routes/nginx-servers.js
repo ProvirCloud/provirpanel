@@ -91,6 +91,20 @@ router.put('/servers/:id', async (req, res, next) => {
   }
 });
 
+// Toggle server active state (ensure at least one active)
+router.post('/servers/:id/toggle', async (req, res, next) => {
+  try {
+    const isActive = !!req.body?.is_active;
+    const server = await nginxManager.setServerActive(parseInt(req.params.id, 10), isActive);
+    res.json(server);
+  } catch (err) {
+    if (err.message?.includes('ao menos um servidor ativo')) {
+      return res.status(400).json({ error: err.message });
+    }
+    next(err);
+  }
+});
+
 // Delete server
 router.delete('/servers/:id', async (req, res, next) => {
   try {

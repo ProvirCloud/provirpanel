@@ -130,6 +130,34 @@ class NginxServerManager {
     return this.formatServerForApi(server);
   }
 
+  async setServerActive(id, isActive) {
+    if (!isActive) {
+      const activeCount = await prisma.nginxServer.count({ where: { isActive: true } });
+      if (activeCount <= 1) {
+        throw new Error('Deve existir ao menos um servidor ativo');
+      }
+    }
+
+    const server = await prisma.nginxServer.update({
+      where: { id },
+      data: { isActive },
+      include: { sslCerts: true }
+    });
+
+    if (server.configFilePath && fs.existsSync(this.sitesAvailable)) {
+      const filename = path.basename(server.configFilePath);
+      if (path.resolve(server.configFilePath).startsWith(path.resolve(this.sitesAvailable))) {
+        if (isActive) {
+          this.enableConfigFile(filename);
+        } else {
+          this.disableConfigFile(filename);
+        }
+      }
+    }
+
+    return this.formatServerForApi(server);
+  }
+
   async deleteServer(id) {
     const server = await prisma.nginxServer.findUnique({ where: { id } });
     if (!server) {

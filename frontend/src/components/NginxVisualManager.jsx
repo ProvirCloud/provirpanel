@@ -1760,7 +1760,7 @@ const NginxVisualManager = () => {
 
   const handleToggleServer = async (server) => {
     try {
-      await api.put(`/nginx/servers/${server.id}`, { is_active: !server.is_active })
+      await api.post(`/nginx/servers/${server.id}/toggle`, { is_active: !server.is_active })
       loadData()
     } catch (err) {
       showAlert('Erro ao alterar status', err.response?.data?.error || err.message)
