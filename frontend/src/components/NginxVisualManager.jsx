@@ -1124,13 +1124,28 @@ const ServerForm = ({ server, onSave, onApply, onCancel, dockerContainers, docke
     ) || null
   }
 
+  const normalizeHost = (value) => {
+    if (!value) return ''
+    const lowered = String(value).trim().toLowerCase()
+    if (lowered === 'localhost') return '127.0.0.1'
+    return lowered
+  }
+
   const findContainerRuleIndex = (container) => {
+    const containerIp = normalizeHost(container.ip || '127.0.0.1')
+    const containerName = (container.name || '').toLowerCase()
+    const containerPort = String(container.port)
     return form.path_rules.findIndex((rule) => {
       if (!rule || rule.type !== 'proxy') return false
       if (rule.docker_container && rule.docker_container === container.name) return true
       if (rule.proxy_host && rule.proxy_port) {
-        return rule.proxy_host === (container.ip || 'localhost')
-          && String(rule.proxy_port) === String(container.port)
+        const ruleHost = normalizeHost(rule.proxy_host)
+        const rulePort = String(rule.proxy_port)
+        const hostMatch = ruleHost === containerIp
+          || ruleHost === '127.0.0.1'
+          || ruleHost === containerName
+          || (ruleHost === '' && containerIp === '127.0.0.1')
+        return hostMatch && rulePort === containerPort
       }
       return false
     })
