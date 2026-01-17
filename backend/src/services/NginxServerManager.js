@@ -1210,6 +1210,8 @@ ${buildProxyBlock(proxyTarget)}    }
       skipped: [],
       errors: []
     };
+    const scannedDomains = new Set();
+    const scannedPaths = new Set();
 
     for (const config of configs) {
       try {
@@ -1221,9 +1223,29 @@ ${buildProxyBlock(proxyTarget)}    }
             results.imported.push({ domain: config.primary_domain, server: result.server });
           }
         }
+        if (config.primary_domain) scannedDomains.add(config.primary_domain);
+        if (config.config_file_path) scannedPaths.add(path.resolve(config.config_file_path));
       } catch (err) {
         results.errors.push({ domain: config.primary_domain, error: err.message });
       }
+    }
+
+    // Remove DB entries that no longer exist on disk (machine is source of truth)
+    try {
+      const dbServers = await prisma.nginxServer.findMany({ select: { id: true, primaryDomain: true, configFilePath: true } });
+      const toDelete = dbServers.filter((srv) => {
+        if (srv.configFilePath) {
+          return !scannedPaths.has(path.resolve(srv.configFilePath));
+        }
+        return !scannedDomains.has(srv.primaryDomain);
+      });
+      if (toDelete.length > 0) {
+        await prisma.nginxServer.deleteMany({
+          where: { id: { in: toDelete.map((s) => s.id) } }
+        });
+      }
+    } catch (err) {
+      results.errors.push({ domain: 'cleanup', error: err.message });
     }
 
     return results;
