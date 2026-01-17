@@ -225,6 +225,251 @@ const PathRuleModal = ({ initialRule, onSave, onCancel }) => {
   )
 }
 
+const NewServerWizard = ({ servers, onCancel, onComplete }) => {
+  const baseServer = servers?.[0] || null
+  const [step, setStep] = useState(1)
+  const [mode, setMode] = useState(baseServer ? 'clone' : 'new')
+  const [baseId, setBaseId] = useState(baseServer?.id || '')
+  const defaultDraft = {
+    name: '',
+    primary_domain: '',
+    additional_domains: [],
+    upstream_servers: [{ ip: '127.0.0.1', port: '3000', weight: '1', backup: false }],
+    path_rules: [],
+    server_type: 'proxy',
+    listen_port: 80,
+    ssl_type: 'none',
+    ssl_cert_path: '',
+    ssl_key_path: '',
+    proxy_host: 'localhost',
+    proxy_port: 3000,
+    root_path: '/var/www/html',
+    websocket_enabled: true,
+    forward_headers: true,
+    client_max_body_size: '50m',
+    proxy_connect_timeout: '5s',
+    proxy_read_timeout: '60s',
+    proxy_send_timeout: '60s',
+    is_active: true,
+    notes: ''
+  }
+  const [draft, setDraft] = useState(defaultDraft)
+
+  const selectedBase = servers.find((s) => String(s.id) === String(baseId)) || null
+
+  useEffect(() => {
+    if (mode === 'clone' && selectedBase) {
+      setDraft((prev) => ({
+        ...prev,
+        ...selectedBase,
+        name: `${selectedBase.name || 'Servidor'} (novo)`,
+        primary_domain: '',
+        additional_domains: [],
+        is_active: true
+      }))
+    }
+    if (mode === 'new') {
+      setDraft(defaultDraft)
+    }
+  }, [mode, baseId])
+
+  const nextStep = () => setStep((s) => Math.min(3, s + 1))
+  const prevStep = () => setStep((s) => Math.max(1, s - 1))
+
+  return (
+    <div className="fixed inset-0 z-40 flex items-center justify-center bg-black/60 p-4">
+      <div className="w-full max-w-2xl rounded-2xl border border-slate-800 bg-slate-900/90 p-6 text-slate-100">
+        <h3 className="text-lg font-semibold">Assistente de Virtual Host</h3>
+        <p className="mt-1 text-xs text-slate-400">Passo {step} de 3</p>
+
+        {step === 1 && (
+          <div className="mt-4 space-y-3">
+            <p className="text-sm text-slate-300">
+              Como deseja criar a configuracao?
+            </p>
+            <button
+              onClick={() => setMode('clone')}
+              className={`w-full rounded-xl border px-4 py-3 text-left text-sm ${
+                mode === 'clone' ? 'border-blue-500 bg-blue-500/10' : 'border-slate-800 bg-slate-950'
+              }`}
+              disabled={!baseServer}
+            >
+              <p className="font-semibold text-white">Extender configuracao existente</p>
+              <p className="text-xs text-slate-400 mt-1">
+                Cria um novo arquivo baseado em uma configuracao atual, sem conflito.
+              </p>
+            </button>
+            <button
+              onClick={() => setMode('new')}
+              className={`w-full rounded-xl border px-4 py-3 text-left text-sm ${
+                mode === 'new' ? 'border-blue-500 bg-blue-500/10' : 'border-slate-800 bg-slate-950'
+              }`}
+            >
+              <p className="font-semibold text-white">Criar nova configuracao</p>
+              <p className="text-xs text-slate-400 mt-1">
+                Comece do zero com sugestoes padrao.
+              </p>
+            </button>
+          </div>
+        )}
+
+        {step === 2 && (
+          <div className="mt-4 space-y-4">
+            {mode === 'clone' && (
+              <div>
+                <label className="text-xs text-slate-400">Escolha a base</label>
+                <select
+                  value={baseId}
+                  onChange={(e) => setBaseId(e.target.value)}
+                  className="mt-1 w-full rounded-xl border border-slate-800 bg-slate-950 px-3 py-2 text-sm text-white"
+                >
+                  {servers.map((srv) => (
+                    <option key={srv.id} value={srv.id}>
+                      {srv.name} ({srv.primary_domain})
+                    </option>
+                  ))}
+                </select>
+                <p className="text-xs text-slate-400 mt-1">
+                  Exemplo: clone do painel para criar um ambiente de teste.
+                </p>
+              </div>
+            )}
+            <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+              <div>
+                <label className="text-xs text-slate-400">Nome</label>
+                <input
+                  className="mt-1 w-full rounded-xl border border-slate-800 bg-slate-950 px-3 py-2 text-sm"
+                  value={draft.name}
+                  onChange={(e) => setDraft({ ...draft, name: e.target.value })}
+                  placeholder="Minha API"
+                />
+              </div>
+              <div>
+                <label className="text-xs text-slate-400">Dominio principal</label>
+                <input
+                  className="mt-1 w-full rounded-xl border border-slate-800 bg-slate-950 px-3 py-2 text-sm"
+                  value={draft.primary_domain}
+                  onChange={(e) => setDraft({ ...draft, primary_domain: e.target.value })}
+                  placeholder="api.exemplo.com"
+                />
+              </div>
+              <div>
+                <label className="text-xs text-slate-400">Tipo</label>
+                <select
+                  value={draft.server_type}
+                  onChange={(e) => setDraft({ ...draft, server_type: e.target.value })}
+                  className="mt-1 w-full rounded-xl border border-slate-800 bg-slate-950 px-3 py-2 text-sm text-white"
+                >
+                  <option value="proxy">Proxy Reverso</option>
+                  <option value="static">Site Estatico</option>
+                  <option value="balancer">Load Balancer</option>
+                </select>
+              </div>
+              <div>
+                <label className="text-xs text-slate-400">Porta</label>
+                <input
+                  type="number"
+                  className="mt-1 w-full rounded-xl border border-slate-800 bg-slate-950 px-3 py-2 text-sm"
+                  value={draft.listen_port}
+                  onChange={(e) => setDraft({ ...draft, listen_port: parseInt(e.target.value, 10) || 80 })}
+                />
+              </div>
+            </div>
+            {draft.server_type === 'proxy' && (
+              <div className="grid grid-cols-2 gap-3">
+                <div>
+                  <label className="text-xs text-slate-400">Host destino</label>
+                  <input
+                    className="mt-1 w-full rounded-xl border border-slate-800 bg-slate-950 px-3 py-2 text-sm"
+                    value={draft.proxy_host}
+                    onChange={(e) => setDraft({ ...draft, proxy_host: e.target.value })}
+                    placeholder="localhost"
+                  />
+                </div>
+                <div>
+                  <label className="text-xs text-slate-400">Porta destino</label>
+                  <input
+                    type="number"
+                    className="mt-1 w-full rounded-xl border border-slate-800 bg-slate-950 px-3 py-2 text-sm"
+                    value={draft.proxy_port}
+                    onChange={(e) => setDraft({ ...draft, proxy_port: parseInt(e.target.value, 10) || 3000 })}
+                  />
+                </div>
+              </div>
+            )}
+            {draft.server_type === 'static' && (
+              <div>
+                <label className="text-xs text-slate-400">Pasta do site</label>
+                <input
+                  className="mt-1 w-full rounded-xl border border-slate-800 bg-slate-950 px-3 py-2 text-sm"
+                  value={draft.root_path}
+                  onChange={(e) => setDraft({ ...draft, root_path: e.target.value })}
+                  placeholder="/var/www/html"
+                />
+              </div>
+            )}
+          </div>
+        )}
+
+        {step === 3 && (
+          <div className="mt-4 space-y-3 text-sm text-slate-300">
+            <p className="text-slate-400">Resumo</p>
+            <div className="rounded-xl border border-slate-800 bg-slate-950 px-4 py-3">
+              <p><span className="text-slate-400">Nome:</span> {draft.name || '—'}</p>
+              <p><span className="text-slate-400">Dominio:</span> {draft.primary_domain || '—'}</p>
+              <p><span className="text-slate-400">Tipo:</span> {draft.server_type}</p>
+              {draft.server_type === 'proxy' && (
+                <p><span className="text-slate-400">Destino:</span> {draft.proxy_host}:{draft.proxy_port}</p>
+              )}
+              {draft.server_type === 'static' && (
+                <p><span className="text-slate-400">Pasta:</span> {draft.root_path}</p>
+              )}
+              <p className="text-xs text-amber-300 mt-2">
+                Essa configuracao sera criada ativa e sem conflito com a existente.
+              </p>
+            </div>
+          </div>
+        )}
+
+        <div className="mt-6 flex justify-between">
+          <button
+            onClick={onCancel}
+            className="rounded-xl border border-slate-800 bg-slate-950 px-4 py-2 text-xs text-slate-200"
+          >
+            Cancelar
+          </button>
+          <div className="flex gap-2">
+            {step > 1 && (
+              <button
+                onClick={prevStep}
+                className="rounded-xl border border-slate-800 bg-slate-950 px-4 py-2 text-xs text-slate-200"
+              >
+                Voltar
+              </button>
+            )}
+            {step < 3 && (
+              <button
+                onClick={nextStep}
+                className="rounded-xl bg-blue-500 px-4 py-2 text-xs font-semibold text-slate-950"
+              >
+                Proximo
+              </button>
+            )}
+            {step === 3 && (
+              <button
+                onClick={() => onComplete(draft)}
+                className="rounded-xl bg-emerald-500 px-4 py-2 text-xs font-semibold text-slate-950"
+              >
+                Criar
+              </button>
+            )}
+          </div>
+        </div>
+      </div>
+    </div>
+  )
+}
+
 // ==================== SERVER LIST COMPONENT ====================
 const ServersList = ({ servers, selectedServer, onSelect, onToggle, onDelete, onRefresh }) => {
   const [searchTerm, setSearchTerm] = useState('')
@@ -621,7 +866,7 @@ const ServerForm = ({ server, onSave, onCancel, dockerContainers, onNotify }) =>
 
   return (
     <>
-      <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
+      <div className="grid grid-cols-1 gap-4 w-full">
       {/* Left: Form */}
       <div className="space-y-4">
         <div className="rounded-2xl border border-slate-800 bg-slate-900/60 p-4">
@@ -1692,6 +1937,8 @@ const NginxVisualManager = () => {
   const [dockerContainers, setDockerContainers] = useState([])
   const [activeTab, setActiveTab] = useState('config') // config, logs, metrics, ssl
   const [showNewServer, setShowNewServer] = useState(false)
+  const [newServerDraft, setNewServerDraft] = useState(null)
+  const [showWizard, setShowWizard] = useState(false)
   const [loading, setLoading] = useState(true)
   const [importing, setImporting] = useState(false)
   const [importStatus, setImportStatus] = useState('')
@@ -1751,6 +1998,7 @@ const NginxVisualManager = () => {
         setSelectedServer(res.data)
       }
       setShowNewServer(false)
+      setNewServerDraft(null)
       loadData()
       showAlert('Servidor salvo', 'As configuracoes foram atualizadas')
     } catch (err) {
@@ -1914,8 +2162,7 @@ const NginxVisualManager = () => {
         <div className="lg:col-span-3 flex flex-col gap-3 overflow-hidden">
           <button
             onClick={() => {
-              setSelectedServer(null)
-              setShowNewServer(true)
+              setShowWizard(true)
             }}
             className="flex items-center justify-center gap-2 rounded-xl bg-blue-500 px-4 py-2 text-sm font-semibold text-white hover:bg-blue-600"
           >
@@ -2033,9 +2280,12 @@ const NginxVisualManager = () => {
           <div className="flex-1 overflow-auto">
             {(showNewServer || (selectedServer && activeTab === 'config')) && (
               <ServerForm
-                server={selectedServer}
+                server={showNewServer ? newServerDraft : selectedServer}
                 onSave={handleSaveServer}
-                onCancel={showNewServer ? () => setShowNewServer(false) : null}
+                onCancel={showNewServer ? () => {
+                  setShowNewServer(false)
+                  setNewServerDraft(null)
+                } : null}
                 dockerContainers={dockerContainers}
                 onNotify={showAlert}
               />
@@ -2070,6 +2320,18 @@ const NginxVisualManager = () => {
           title={alertDialog.title}
           message={alertDialog.message}
           onClose={() => setAlertDialog(null)}
+        />
+      )}
+      {showWizard && (
+        <NewServerWizard
+          servers={servers}
+          onCancel={() => setShowWizard(false)}
+          onComplete={(draft) => {
+            setNewServerDraft(draft)
+            setSelectedServer(null)
+            setShowNewServer(true)
+            setShowWizard(false)
+          }}
         />
       )}
       {confirmDialog && (

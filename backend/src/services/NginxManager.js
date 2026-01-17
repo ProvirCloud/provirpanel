@@ -145,13 +145,9 @@ class NginxManager {
     if (!fs.existsSync(filePath)) {
       throw new Error('Arquivo nao encontrado para edicao');
     }
-    const backupPath = this.createBackup(filePath);
+    this.createBackup(filePath);
     fs.writeFileSync(filePath, content);
-    const result = this.testConfig();
-    if (!result.valid && backupPath) {
-      fs.copyFileSync(backupPath, filePath);
-    }
-    return result;
+    return this.testConfig();
   }
 
   // Criar novo arquivo
