@@ -983,7 +983,8 @@ const ServerForm = ({ server, onSave, onApply, onCancel, dockerContainers, onNot
       if (!rule || rule.type !== 'proxy') return false
       if (rule.docker_container && rule.docker_container === container.name) return true
       if (rule.proxy_host && rule.proxy_port) {
-        return rule.proxy_host === container.name && String(rule.proxy_port) === String(container.port)
+        return rule.proxy_host === (container.ip || 'localhost')
+          && String(rule.proxy_port) === String(container.port)
       }
       return false
     })
@@ -997,7 +998,7 @@ const ServerForm = ({ server, onSave, onApply, onCancel, dockerContainers, onNot
       rule: {
         path: suggestedPath.endsWith('/') ? suggestedPath : `${suggestedPath}/`,
         type: 'proxy',
-        proxy_host: container.name || container.ip || 'localhost',
+        proxy_host: container.ip || 'localhost',
         proxy_port: container.port || 3000,
         docker: true,
         docker_container: container.name
