@@ -118,13 +118,21 @@ class NginxServerManager {
 
   async updateServer(id, data) {
     const updateData = {};
+    const existing = await prisma.nginxServer.findUnique({ where: { id } });
+    const existingPathRules = Array.isArray(existing?.pathRules) ? existing.pathRules : [];
+    let currentFileRules = [];
+    if (existing?.configFilePath && fs.existsSync(existing.configFilePath)) {
+      const parsed = this.parseNginxConfigFile(existing.configFilePath);
+      if (parsed?.path_rules) {
+        currentFileRules = parsed.path_rules;
+      }
+    }
 
     const fieldMap = {
       name: 'name',
       primary_domain: 'primaryDomain',
       additional_domains: 'additionalDomains',
       upstream_servers: 'upstreamServers',
-      path_rules: 'pathRules',
       server_type: 'serverType',
       listen_port: 'listenPort',
       ssl_type: 'sslType',
@@ -142,6 +150,33 @@ class NginxServerManager {
       is_active: 'isActive',
       notes: 'notes'
     };
+
+    if (data.path_rules !== undefined) {
+      let incoming = Array.isArray(data.path_rules) ? data.path_rules : [];
+      if (incoming.length === 0 && !data.clear_path_rules) {
+        if (existingPathRules.length > 0) {
+          incoming = existingPathRules;
+        } else if (currentFileRules.length > 0) {
+          incoming = currentFileRules;
+        }
+      } else if (currentFileRules.length > 0) {
+        incoming = incoming.map((rule) => {
+          if (rule?.type !== 'proxy' || rule?.proxy_pass_path !== undefined) {
+            return rule;
+          }
+          const match = currentFileRules.find((current) =>
+            current.type === 'proxy'
+            && (current.path || '') === (rule.path || '')
+            && (current.modifier || '') === (rule.modifier || '')
+          );
+          if (match?.proxy_pass_path !== undefined) {
+            return { ...rule, proxy_pass_path: match.proxy_pass_path };
+          }
+          return rule;
+        });
+      }
+      updateData.pathRules = incoming;
+    }
 
     for (const [apiField, prismaField] of Object.entries(fieldMap)) {
       if (data[apiField] !== undefined) {
@@ -397,6 +432,7 @@ class NginxServerManager {
           type: rule.type || 'proxy',
           proxy_host: rule.proxy_host || rule.host || server.proxy_host || 'localhost',
           proxy_port: rule.proxy_port || rule.port || server.proxy_port || 3000,
+          proxy_pass_path: rule.proxy_pass_path,
           alias_path: rule.alias_path,
           root_path: rule.root_path,
           try_files: rule.try_files,
@@ -433,7 +469,11 @@ class NginxServerManager {
             return;
           }
 
-          const target = `http://${rule.proxy_host}:${rule.proxy_port}`;
+          let pathSuffix = '';
+          if (rule.proxy_pass_path) {
+            pathSuffix = rule.proxy_pass_path.startsWith('/') ? rule.proxy_pass_path : `/${rule.proxy_pass_path}`;
+          }
+          const target = `http://${rule.proxy_host}:${rule.proxy_port}${pathSuffix}`;
           config += `
     location ${modifierPart}${rule.path} {
 ${buildProxyBlock(target)}    }
@@ -1155,16 +1195,18 @@ ${buildProxyBlock(proxyTarget)}    }
           continue;
         }
 
-        const proxyPassInBlock = block.match(/proxy_pass\s+http:\/\/([^:\/\s]+):?(\d+)?/);
+        const proxyPassInBlock = block.match(/proxy_pass\s+http:\/\/([^:\/\s]+):?(\d+)?([^;\s]*)?/);
         if (proxyPassInBlock && locPath !== '/') {
           const host = proxyPassInBlock[1];
           const port = proxyPassInBlock[2] ? parseInt(proxyPassInBlock[2], 10) : 80;
+          const pathSuffix = proxyPassInBlock[3] ? proxyPassInBlock[3].trim() : '';
           pathRules.push({
             path: locPath,
             modifier,
             type: 'proxy',
             proxy_host: host,
-            proxy_port: port
+            proxy_port: port,
+            proxy_pass_path: pathSuffix
           });
         }
       }
