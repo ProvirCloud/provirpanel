@@ -69,6 +69,87 @@ const ConfirmDialog = ({ title, message, confirmText = 'Confirmar', onConfirm, o
   </div>
 )
 
+const DiffModal = ({ title, diffLines, onApply, onClose }) => (
+  <div className="fixed inset-0 z-40 flex items-center justify-center bg-black/60 p-4">
+    <div className="w-full max-w-4xl rounded-2xl border border-slate-800 bg-slate-900/95 p-6 text-slate-100">
+      <h3 className="text-lg font-semibold">{title}</h3>
+      <div className="mt-4 max-h-[60vh] overflow-auto rounded-xl border border-slate-800 bg-slate-950 p-3 font-mono text-xs">
+        {diffLines.length === 0 && (
+          <div className="text-slate-400">Nenhuma diferenca encontrada.</div>
+        )}
+        {diffLines.map((line, idx) => (
+          <div
+            key={idx}
+            className={
+              line.type === 'add'
+                ? 'text-emerald-300'
+                : line.type === 'remove'
+                  ? 'text-rose-300'
+                  : 'text-slate-300'
+            }
+          >
+            <span className="mr-2 inline-block w-4">
+              {line.type === 'add' ? '+' : line.type === 'remove' ? '-' : ' '}
+            </span>
+            <span>{line.content}</span>
+          </div>
+        ))}
+      </div>
+      <div className="mt-5 flex justify-end gap-2">
+        <button
+          onClick={onClose}
+          className="rounded-xl border border-slate-800 bg-slate-950 px-4 py-2 text-xs text-slate-200"
+        >
+          Cancelar
+        </button>
+        <button
+          onClick={onApply}
+          className="rounded-xl bg-blue-500 px-4 py-2 text-xs font-semibold text-white"
+        >
+          Aplicar mudancas
+        </button>
+      </div>
+    </div>
+  </div>
+)
+
+const buildDiffLines = (oldText, newText) => {
+  const oldLines = (oldText || '').split('\n')
+  const newLines = (newText || '').split('\n')
+  const dp = Array(oldLines.length + 1)
+    .fill(null)
+    .map(() => Array(newLines.length + 1).fill(0))
+
+  for (let i = 1; i <= oldLines.length; i += 1) {
+    for (let j = 1; j <= newLines.length; j += 1) {
+      if (oldLines[i - 1] === newLines[j - 1]) {
+        dp[i][j] = dp[i - 1][j - 1] + 1
+      } else {
+        dp[i][j] = Math.max(dp[i - 1][j], dp[i][j - 1])
+      }
+    }
+  }
+
+  const diff = []
+  let i = oldLines.length
+  let j = newLines.length
+  while (i > 0 || j > 0) {
+    if (i > 0 && j > 0 && oldLines[i - 1] === newLines[j - 1]) {
+      diff.unshift({ type: 'keep', content: oldLines[i - 1] })
+      i -= 1
+      j -= 1
+    } else if (j > 0 && (i === 0 || dp[i][j - 1] >= dp[i - 1][j])) {
+      diff.unshift({ type: 'add', content: newLines[j - 1] })
+      j -= 1
+    } else if (i > 0) {
+      diff.unshift({ type: 'remove', content: oldLines[i - 1] })
+      i -= 1
+    }
+  }
+
+  return diff
+}
+
 const PathRuleModal = ({ initialRule, onSave, onCancel }) => {
   const [rule, setRule] = useState({
     path: '/api',
@@ -560,7 +641,7 @@ const ServersList = ({ servers, selectedServer, onSelect, onToggle, onDelete, on
 }
 
 // ==================== SERVER FORM COMPONENT ====================
-const ServerForm = ({ server, onSave, onCancel, dockerContainers, onNotify }) => {
+const ServerForm = ({ server, onSave, onApply, onCancel, dockerContainers, onNotify }) => {
   const [form, setForm] = useState({
     name: '',
     primary_domain: '',
@@ -595,6 +676,10 @@ const ServerForm = ({ server, onSave, onCancel, dockerContainers, onNotify }) =>
   const [pathRuleModal, setPathRuleModal] = useState(null)
   const [editorContent, setEditorContent] = useState('')
   const [editorTouched, setEditorTouched] = useState(false)
+  const [showAdvanced, setShowAdvanced] = useState(false)
+  const [currentConfig, setCurrentConfig] = useState('')
+  const [diffModal, setDiffModal] = useState(null)
+  const [applyConfirm, setApplyConfirm] = useState(null)
   const [previewLoading, setPreviewLoading] = useState(false)
   const [previewWarnings, setPreviewWarnings] = useState([])
   const [routeWarnings, setRouteWarnings] = useState([])
@@ -614,14 +699,17 @@ const ServerForm = ({ server, onSave, onCancel, dockerContainers, onNotify }) =>
     const loadCurrentConfig = async () => {
       if (!server?.id) {
         setEditorContent('')
+        setCurrentConfig('')
         return
       }
       try {
         const res = await api.get(`/nginx/servers/${server.id}/current-config`)
         setEditorContent(res.data?.content || '')
+        setCurrentConfig(res.data?.content || '')
         setEditorTouched(false)
       } catch (err) {
         setEditorContent('')
+        setCurrentConfig('')
         setEditorTouched(false)
       }
     }
@@ -690,36 +778,85 @@ const ServerForm = ({ server, onSave, onCancel, dockerContainers, onNotify }) =>
       onNotify?.('Preview obrigatorio', 'Gere o preview ou cole a configuracao antes de salvar')
       return
     }
-    let payload = { ...form }
-    if (editorTouched) {
-      const serverBlocks = (editorContent.match(/server\s*\{/g) || []).length
-      if (serverBlocks > 1) {
-        onNotify?.('Editor invalido', 'Ha mais de um bloco server. Gere o preview novamente.')
+    let previewContent = editorContent
+    if (!editorTouched) {
+      try {
+        const res = await api.post('/nginx/preview-config', form)
+        previewContent = res.data?.config || ''
+        setEditorContent(previewContent)
+        setEditorTouched(false)
+        setPreviewWarnings(validateConfigText(previewContent))
+      } catch (err) {
+        onNotify?.('Erro ao gerar preview', err.response?.data?.error || err.message)
         return
       }
-      try {
-        const res = await api.post('/nginx/parse-config', {
-          content: editorContent,
-          filename: `${form.primary_domain || 'server'}.conf`
-        })
-        if (res.data?.parsed) {
-          payload = { ...payload, ...res.data.parsed }
-          if (!payload.name) {
-            payload.name = form.name || payload.primary_domain || 'Server'
+    }
+    const viewConfirm = () => {
+      setApplyConfirm({
+        title: 'Ver arquivo completo?',
+        message: 'Deseja visualizar a configuracao completa e as diferencas antes de aplicar?',
+        confirmText: 'Sim, ver arquivo',
+        onConfirm: () => {
+          setApplyConfirm(null)
+          const diffLines = buildDiffLines(currentConfig, previewContent)
+          setDiffModal({
+            diffLines
+          })
+        },
+        onCancel: () => {
+          setApplyConfirm(null)
+        }
+      })
+    }
+    viewConfirm()
+  }
+
+  const handleApplyFromDiff = async () => {
+    setDiffModal(null)
+    setApplyConfirm({
+      title: 'Aplicar configuracoes?',
+      message: 'Deseja salvar e recarregar o Nginx agora?',
+      confirmText: 'Aplicar',
+      onConfirm: async () => {
+        setApplyConfirm(null)
+        let payload = { ...form }
+        if (editorTouched) {
+          const serverBlocks = (editorContent.match(/server\s*\{/g) || []).length
+          if (serverBlocks > 1) {
+            onNotify?.('Editor invalido', 'Ha mais de um bloco server. Gere o preview novamente.')
+            return
+          }
+          try {
+            const res = await api.post('/nginx/parse-config', {
+              content: editorContent,
+              filename: `${form.primary_domain || 'server'}.conf`
+            })
+            if (res.data?.parsed) {
+              payload = { ...payload, ...res.data.parsed }
+              if (!payload.name) {
+                payload.name = form.name || payload.primary_domain || 'Server'
+              }
+            }
+          } catch (err) {
+            onNotify?.('Erro ao ler editor', err.response?.data?.error || err.message)
+            return
           }
         }
-      } catch (err) {
-        onNotify?.('Erro ao ler editor', err.response?.data?.error || err.message)
-        return
+        setSaving(true)
+        try {
+          const saved = await onSave(payload)
+          if (saved?.id) {
+            await onApply(saved.id)
+          }
+          setEditorTouched(false)
+        } finally {
+          setSaving(false)
+        }
+      },
+      onCancel: () => {
+        setApplyConfirm(null)
       }
-    }
-    setSaving(true)
-    try {
-      await onSave(payload)
-      setEditorTouched(false)
-    } finally {
-      setSaving(false)
-    }
+    })
   }
 
   const addDomain = () => {
@@ -898,6 +1035,14 @@ const ServerForm = ({ server, onSave, onCancel, dockerContainers, onNotify }) =>
       <div className="grid grid-cols-1 gap-4 w-full">
       {/* Left: Form */}
       <div className="space-y-4">
+        <div className="flex justify-end">
+          <button
+            onClick={() => setShowAdvanced((prev) => !prev)}
+            className="rounded-lg border border-slate-700 bg-slate-900 px-3 py-1 text-xs text-slate-200 hover:bg-slate-800"
+          >
+            {showAdvanced ? 'Ocultar configuracao avancada' : 'Configuracao avancada'}
+          </button>
+        </div>
         <div className="rounded-2xl border border-slate-800 bg-slate-900/60 p-4">
           <h3 className="text-sm font-semibold text-white mb-4 flex items-center gap-2">
             <Settings className="h-4 w-4" />
@@ -1131,57 +1276,6 @@ const ServerForm = ({ server, onSave, onCancel, dockerContainers, onNotify }) =>
           </div>
         )}
 
-        {form.server_type === 'proxy' && (
-          <div className="rounded-2xl border border-slate-800 bg-slate-900/60 p-4">
-            <h3 className="text-sm font-semibold text-white mb-2 flex items-center gap-2">
-              <Edit2 className="h-4 w-4" />
-              Editor da Configuracao
-            </h3>
-            <p className="text-xs text-amber-300 mb-3">
-              Alterar a configuracao padrao pode derrubar o painel. Se isso acontecer, use o
-              comando `sudo bash reset-nginx.sh` na instancia para recuperar.
-            </p>
-            {routeWarnings.length > 0 && (
-              <div className="rounded-lg border border-amber-800 bg-amber-950/40 px-3 py-2 text-xs text-amber-200 mb-3">
-                {routeWarnings.map((warn, idx) => (
-                  <p key={idx}>{warn}</p>
-                ))}
-              </div>
-            )}
-            <div className="flex items-center gap-2 mb-3">
-              <button
-                onClick={generatePreviewFromForm}
-                className="rounded-lg bg-blue-500 px-3 py-1 text-xs font-semibold text-white hover:bg-blue-600"
-                disabled={previewLoading}
-              >
-                {previewLoading ? 'Gerando...' : 'Gerar preview'}
-              </button>
-              <button
-                onClick={reloadFieldsFromEditor}
-                className="rounded-lg border border-slate-700 bg-slate-800 px-3 py-1 text-xs text-slate-200 hover:bg-slate-700"
-              >
-                Recarregar campos do editor
-              </button>
-            </div>
-            <textarea
-              value={editorContent}
-              onChange={(e) => {
-                setEditorContent(e.target.value)
-                setEditorTouched(true)
-              }}
-              className="h-64 w-full rounded-xl border border-slate-800 bg-slate-950 px-3 py-2 text-xs text-slate-100 font-mono"
-              placeholder="Clique em Gerar preview para ver a configuracao aqui..."
-            />
-            {previewWarnings.length > 0 && (
-              <div className="mt-3 rounded-lg border border-rose-900 bg-rose-950/40 px-3 py-2 text-xs text-rose-200">
-                {previewWarnings.map((warn, idx) => (
-                  <p key={idx}>Validacao: {warn}</p>
-                ))}
-              </div>
-            )}
-          </div>
-        )}
-
         {/* SSL Configuration */}
         <div className="rounded-2xl border border-slate-800 bg-slate-900/60 p-4">
           <h3 className="text-sm font-semibold text-white mb-4 flex items-center gap-2">
@@ -1388,6 +1482,57 @@ const ServerForm = ({ server, onSave, onCancel, dockerContainers, onNotify }) =>
           </div>
         )}
 
+        {showAdvanced && (
+          <div className="rounded-2xl border border-slate-800 bg-slate-900/60 p-4">
+            <h3 className="text-sm font-semibold text-white mb-2 flex items-center gap-2">
+              <Edit2 className="h-4 w-4" />
+              Configuracao avancada
+            </h3>
+            <p className="text-xs text-amber-300 mb-3">
+              Alterar a configuracao padrao pode derrubar o painel. Se isso acontecer, use o
+              comando `sudo bash reset-nginx.sh` na instancia para recuperar.
+            </p>
+            {routeWarnings.length > 0 && (
+              <div className="rounded-lg border border-amber-800 bg-amber-950/40 px-3 py-2 text-xs text-amber-200 mb-3">
+                {routeWarnings.map((warn, idx) => (
+                  <p key={idx}>{warn}</p>
+                ))}
+              </div>
+            )}
+            <div className="flex items-center gap-2 mb-3">
+              <button
+                onClick={generatePreviewFromForm}
+                className="rounded-lg bg-blue-500 px-3 py-1 text-xs font-semibold text-white hover:bg-blue-600"
+                disabled={previewLoading}
+              >
+                {previewLoading ? 'Gerando...' : 'Gerar preview'}
+              </button>
+              <button
+                onClick={reloadFieldsFromEditor}
+                className="rounded-lg border border-slate-700 bg-slate-800 px-3 py-1 text-xs text-slate-200 hover:bg-slate-700"
+              >
+                Recarregar campos do editor
+              </button>
+            </div>
+            <textarea
+              value={editorContent}
+              onChange={(e) => {
+                setEditorContent(e.target.value)
+                setEditorTouched(true)
+              }}
+              className="h-64 w-full rounded-xl border border-slate-800 bg-slate-950 px-3 py-2 text-xs text-slate-100 font-mono"
+              placeholder="Clique em Gerar preview para ver a configuracao aqui..."
+            />
+            {previewWarnings.length > 0 && (
+              <div className="mt-3 rounded-lg border border-rose-900 bg-rose-950/40 px-3 py-2 text-xs text-rose-200">
+                {previewWarnings.map((warn, idx) => (
+                  <p key={idx}>Validacao: {warn}</p>
+                ))}
+              </div>
+            )}
+          </div>
+        )}
+
         {/* Actions */}
         <div className="flex gap-2">
           <button
@@ -1407,6 +1552,23 @@ const ServerForm = ({ server, onSave, onCancel, dockerContainers, onNotify }) =>
             </button>
           )}
         </div>
+        {diffModal && (
+          <DiffModal
+            title="Diferencas na configuracao"
+            diffLines={diffModal.diffLines}
+            onApply={handleApplyFromDiff}
+            onClose={() => setDiffModal(null)}
+          />
+        )}
+        {applyConfirm && (
+          <ConfirmDialog
+            title={applyConfirm.title}
+            message={applyConfirm.message}
+            confirmText={applyConfirm.confirmText}
+            onConfirm={applyConfirm.onConfirm}
+            onCancel={applyConfirm.onCancel}
+          />
+        )}
       </div>
       </div>
       {pathRuleModal && (
@@ -2034,19 +2196,21 @@ const NginxVisualManager = () => {
       }
       setShowNewServer(false)
       setNewServerDraft(null)
-      if (savedServer?.id) {
-        try {
-          await api.post(`/nginx/servers/${savedServer.id}/apply-config`)
-          showAlert('Servidor salvo', 'Configuracao aplicada com sucesso')
-        } catch (applyErr) {
-          showAlert('Servidor salvo, mas aplicacao falhou', applyErr.response?.data?.error || applyErr.message)
-        }
-      } else {
-        showAlert('Servidor salvo', 'As configuracoes foram atualizadas')
-      }
       loadData()
+      return savedServer
     } catch (err) {
       showAlert('Erro ao salvar servidor', err.response?.data?.error || err.message)
+      return null
+    }
+  }
+
+  const handleApplyServer = async (serverId) => {
+    try {
+      await api.post(`/nginx/servers/${serverId}/apply-config`)
+      showAlert('Configuracao aplicada', 'O Nginx foi atualizado com sucesso')
+      loadData()
+    } catch (err) {
+      showAlert('Erro ao aplicar configuracao', err.response?.data?.error || err.message)
     }
   }
 
@@ -2326,6 +2490,7 @@ const NginxVisualManager = () => {
               <ServerForm
                 server={showNewServer ? newServerDraft : selectedServer}
                 onSave={handleSaveServer}
+                onApply={handleApplyServer}
                 onCancel={showNewServer ? () => {
                   setShowNewServer(false)
                   setNewServerDraft(null)
