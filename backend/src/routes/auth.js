@@ -2,6 +2,7 @@
 
 const express = require('express');
 const bcrypt = require('bcrypt');
+const crypto = require('crypto');
 const jwt = require('jsonwebtoken');
 const pool = require('../config/database');
 const authMiddleware = require('../middleware/auth');
@@ -10,6 +11,17 @@ const router = express.Router();
 
 const jwtSecret = process.env.JWT_SECRET || 'change-me';
 const jwtExpiresIn = process.env.JWT_EXPIRES_IN || '1d';
+
+const generateUuid = () => {
+  if (typeof crypto.randomUUID === 'function') {
+    return crypto.randomUUID();
+  }
+  const bytes = crypto.randomBytes(16);
+  bytes[6] = (bytes[6] & 0x0f) | 0x40;
+  bytes[8] = (bytes[8] & 0x3f) | 0x80;
+  const hex = bytes.toString('hex');
+  return `${hex.slice(0, 8)}-${hex.slice(8, 12)}-${hex.slice(12, 16)}-${hex.slice(16, 20)}-${hex.slice(20)}`;
+};
 
 router.post('/register', async (req, res, next) => {
   try {
@@ -26,8 +38,8 @@ router.post('/register', async (req, res, next) => {
 
     const passwordHash = await bcrypt.hash(password, 12);
     const insert = await pool.query(
-      'INSERT INTO users (username, password, role) VALUES ($1, $2, $3) RETURNING id, username, role, created_at',
-      [username, passwordHash, 'admin']
+      'INSERT INTO users (id, username, password, role) VALUES ($1, $2, $3, $4) RETURNING id, username, role, created_at',
+      [generateUuid(), username, passwordHash, 'admin']
     );
 
     return res.status(201).json({ user: insert.rows[0] });
@@ -124,8 +136,8 @@ router.post('/users', authMiddleware, async (req, res, next) => {
 
     const passwordHash = await bcrypt.hash(password, 12);
     const insert = await pool.query(
-      'INSERT INTO users (username, password, role) VALUES ($1, $2, $3) RETURNING id, username, role, created_at',
-      [username, passwordHash, role]
+      'INSERT INTO users (id, username, password, role) VALUES ($1, $2, $3, $4) RETURNING id, username, role, created_at',
+      [generateUuid(), username, passwordHash, role]
     );
     return res.status(201).json({ user: insert.rows[0] });
   } catch (err) {

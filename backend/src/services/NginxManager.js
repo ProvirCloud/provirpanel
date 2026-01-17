@@ -180,8 +180,10 @@ class NginxManager {
 
   createBackup(filePath) {
     if (!fs.existsSync(filePath)) return null;
+    const backupDir = process.env.NGINX_BACKUP_DIR || path.join(this.configPath, 'provirpanel-backups');
+    fs.mkdirSync(backupDir, { recursive: true });
     const stamp = new Date().toISOString().replace(/[-:]/g, '').replace(/\..+/, '');
-    const backupPath = `${filePath}.bak-${stamp}`;
+    const backupPath = path.join(backupDir, `${path.basename(filePath)}.bak-${stamp}`);
     fs.copyFileSync(filePath, backupPath);
     return backupPath;
   }

@@ -524,8 +524,10 @@ ${buildProxyBlock(proxyTarget)}    }
 
   createBackup(filePath) {
     if (!filePath || !fs.existsSync(filePath)) return null;
+    const backupDir = process.env.NGINX_BACKUP_DIR || path.join(this.configPath, 'provirpanel-backups');
+    fs.mkdirSync(backupDir, { recursive: true });
     const stamp = new Date().toISOString().replace(/[-:]/g, '').replace(/\..+/, '');
-    const backupPath = `${filePath}.bak-${stamp}`;
+    const backupPath = path.join(backupDir, `${path.basename(filePath)}.bak-${stamp}`);
     fs.copyFileSync(filePath, backupPath);
     return backupPath;
   }
@@ -1000,8 +1002,17 @@ ${buildProxyBlock(proxyTarget)}    }
         if (file === 'default' || file.startsWith('.') || file.includes('.bak') || scannedFiles.has(file)) continue;
         const filePath = path.join(this.sitesEnabled, file);
         try {
-          if (fs.statSync(filePath).isFile()) {
-            const parsed = this.parseNginxConfigFile(filePath);
+          const stat = fs.lstatSync(filePath);
+          if (stat.isFile() || stat.isSymbolicLink()) {
+            let resolvedPath = filePath;
+            if (stat.isSymbolicLink()) {
+              try {
+                resolvedPath = fs.realpathSync(filePath);
+              } catch {
+                resolvedPath = filePath;
+              }
+            }
+            const parsed = this.parseNginxConfigFile(resolvedPath);
             if (parsed) {
               parsed.is_enabled = true;
               configs.push(parsed);
