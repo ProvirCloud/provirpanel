@@ -188,6 +188,7 @@ const DockerPanel = () => {
 
   const loadNetworks = async () => {
     try {
+      await api.post('/docker/networks/ensure', { name: 'provirpanel' })
       const response = await api.get('/docker/networks')
       setNetworks(response.data.networks || [])
     } catch (err) {
@@ -260,7 +261,7 @@ const DockerPanel = () => {
       createProject: false,
       createManager: false,
       configureDb: null,
-      networkName: 'bridge',
+      networkName: 'provirpanel',
       bindLocalOnly: true
     })
     
@@ -1496,10 +1497,11 @@ const DockerPanel = () => {
                 <label className="block text-sm text-slate-300 mb-2">Rede Docker</label>
                 <select
                   className="w-full rounded-xl border border-slate-700 bg-slate-800 px-3 py-2 text-sm text-white"
-                  defaultValue={editDialog.networkName || 'bridge'}
+                  defaultValue={editDialog.networkName || 'provirpanel'}
                   onChange={(e) => setEditDialog(prev => ({ ...prev, newNetworkName: e.target.value }))}
                 >
                   <option value="bridge">bridge (padrão - isolado)</option>
+                  <option value="provirpanel">provirpanel (recomendada)</option>
                   <option value="host">host (compartilha rede do host)</option>
                   {networks.filter(n => !['bridge', 'host', 'none'].includes(n.name)).map(network => (
                     <option key={network.id} value={network.name}>

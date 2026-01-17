@@ -35,6 +35,16 @@ class DockerManager {
     return this.docker.listImages({ all: true });
   }
 
+  async ensureNetwork(name) {
+    if (!name) return null;
+    const networks = await this.docker.listNetworks();
+    const existing = networks.find((net) => net.Name === name);
+    if (existing) {
+      return existing;
+    }
+    return this.docker.createNetwork({ Name: name, Driver: 'bridge' });
+  }
+
   async pullImage(imageName, onProgress) {
     const normalized = (imageName || '').trim();
     const baseName = normalized.split(':')[0];

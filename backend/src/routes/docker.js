@@ -600,6 +600,19 @@ router.get('/networks', async (req, res, next) => {
   }
 });
 
+router.post('/networks/ensure', async (req, res, next) => {
+  try {
+    const { name } = req.body || {};
+    if (!name) {
+      return res.status(400).json({ message: 'Nome da rede obrigatorio' });
+    }
+    const network = await dockerManager.ensureNetwork(name);
+    res.json({ network });
+  } catch (err) {
+    next(err);
+  }
+});
+
 router.post('/images/pull', async (req, res, next) => {
   try {
     const { imageName } = req.body || {};
@@ -662,7 +675,7 @@ router.post('/services', async (req, res, next) => {
       createProject = false,
       createManager = false,
       configureDb = null,
-      networkName = 'bridge',
+      networkName = 'provirpanel',
       command,
       bindLocalOnly = true
     } = req.body || {};
@@ -727,6 +740,10 @@ router.post('/services', async (req, res, next) => {
     const portBinding = bindLocalOnly
       ? { HostPort: String(resolvedPort), HostIp: '127.0.0.1' }
       : { HostPort: String(resolvedPort) };
+    if (!['bridge', 'host', 'none'].includes(networkName)) {
+      await dockerManager.ensureNetwork(networkName);
+    }
+
     const hostConfig = {
       PortBindings: {
         [`${template.containerPort}/tcp`]: [portBinding]
@@ -1112,6 +1129,10 @@ router.put('/services/:id', async (req, res, next) => {
     }
     const resolvedPort = newPort || service.hostPort;
     const resolvedBindLocal = bindLocalOnly ?? service.bindLocalOnly ?? false;
+    const targetNetwork = networkName || service.networkName || 'provirpanel';
+    if (!['bridge', 'host', 'none'].includes(targetNetwork)) {
+      await dockerManager.ensureNetwork(targetNetwork);
+    }
     
     const resolvedEnvVars = mergeEnvVars(envVars, service.envVars || []);
     let env = [
@@ -1175,7 +1196,7 @@ router.put('/services/:id', async (req, res, next) => {
     const containerConfig = {
       name: service.name,
       HostConfig: {
-        NetworkMode: networkName || service.networkName || 'bridge',
+        NetworkMode: targetNetwork,
         PortBindings: {
           [`${service.containerPort}/tcp`]: [
             resolvedBindLocal
@@ -1217,7 +1238,7 @@ router.put('/services/:id', async (req, res, next) => {
       hostPort: resolvedPort,
       envVars: resolvedEnvVars,
       command: containerCmd || null,
-      networkName: networkName || service.networkName,
+      networkName: targetNetwork,
       bindLocalOnly: resolvedBindLocal,
       url: `http://localhost:${resolvedPort}`,
       serverIP: getLocalIP(),
