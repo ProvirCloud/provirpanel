@@ -973,6 +973,60 @@ const ServerForm = ({ server, onSave, onApply, onCancel, dockerContainers, onNot
     setPathRuleModal(null)
   }
 
+  const normalizePath = (value) => {
+    if (!value) return '/'
+    return value.startsWith('/') ? value : `/${value}`
+  }
+
+  const findContainerRuleIndex = (container) => {
+    return form.path_rules.findIndex((rule) => {
+      if (!rule || rule.type !== 'proxy') return false
+      if (rule.docker_container && rule.docker_container === container.name) return true
+      if (rule.proxy_host && rule.proxy_port) {
+        return rule.proxy_host === container.name && String(rule.proxy_port) === String(container.port)
+      }
+      return false
+    })
+  }
+
+  const addDockerPathRule = (container) => {
+    const suggestedPath = normalizePath(container.path || container.name)
+    setPathRuleModal({
+      mode: 'create',
+      index: null,
+      rule: {
+        path: suggestedPath.endsWith('/') ? suggestedPath : `${suggestedPath}/`,
+        type: 'proxy',
+        proxy_host: container.name || container.ip || 'localhost',
+        proxy_port: container.port || 3000,
+        docker: true,
+        docker_container: container.name
+      }
+    })
+  }
+
+  const removeDockerPathRule = (container) => {
+    const idx = findContainerRuleIndex(container)
+    if (idx >= 0) {
+      removePathRule(idx)
+    }
+  }
+
+  const findUpstreamIndex = (container) => {
+    return form.upstream_servers.findIndex((upstream) => {
+      if (!upstream) return false
+      return String(upstream.ip) === String(container.ip || 'localhost')
+        && String(upstream.port) === String(container.port)
+    })
+  }
+
+  const removeUpstreamByContainer = (container) => {
+    const idx = findUpstreamIndex(container)
+    if (idx >= 0) {
+      removeUpstream(idx)
+    }
+  }
+
   const summarizePathRule = (rule) => {
     const type = rule.type || 'proxy'
     if (type === 'redirect') {
@@ -1024,12 +1078,8 @@ const ServerForm = ({ server, onSave, onApply, onCancel, dockerContainers, onNot
           { ip: container.ip || 'localhost', port: String(container.port), weight: '1', backup: false }
         ]
       })
-    } else {
-      setForm({
-        ...form,
-        proxy_host: container.ip || 'localhost',
-        proxy_port: container.port
-      })
+    } else if (form.server_type === 'proxy') {
+      addDockerPathRule(container)
     }
   }
 
@@ -1162,7 +1212,7 @@ const ServerForm = ({ server, onSave, onApply, onCancel, dockerContainers, onNot
           </div>
         )}
 
-        {form.server_type === 'proxy' && (
+        {!showAdvanced && form.server_type === 'proxy' && (
           <div className="rounded-2xl border border-slate-800 bg-slate-900/60 p-4">
             <h3 className="text-sm font-semibold text-white mb-4 flex items-center justify-between">
               <span className="flex items-center gap-2">
@@ -1183,7 +1233,7 @@ const ServerForm = ({ server, onSave, onApply, onCancel, dockerContainers, onNot
                   <div>
                     <p className="text-sm text-white">{summarizePathRule(rule)}</p>
                     <p className="text-xs text-slate-500">
-                      {rule.type || 'proxy'} {rule.modifier ? `(${rule.modifier})` : ''}
+                      {rule.type || 'proxy'} {rule.modifier ? `(${rule.modifier})` : ''} {(rule.docker || rule.docker_container) ? '• Docker: Sim' : ''}
                     </p>
                   </div>
                   <div className="flex items-center gap-2">
@@ -1202,6 +1252,9 @@ const ServerForm = ({ server, onSave, onApply, onCancel, dockerContainers, onNot
                   </div>
                 </div>
               ))}
+              {form.path_rules.length === 0 && (
+                <div className="text-xs text-slate-500">Nenhum path configurado.</div>
+              )}
             </div>
           </div>
         )}
@@ -1471,20 +1524,64 @@ const ServerForm = ({ server, onSave, onApply, onCancel, dockerContainers, onNot
             </h3>
             <div className="space-y-2 max-h-40 overflow-y-auto">
               {dockerContainers.map((container) => (
-                <div
-                  key={container.id}
-                  className="flex items-center justify-between rounded-lg border border-slate-800 bg-slate-950 p-2"
-                >
-                  <div>
-                    <p className="text-xs font-semibold text-white">{container.name}</p>
-                    <p className="text-xs text-slate-400">{container.ip}:{container.port}</p>
+                <div key={container.id} className="rounded-lg border border-slate-800 bg-slate-950 p-2">
+                  <div className="flex items-center justify-between">
+                    <div>
+                      <p className="text-xs font-semibold text-white">{container.name}</p>
+                      <p className="text-xs text-slate-400">{container.ip}:{container.port}</p>
+                    </div>
+                    {form.server_type === 'proxy' && (
+                      <>
+                        {findContainerRuleIndex(container) >= 0 ? (
+                          <button
+                            onClick={() => removeDockerPathRule(container)}
+                            className="rounded-lg border border-rose-800 px-2 py-1 text-xs text-rose-200 hover:bg-rose-900"
+                          >
+                            Remover configuração
+                          </button>
+                        ) : (
+                          <button
+                            onClick={() => addDockerPathRule(container)}
+                            className="rounded-lg bg-blue-500 px-2 py-1 text-xs font-semibold text-white hover:bg-blue-600"
+                          >
+                            Adicionar path
+                          </button>
+                        )}
+                      </>
+                    )}
+                    {form.server_type === 'balancer' && (
+                      <>
+                        {findUpstreamIndex(container) >= 0 ? (
+                          <button
+                            onClick={() => removeUpstreamByContainer(container)}
+                            className="rounded-lg border border-rose-800 px-2 py-1 text-xs text-rose-200 hover:bg-rose-900"
+                          >
+                            Remover upstream
+                          </button>
+                        ) : (
+                          <button
+                            onClick={() => useDockerContainer(container)}
+                            className="rounded-lg bg-blue-500 px-2 py-1 text-xs font-semibold text-white hover:bg-blue-600"
+                          >
+                            Adicionar upstream
+                          </button>
+                        )}
+                      </>
+                    )}
+                    {form.server_type === 'static' && (
+                      <span className="text-xs text-slate-500">Nao aplicavel</span>
+                    )}
                   </div>
-                  <button
-                    onClick={() => useDockerContainer(container)}
-                    className="rounded-lg bg-blue-500 px-2 py-1 text-xs font-semibold text-white hover:bg-blue-600"
-                  >
-                    Usar
-                  </button>
+                  {form.server_type === 'proxy' && findContainerRuleIndex(container) >= 0 && (
+                    <div className="mt-2 text-xs text-emerald-300">
+                      Configurado para path {form.path_rules[findContainerRuleIndex(container)]?.path || '-'}
+                    </div>
+                  )}
+                  {form.server_type === 'balancer' && findUpstreamIndex(container) >= 0 && (
+                    <div className="mt-2 text-xs text-emerald-300">
+                      Configurado no upstream
+                    </div>
+                  )}
                 </div>
               ))}
             </div>
