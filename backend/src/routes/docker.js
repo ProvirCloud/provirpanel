@@ -514,12 +514,26 @@ const ensureCommandWorkdir = (command, workdir) => {
   if (!command || !workdir) return command;
   if (Array.isArray(command)) {
     if (command[0] === 'sh' && command[1] === '-c') {
-      return ['sh', '-c', `cd ${workdir} && ${command.slice(2).join(' ')}`];
+      const existing = command.slice(2).join(' ');
+      const prefix = `cd ${workdir} && `;
+      if (existing.startsWith(prefix)) {
+        return command;
+      }
+      return ['sh', '-c', `${prefix}${existing}`];
     }
-    return ['sh', '-c', `cd ${workdir} && ${command.join(' ')}`];
+    const existing = command.join(' ');
+    const prefix = `cd ${workdir} && `;
+    if (existing.startsWith(prefix)) {
+      return ['sh', '-c', existing];
+    }
+    return ['sh', '-c', `${prefix}${existing}`];
   }
   if (typeof command === 'string') {
-    return `cd ${workdir} && ${command}`;
+    const prefix = `cd ${workdir} && `;
+    if (command.startsWith(prefix)) {
+      return command;
+    }
+    return `${prefix}${command}`;
   }
   return command;
 };
