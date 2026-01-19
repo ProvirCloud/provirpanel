@@ -31,6 +31,47 @@ try {
 }
 let progressNamespace = null;
 const portCheckHost = '0.0.0.0';
+const registriesPath = path.join(__dirname, '..', 'data', 'docker-registries.json');
+fs.mkdirSync(path.dirname(registriesPath), { recursive: true });
+if (!fs.existsSync(registriesPath)) {
+  fs.writeFileSync(registriesPath, '[]');
+}
+
+const readRegistries = () => {
+  try {
+    return JSON.parse(fs.readFileSync(registriesPath, 'utf8'));
+  } catch (err) {
+    return [];
+  }
+};
+
+const writeRegistries = (registries) => {
+  fs.writeFileSync(registriesPath, JSON.stringify(registries, null, 2));
+};
+
+const normalizeRegistryHost = (value) => {
+  if (!value) return '';
+  const trimmed = value.trim();
+  if (!trimmed) return '';
+  try {
+    if (trimmed.includes('://')) {
+      const parsed = new URL(trimmed);
+      return parsed.host;
+    }
+  } catch (err) {
+    // ignore
+  }
+  return trimmed.split('/')[0];
+};
+
+const sanitizeRegistry = (registry) => ({
+  id: registry.id,
+  name: registry.name,
+  serverAddress: registry.serverAddress,
+  username: registry.username || '',
+  hasPassword: Boolean(registry.password),
+  certPath: registry.certPath || null
+});
 
 // Função para obter IP local
 const getLocalIP = () => {
@@ -77,6 +118,15 @@ const findAvailablePort = async (startPort, usedPorts) => {
     port += 1;
   }
   return null;
+};
+
+const persistRegistryCert = (host, certPem) => {
+  if (!host || !certPem) return null;
+  const certDir = path.join('/etc/docker/certs.d', host);
+  fs.mkdirSync(certDir, { recursive: true });
+  const certPath = path.join(certDir, 'ca.crt');
+  fs.writeFileSync(certPath, certPem, 'utf8');
+  return certPath;
 };
 
 router.get('/containers', async (req, res, next) => {
@@ -636,10 +686,100 @@ router.post('/networks/ensure', async (req, res, next) => {
   }
 });
 
+router.get('/registries', (req, res) => {
+  const registries = readRegistries().map(sanitizeRegistry);
+  res.json({ registries });
+});
+
+router.post('/registries', (req, res, next) => {
+  try {
+    const { name, serverAddress, username, password, certPem } = req.body || {};
+    if (!name || !serverAddress) {
+      return res.status(400).json({ message: 'Nome e endereco do repositorio sao obrigatorios' });
+    }
+    const registries = readRegistries();
+    const id = crypto.randomUUID();
+    const host = normalizeRegistryHost(serverAddress);
+    const certPath = certPem ? persistRegistryCert(host, certPem) : null;
+    const registry = {
+      id,
+      name,
+      serverAddress: host,
+      username: username || '',
+      password: password || '',
+      certPath
+    };
+    registries.push(registry);
+    writeRegistries(registries);
+    res.json({ registry: sanitizeRegistry(registry) });
+  } catch (err) {
+    next(err);
+  }
+});
+
+router.put('/registries/:id', (req, res, next) => {
+  try {
+    const { name, serverAddress, username, password, certPem } = req.body || {};
+    const registries = readRegistries();
+    const idx = registries.findIndex((reg) => reg.id === req.params.id);
+    if (idx === -1) {
+      return res.status(404).json({ message: 'Repositorio nao encontrado' });
+    }
+    const current = registries[idx];
+    const host = serverAddress ? normalizeRegistryHost(serverAddress) : current.serverAddress;
+    let certPath = current.certPath || null;
+    if (certPem) {
+      certPath = persistRegistryCert(host, certPem);
+    }
+    const updated = {
+      ...current,
+      name: name || current.name,
+      serverAddress: host,
+      username: username ?? current.username,
+      password: password ?? current.password,
+      certPath
+    };
+    registries[idx] = updated;
+    writeRegistries(registries);
+    res.json({ registry: sanitizeRegistry(updated) });
+  } catch (err) {
+    next(err);
+  }
+});
+
+router.delete('/registries/:id', (req, res, next) => {
+  try {
+    const registries = readRegistries();
+    const nextRegistries = registries.filter((reg) => reg.id !== req.params.id);
+    writeRegistries(nextRegistries);
+    res.json({ status: 'removed' });
+  } catch (err) {
+    next(err);
+  }
+});
+
 router.post('/images/pull', async (req, res, next) => {
   try {
-    const { imageName } = req.body || {};
-    const result = await dockerManager.pullImage(imageName);
+    const { imageName, registryId, allowAny } = req.body || {};
+    let authconfig = null;
+    if (registryId) {
+      const registries = readRegistries();
+      const registry = registries.find((reg) => reg.id === registryId);
+      if (!registry) {
+        return res.status(404).json({ message: 'Repositorio nao encontrado' });
+      }
+      if (registry.username || registry.password) {
+        authconfig = {
+          username: registry.username || '',
+          password: registry.password || '',
+          serveraddress: registry.serverAddress
+        };
+      }
+    }
+    const result = await dockerManager.pullImage(imageName, null, {
+      allowAny: Boolean(allowAny || registryId),
+      authconfig
+    });
     res.json({ result });
   } catch (err) {
     next(err);

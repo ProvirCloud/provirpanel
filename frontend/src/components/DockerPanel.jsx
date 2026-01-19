@@ -62,6 +62,87 @@ const Toast = ({ message, type, onClose }) => (
   </div>
 )
 
+const RegistryModal = ({ initialValue, onSave, onCancel }) => {
+  const [form, setForm] = useState({
+    name: '',
+    serverAddress: '',
+    username: '',
+    password: '',
+    certPem: '',
+    ...initialValue
+  })
+
+  return (
+    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 p-4">
+      <div className="w-full max-w-xl rounded-2xl border border-slate-800 bg-slate-900/90 p-6 text-slate-100">
+        <h3 className="text-lg font-semibold">Novo repositorio</h3>
+        <div className="mt-4 grid grid-cols-2 gap-3">
+          <div className="col-span-2">
+            <label className="text-xs text-slate-400">Nome</label>
+            <input
+              className="mt-1 w-full rounded-xl border border-slate-800 bg-slate-950 px-3 py-2 text-sm"
+              value={form.name}
+              onChange={(e) => setForm({ ...form, name: e.target.value })}
+              placeholder="Meu Registry"
+            />
+          </div>
+          <div className="col-span-2">
+            <label className="text-xs text-slate-400">URL/Host do repositorio</label>
+            <input
+              className="mt-1 w-full rounded-xl border border-slate-800 bg-slate-950 px-3 py-2 text-sm"
+              value={form.serverAddress}
+              onChange={(e) => setForm({ ...form, serverAddress: e.target.value })}
+              placeholder="registry.exemplo.com:5000"
+            />
+          </div>
+          <div>
+            <label className="text-xs text-slate-400">Usuario</label>
+            <input
+              className="mt-1 w-full rounded-xl border border-slate-800 bg-slate-950 px-3 py-2 text-sm"
+              value={form.username}
+              onChange={(e) => setForm({ ...form, username: e.target.value })}
+              placeholder="usuario"
+            />
+          </div>
+          <div>
+            <label className="text-xs text-slate-400">Senha</label>
+            <input
+              type="password"
+              className="mt-1 w-full rounded-xl border border-slate-800 bg-slate-950 px-3 py-2 text-sm"
+              value={form.password}
+              onChange={(e) => setForm({ ...form, password: e.target.value })}
+              placeholder="senha"
+            />
+          </div>
+          <div className="col-span-2">
+            <label className="text-xs text-slate-400">Certificado (ca.crt opcional)</label>
+            <textarea
+              className="mt-1 h-24 w-full rounded-xl border border-slate-800 bg-slate-950 px-3 py-2 text-xs"
+              value={form.certPem}
+              onChange={(e) => setForm({ ...form, certPem: e.target.value })}
+              placeholder="Cole o certificado PEM se necessario"
+            />
+          </div>
+        </div>
+        <div className="mt-5 flex gap-2 justify-end">
+          <button
+            onClick={() => onSave(form)}
+            className="rounded-xl bg-blue-500 px-4 py-2 text-xs font-semibold text-slate-950"
+          >
+            Salvar
+          </button>
+          <button
+            onClick={onCancel}
+            className="rounded-xl border border-slate-800 bg-slate-950 px-4 py-2 text-xs text-slate-200"
+          >
+            Cancelar
+          </button>
+        </div>
+      </div>
+    </div>
+  )
+}
+
 const formatCommandForInput = (command) => {
   if (!command) return ''
   if (Array.isArray(command)) {
@@ -131,6 +212,7 @@ const DockerPanel = () => {
   const [templates, setTemplates] = useState([])
   const [services, setServices] = useState([])
   const [networks, setNetworks] = useState([])
+  const [registries, setRegistries] = useState([])
   const [toasts, setToasts] = useState([])
   const [serviceForm, setServiceForm] = useState(null)
   const [serviceProgress, setServiceProgress] = useState([])
@@ -144,6 +226,11 @@ const DockerPanel = () => {
   const [removeDialog, setRemoveDialog] = useState(null)
   const [postgresDatabases, setPostgresDatabases] = useState([])
   const [logsExpanded, setLogsExpanded] = useState(false)
+  const [customImageName, setCustomImageName] = useState('')
+  const [registryAdvanced, setRegistryAdvanced] = useState(false)
+  const [selectedRegistry, setSelectedRegistry] = useState('')
+  const [registryDialog, setRegistryDialog] = useState(null)
+  const [pullWorking, setPullWorking] = useState(false)
   const token = localStorage.getItem('token')
   const socket = useMemo(() => createDockerLogsSocket(token), [token])
   const progressSocket = useMemo(() => createDockerProgressSocket(token), [token])
@@ -213,6 +300,15 @@ const DockerPanel = () => {
     }
   }
 
+  const loadRegistries = async () => {
+    try {
+      const response = await api.get('/docker/registries')
+      setRegistries(response.data.registries || [])
+    } catch (err) {
+      addToast('Erro ao carregar repositorios', 'error')
+    }
+  }
+
   const loadServices = async () => {
     try {
       const response = await api.get('/docker/services')
@@ -249,6 +345,7 @@ const DockerPanel = () => {
     loadNetworks()
     loadPostgresDatabases()
     loadImages()
+    loadRegistries()
   }, [])
 
   useEffect(() => {
@@ -417,6 +514,49 @@ const DockerPanel = () => {
       loadImages()
     } catch (err) {
       addToast('Erro ao atualizar imagem', 'error')
+    }
+  }
+
+  const pullCustomImage = async () => {
+    if (!customImageName.trim()) {
+      addToast('Informe o nome da imagem', 'error')
+      return
+    }
+    setPullWorking(true)
+    try {
+      await api.post('/docker/images/pull', {
+        imageName: customImageName.trim(),
+        registryId: selectedRegistry || undefined,
+        allowAny: true
+      })
+      addToast('Imagem baixada')
+      setCustomImageName('')
+      loadImages()
+    } catch (err) {
+      addToast(err.response?.data?.message || 'Erro ao baixar imagem', 'error')
+    } finally {
+      setPullWorking(false)
+    }
+  }
+
+  const saveRegistry = async (payload) => {
+    try {
+      await api.post('/docker/registries', payload)
+      addToast('Repositorio salvo')
+      setRegistryDialog(null)
+      loadRegistries()
+    } catch (err) {
+      addToast(err.response?.data?.message || 'Erro ao salvar repositorio', 'error')
+    }
+  }
+
+  const removeRegistry = async (registryId) => {
+    try {
+      await api.delete(`/docker/registries/${registryId}`)
+      addToast('Repositorio removido')
+      loadRegistries()
+    } catch (err) {
+      addToast('Erro ao remover repositorio', 'error')
     }
   }
 
@@ -1469,6 +1609,85 @@ const DockerPanel = () => {
       {activeTab === 'images' && (
         <div className="space-y-4">
           <div className="rounded-2xl border border-slate-800 bg-slate-900/60 p-4">
+            <div className="flex items-center justify-between gap-2">
+              <div>
+                <p className="text-xs uppercase tracking-[0.3em] text-slate-400">Adicionar imagem</p>
+                <p className="text-xs text-slate-400 mt-1">
+                  Use o nome completo da imagem (ex: registry.meu.com/app:tag)
+                </p>
+              </div>
+              <button
+                className="rounded-xl border border-slate-700 bg-slate-900 px-3 py-2 text-xs text-slate-200 hover:bg-slate-800"
+                onClick={() => setRegistryAdvanced((prev) => !prev)}
+              >
+                {registryAdvanced ? 'Ocultar avancado' : 'Configuracao avancada'}
+              </button>
+            </div>
+            <div className="mt-4 flex flex-col gap-3 lg:flex-row">
+              <input
+                className="flex-1 rounded-xl border border-slate-800 bg-slate-950 px-3 py-2 text-sm text-white"
+                placeholder="ex: nginx:latest"
+                value={customImageName}
+                onChange={(e) => setCustomImageName(e.target.value)}
+              />
+              <button
+                className="rounded-xl bg-blue-500 px-4 py-2 text-sm font-semibold text-slate-950 hover:bg-blue-400 disabled:opacity-50"
+                onClick={pullCustomImage}
+                disabled={pullWorking}
+              >
+                {pullWorking ? 'Baixando...' : 'Baixar imagem'}
+              </button>
+            </div>
+            {registryAdvanced && (
+              <div className="mt-4 rounded-xl border border-slate-800 bg-slate-950/60 p-3">
+                <div className="flex items-center justify-between gap-2">
+                  <div>
+                    <p className="text-xs text-slate-400">Repositorio autenticado</p>
+                    <p className="text-xs text-slate-500">Selecione um repositorio salvo (opcional).</p>
+                  </div>
+                  <button
+                    className="rounded-xl bg-blue-500 px-3 py-1 text-xs font-semibold text-slate-950"
+                    onClick={() => setRegistryDialog({})}
+                  >
+                    Novo repositorio
+                  </button>
+                </div>
+                <div className="mt-3 flex flex-col gap-2 lg:flex-row lg:items-center">
+                  <select
+                    className="w-full rounded-xl border border-slate-800 bg-slate-950 px-3 py-2 text-sm text-white lg:flex-1"
+                    value={selectedRegistry}
+                    onChange={(e) => setSelectedRegistry(e.target.value)}
+                  >
+                    <option value="">Docker Hub (sem autenticacao)</option>
+                    {registries.map((reg) => (
+                      <option key={reg.id} value={reg.id}>
+                        {reg.name} • {reg.serverAddress}
+                      </option>
+                    ))}
+                  </select>
+                </div>
+                {registries.length > 0 && (
+                  <div className="mt-3 space-y-2">
+                    {registries.map((reg) => (
+                      <div key={reg.id} className="flex items-center justify-between rounded-lg border border-slate-800 bg-slate-950 px-3 py-2 text-xs text-slate-300">
+                        <div>
+                          <p className="text-sm text-white">{reg.name}</p>
+                          <p className="text-xs text-slate-500">{reg.serverAddress}</p>
+                        </div>
+                        <button
+                          className="rounded-lg border border-rose-800 px-2 py-1 text-xs text-rose-200 hover:bg-rose-900"
+                          onClick={() => removeRegistry(reg.id)}
+                        >
+                          Remover
+                        </button>
+                      </div>
+                    ))}
+                  </div>
+                )}
+              </div>
+            )}
+          </div>
+          <div className="rounded-2xl border border-slate-800 bg-slate-900/60 p-4">
             <p className="text-xs uppercase tracking-[0.3em] text-slate-400 mb-3">Imagens Docker</p>
             <div className="space-y-2">
               {images.map((img) => {
@@ -1948,6 +2167,14 @@ const DockerPanel = () => {
             </div>
           </div>
         </div>
+      )}
+
+      {registryDialog && (
+        <RegistryModal
+          initialValue={registryDialog}
+          onSave={saveRegistry}
+          onCancel={() => setRegistryDialog(null)}
+        />
       )}
 
       <div className="fixed right-6 top-24 space-y-2">

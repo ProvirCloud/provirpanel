@@ -45,10 +45,10 @@ class DockerManager {
     return this.docker.createNetwork({ Name: name, Driver: 'bridge' });
   }
 
-  async pullImage(imageName, onProgress) {
+  async pullImage(imageName, onProgress, options = {}) {
     const normalized = (imageName || '').trim();
     const baseName = normalized.split(':')[0];
-    if (!ALLOWED_PULL_IMAGES.has(baseName)) {
+    if (!options.allowAny && !ALLOWED_PULL_IMAGES.has(baseName)) {
       throw new Error('Image not allowed');
     }
 
@@ -57,7 +57,8 @@ class DockerManager {
       const importantStatuses = new Set(['Pulling fs layer', 'Downloading', 'Verifying Checksum', 'Download complete', 'Extracting', 'Pull complete']);
       let lastSummaryTime = 0;
       
-      this.docker.pull(normalized, (err, stream) => {
+      const pullOptions = options.authconfig ? { authconfig: options.authconfig } : undefined;
+      this.docker.pull(normalized, pullOptions, (err, stream) => {
         if (err) {
           return reject(err);
         }
