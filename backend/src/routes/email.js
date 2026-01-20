@@ -2,6 +2,7 @@
 
 const express = require('express');
 const nodemailer = require('nodemailer');
+const { SESv2Client, SendEmailCommand } = require('@aws-sdk/client-sesv2');
 const prisma = require('../config/prisma');
 
 const router = express.Router();
@@ -25,6 +26,9 @@ const sanitizeConfig = (config) => ({
 });
 
 const buildTransporter = (config) => {
+  if (!config.host) {
+    throw new Error('SMTP host not configured');
+  }
   const transportOptions = {
     host: config.host,
     port: config.port,
@@ -43,6 +47,42 @@ const buildTransporter = (config) => {
     transportOptions.tls.ca = config.tlsCaText;
   }
   return nodemailer.createTransport(transportOptions);
+};
+
+const sendViaSes = async ({ to, subject, html }) => {
+  const region = process.env.PROVIR_SES_REGION;
+  const accessKeyId = process.env.PROVIR_SES_ACCESS_KEY_ID;
+  const secretAccessKey = process.env.PROVIR_SES_SECRET_ACCESS_KEY;
+  const fromName = process.env.PROVIR_SES_FROM_NAME || '';
+  const fromEmail = process.env.PROVIR_SES_FROM_EMAIL;
+  const replyTo = process.env.PROVIR_SES_REPLY_TO;
+
+  if (!region || !fromEmail) {
+    throw new Error('Provir SES nao configurado');
+  }
+
+  const client = new SESv2Client({
+    region,
+    credentials: accessKeyId && secretAccessKey
+      ? { accessKeyId, secretAccessKey }
+      : undefined
+  });
+
+  const from = fromName ? `${fromName} <${fromEmail}>` : fromEmail;
+  const command = new SendEmailCommand({
+    FromEmailAddress: from,
+    ReplyToAddresses: replyTo ? [replyTo] : undefined,
+    Destination: { ToAddresses: Array.isArray(to) ? to : [to] },
+    Content: {
+      Simple: {
+        Subject: { Data: subject },
+        Body: { Html: { Data: html } }
+      }
+    }
+  });
+
+  const result = await client.send(command);
+  return { messageId: result.MessageId };
 };
 
 const applyPreheader = (html, preheader) => {
@@ -93,10 +133,17 @@ const sendEmail = async ({ to, subject, html, templateId, configId }) => {
   }
 
   const transporter = buildTransporter(config);
-  const from = config.fromName
-    ? `${config.fromName} <${config.fromEmail}>`
-    : config.fromEmail;
-  const info = await transporter.sendMail({
+  if (config.provider === 'provir') {
+    return sendViaSes({ to, subject: finalSubject, html: finalHtml });
+  }
+
+  const fromName = config.fromName;
+  const fromEmail = config.fromEmail;
+  if (!fromEmail) {
+    throw new Error('fromEmail is required');
+  }
+  const from = fromName ? `${fromName} <${fromEmail}>` : fromEmail;
+  const info = await buildTransporter(config).sendMail({
     from,
     to,
     replyTo: config.replyTo || undefined,
@@ -134,8 +181,8 @@ router.post('/configs', async (req, res, next) => {
       isActive
     } = req.body || {};
 
-    if (!name || !host || !fromEmail) {
-      return res.status(400).json({ message: 'name, host and fromEmail are required' });
+    if (!name || (!host && provider !== 'provir') || (!fromEmail && provider === 'smtp_custom')) {
+      return res.status(400).json({ message: 'name is required' });
     }
 
     if (isActive) {
@@ -145,14 +192,14 @@ router.post('/configs', async (req, res, next) => {
     const config = await prisma.smtpConfig.create({
       data: {
         name,
-        provider: provider || 'smtp',
-        host,
+        provider: provider || 'smtp_custom',
+        host: host || '',
         port: Number(port) || 587,
         secure: !!secure,
         username: username || null,
         password: password || null,
         fromName: fromName || null,
-        fromEmail,
+        fromEmail: fromEmail || '',
         replyTo: replyTo || null,
         tlsRejectUnauthorized: tlsRejectUnauthorized !== false,
         tlsCaText: tlsCaText || null,
@@ -199,13 +246,13 @@ router.put('/configs/:id', async (req, res, next) => {
       data: {
         name: name ?? existing.name,
         provider: provider ?? existing.provider,
-        host: host ?? existing.host,
+        host: host !== undefined ? host || '' : existing.host,
         port: port !== undefined ? Number(port) || 587 : existing.port,
         secure: secure !== undefined ? !!secure : existing.secure,
         username: username !== undefined ? username || null : existing.username,
         password: password !== undefined ? password || null : existing.password,
         fromName: fromName !== undefined ? fromName || null : existing.fromName,
-        fromEmail: fromEmail ?? existing.fromEmail,
+        fromEmail: fromEmail !== undefined ? fromEmail || '' : existing.fromEmail,
         replyTo: replyTo !== undefined ? replyTo || null : existing.replyTo,
         tlsRejectUnauthorized:
           tlsRejectUnauthorized !== undefined ? !!tlsRejectUnauthorized : existing.tlsRejectUnauthorized,

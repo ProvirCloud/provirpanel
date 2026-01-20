@@ -251,6 +251,12 @@ NGINX_ERROR_LOG=/var/log/nginx/error.log
 NGINX_SSL_STORAGE=/etc/nginx/ssl
 NGINX_BACKUP_DIR=/etc/nginx/provirpanel-backups
 LETSENCRYPT_EMAIL=
+PROVIR_SES_REGION=
+PROVIR_SES_ACCESS_KEY_ID=
+PROVIR_SES_SECRET_ACCESS_KEY=
+PROVIR_SES_FROM_NAME=
+PROVIR_SES_FROM_EMAIL=
+PROVIR_SES_REPLY_TO=
 ENV
 
   ensure_env_var "${env_file}" "NGINX_CONFIG_PATH" "/etc/nginx"
@@ -263,6 +269,12 @@ ENV
   ensure_env_var "${env_file}" "NGINX_SSL_STORAGE" "/etc/nginx/ssl"
   ensure_env_var "${env_file}" "NGINX_BACKUP_DIR" "/etc/nginx/provirpanel-backups"
   ensure_env_var "${env_file}" "LETSENCRYPT_EMAIL" ""
+  ensure_env_var "${env_file}" "PROVIR_SES_REGION" ""
+  ensure_env_var "${env_file}" "PROVIR_SES_ACCESS_KEY_ID" ""
+  ensure_env_var "${env_file}" "PROVIR_SES_SECRET_ACCESS_KEY" ""
+  ensure_env_var "${env_file}" "PROVIR_SES_FROM_NAME" ""
+  ensure_env_var "${env_file}" "PROVIR_SES_FROM_EMAIL" ""
+  ensure_env_var "${env_file}" "PROVIR_SES_REPLY_TO" ""
 
   chown provirpanel:provirpanel "${env_file}"
   mkdir -p "${INSTALL_DIR}/projects"

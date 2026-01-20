@@ -108,7 +108,7 @@ model NginxSslCert {
 model SmtpConfig {
   id                   Int      @id @default(autoincrement())
   name                 String   @db.VarChar(120)
-  provider             String   @default("smtp") @db.VarChar(30)
+  provider             String   @default("smtp_custom") @db.VarChar(30)
   host                 String   @db.VarChar(255)
   port                 Int      @default(587)
   secure               Boolean  @default(false)

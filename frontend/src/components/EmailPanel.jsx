@@ -194,7 +194,7 @@ const EmailPanel = () => {
                 onClick={() =>
                   setSmtpModal({
                     name: '',
-                    provider: 'smtp',
+                    provider: 'provir',
                     host: '',
                     port: 587,
                     secure: false,
@@ -228,7 +228,7 @@ const EmailPanel = () => {
                       )}
                     </p>
                     <p className="text-xs text-slate-400">
-                      {cfg.provider?.toUpperCase()} • {cfg.host}:{cfg.port}
+                      {cfg.provider?.toUpperCase()} • {cfg.host || 'env'}:{cfg.port || 'auto'}
                     </p>
                   </div>
                   <div className="flex gap-2">
@@ -369,19 +369,11 @@ const EmailPanel = () => {
 
 const SmtpModal = ({ data, onClose, onSave }) => {
   const [form, setForm] = useState(data)
-  const [sesRegion, setSesRegion] = useState('')
-
   useEffect(() => {
     setForm(data)
   }, [data])
 
   const updateField = (key, value) => setForm((prev) => ({ ...prev, [key]: value }))
-
-  const autoFillSes = () => {
-    if (!sesRegion.trim()) return
-    const host = `email-smtp.${sesRegion.trim()}.amazonaws.com`
-    setForm((prev) => ({ ...prev, host, port: 587, secure: false, provider: 'ses' }))
-  }
 
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 p-4">
@@ -396,117 +388,110 @@ const SmtpModal = ({ data, onClose, onSave }) => {
               onChange={(e) => updateField('name', e.target.value)}
             />
           </div>
-          <div>
+          <div className="col-span-2">
             <label className="text-xs text-slate-400">Tipo</label>
             <select
               className="mt-1 w-full rounded-xl border border-slate-800 bg-slate-950 px-3 py-2 text-sm"
-              value={form.provider || 'smtp'}
+              value={form.provider || 'smtp_custom'}
               onChange={(e) => updateField('provider', e.target.value)}
             >
-              <option value="smtp">SMTP Custom</option>
-              <option value="ses">Amazon SES (SMTP)</option>
+              <option value="provir">Provir Cloud Mail (SES)</option>
+              <option value="smtp_sender">SMTP Sender Custom (SES/SendGrid/Mailgun)</option>
+              <option value="smtp_custom">SMTP Custom (cliente)</option>
             </select>
+            {form.provider === 'provir' && (
+              <p className="mt-2 text-xs text-emerald-300">
+                Usa AWS SES via API (PROVIR_SES_REGION/ACCESS_KEY/SECRET/FROM_EMAIL).
+              </p>
+            )}
           </div>
-          <div>
-            <label className="text-xs text-slate-400">Regiao SES (opcional)</label>
-            <div className="mt-1 flex gap-2">
-              <input
-                className="w-full rounded-xl border border-slate-800 bg-slate-950 px-3 py-2 text-sm"
-                value={sesRegion}
-                onChange={(e) => setSesRegion(e.target.value)}
-                placeholder="us-east-1"
-              />
-              <button
-                className="rounded-xl bg-slate-800 px-3 text-xs"
-                onClick={autoFillSes}
-              >
-                Preencher
-              </button>
-            </div>
-          </div>
-          <div>
-            <label className="text-xs text-slate-400">Host</label>
-            <input
-              className="mt-1 w-full rounded-xl border border-slate-800 bg-slate-950 px-3 py-2 text-sm"
-              value={form.host || ''}
-              onChange={(e) => updateField('host', e.target.value)}
-            />
-          </div>
-          <div>
-            <label className="text-xs text-slate-400">Porta</label>
-            <input
-              type="number"
-              className="mt-1 w-full rounded-xl border border-slate-800 bg-slate-950 px-3 py-2 text-sm"
-              value={form.port || 587}
-              onChange={(e) => updateField('port', parseInt(e.target.value, 10) || 587)}
-            />
-          </div>
-          <div className="col-span-2 flex items-center gap-2">
-            <input
-              type="checkbox"
-              checked={!!form.secure}
-              onChange={(e) => updateField('secure', e.target.checked)}
-            />
-            <span className="text-xs text-slate-300">Conexao SSL (secure)</span>
-          </div>
-          <div>
-            <label className="text-xs text-slate-400">Usuario</label>
-            <input
-              className="mt-1 w-full rounded-xl border border-slate-800 bg-slate-950 px-3 py-2 text-sm"
-              value={form.username || ''}
-              onChange={(e) => updateField('username', e.target.value)}
-            />
-          </div>
-          <div>
-            <label className="text-xs text-slate-400">Senha</label>
-            <input
-              type="password"
-              className="mt-1 w-full rounded-xl border border-slate-800 bg-slate-950 px-3 py-2 text-sm"
-              value={form.password || ''}
-              onChange={(e) => updateField('password', e.target.value)}
-            />
-          </div>
-          <div>
-            <label className="text-xs text-slate-400">Nome do remetente</label>
-            <input
-              className="mt-1 w-full rounded-xl border border-slate-800 bg-slate-950 px-3 py-2 text-sm"
-              value={form.fromName || ''}
-              onChange={(e) => updateField('fromName', e.target.value)}
-            />
-          </div>
-          <div>
-            <label className="text-xs text-slate-400">Email do remetente</label>
-            <input
-              className="mt-1 w-full rounded-xl border border-slate-800 bg-slate-950 px-3 py-2 text-sm"
-              value={form.fromEmail || ''}
-              onChange={(e) => updateField('fromEmail', e.target.value)}
-            />
-          </div>
-          <div className="col-span-2">
-            <label className="text-xs text-slate-400">Reply-to (opcional)</label>
-            <input
-              className="mt-1 w-full rounded-xl border border-slate-800 bg-slate-950 px-3 py-2 text-sm"
-              value={form.replyTo || ''}
-              onChange={(e) => updateField('replyTo', e.target.value)}
-            />
-          </div>
-          <div className="col-span-2 flex items-center gap-2">
-            <input
-              type="checkbox"
-              checked={form.tlsRejectUnauthorized !== false}
-              onChange={(e) => updateField('tlsRejectUnauthorized', e.target.checked)}
-            />
-            <span className="text-xs text-slate-300">Rejeitar certificado invalido</span>
-          </div>
-          <div className="col-span-2">
-            <label className="text-xs text-slate-400">CA Certificado (opcional)</label>
-            <textarea
-              className="mt-1 h-24 w-full rounded-xl border border-slate-800 bg-slate-950 px-3 py-2 text-xs"
-              value={form.tlsCaText || ''}
-              onChange={(e) => updateField('tlsCaText', e.target.value)}
-              placeholder="Cole o certificado CA se necessario"
-            />
-          </div>
+          {form.provider !== 'provir' && (
+            <>
+              <div>
+                <label className="text-xs text-slate-400">Host</label>
+                <input
+                  className="mt-1 w-full rounded-xl border border-slate-800 bg-slate-950 px-3 py-2 text-sm"
+                  value={form.host || ''}
+                  onChange={(e) => updateField('host', e.target.value)}
+                />
+              </div>
+              <div>
+                <label className="text-xs text-slate-400">Porta</label>
+                <input
+                  type="number"
+                  className="mt-1 w-full rounded-xl border border-slate-800 bg-slate-950 px-3 py-2 text-sm"
+                  value={form.port || 587}
+                  onChange={(e) => updateField('port', parseInt(e.target.value, 10) || 587)}
+                />
+              </div>
+              <div className="col-span-2 flex items-center gap-2">
+                <input
+                  type="checkbox"
+                  checked={!!form.secure}
+                  onChange={(e) => updateField('secure', e.target.checked)}
+                />
+                <span className="text-xs text-slate-300">Conexao SSL (secure)</span>
+              </div>
+              <div>
+                <label className="text-xs text-slate-400">Usuario</label>
+                <input
+                  className="mt-1 w-full rounded-xl border border-slate-800 bg-slate-950 px-3 py-2 text-sm"
+                  value={form.username || ''}
+                  onChange={(e) => updateField('username', e.target.value)}
+                />
+              </div>
+              <div>
+                <label className="text-xs text-slate-400">Senha</label>
+                <input
+                  type="password"
+                  className="mt-1 w-full rounded-xl border border-slate-800 bg-slate-950 px-3 py-2 text-sm"
+                  value={form.password || ''}
+                  onChange={(e) => updateField('password', e.target.value)}
+                />
+              </div>
+              <div>
+                <label className="text-xs text-slate-400">Nome do remetente</label>
+                <input
+                  className="mt-1 w-full rounded-xl border border-slate-800 bg-slate-950 px-3 py-2 text-sm"
+                  value={form.fromName || ''}
+                  onChange={(e) => updateField('fromName', e.target.value)}
+                />
+              </div>
+              <div>
+                <label className="text-xs text-slate-400">Email do remetente</label>
+                <input
+                  className="mt-1 w-full rounded-xl border border-slate-800 bg-slate-950 px-3 py-2 text-sm"
+                  value={form.fromEmail || ''}
+                  onChange={(e) => updateField('fromEmail', e.target.value)}
+                />
+              </div>
+              <div className="col-span-2">
+                <label className="text-xs text-slate-400">Reply-to (opcional)</label>
+                <input
+                  className="mt-1 w-full rounded-xl border border-slate-800 bg-slate-950 px-3 py-2 text-sm"
+                  value={form.replyTo || ''}
+                  onChange={(e) => updateField('replyTo', e.target.value)}
+                />
+              </div>
+              <div className="col-span-2 flex items-center gap-2">
+                <input
+                  type="checkbox"
+                  checked={form.tlsRejectUnauthorized !== false}
+                  onChange={(e) => updateField('tlsRejectUnauthorized', e.target.checked)}
+                />
+                <span className="text-xs text-slate-300">Rejeitar certificado invalido</span>
+              </div>
+              <div className="col-span-2">
+                <label className="text-xs text-slate-400">CA Certificado (opcional)</label>
+                <textarea
+                  className="mt-1 h-24 w-full rounded-xl border border-slate-800 bg-slate-950 px-3 py-2 text-xs"
+                  value={form.tlsCaText || ''}
+                  onChange={(e) => updateField('tlsCaText', e.target.value)}
+                  placeholder="Cole o certificado CA se necessario"
+                />
+              </div>
+            </>
+          )}
           <div className="col-span-2 flex items-center gap-2">
             <input
               type="checkbox"

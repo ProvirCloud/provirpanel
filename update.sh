@@ -51,6 +51,12 @@ if [[ -f "${ENV_FILE}" ]]; then
   ensure_env_var "${ENV_FILE}" "NGINX_SSL_STORAGE" "/etc/nginx/ssl"
   ensure_env_var "${ENV_FILE}" "NGINX_BACKUP_DIR" "/etc/nginx/provirpanel-backups"
   ensure_env_var "${ENV_FILE}" "LETSENCRYPT_EMAIL" ""
+  ensure_env_var "${ENV_FILE}" "PROVIR_SES_REGION" ""
+  ensure_env_var "${ENV_FILE}" "PROVIR_SES_ACCESS_KEY_ID" ""
+  ensure_env_var "${ENV_FILE}" "PROVIR_SES_SECRET_ACCESS_KEY" ""
+  ensure_env_var "${ENV_FILE}" "PROVIR_SES_FROM_NAME" ""
+  ensure_env_var "${ENV_FILE}" "PROVIR_SES_FROM_EMAIL" ""
+  ensure_env_var "${ENV_FILE}" "PROVIR_SES_REPLY_TO" ""
 else
   log "Aviso: backend/.env nao encontrado, pulando configuracao do Nginx"
 fi
