@@ -9,6 +9,7 @@ import FileManager from './components/FileManager.jsx'
 import DomainsPanel from './components/DomainsPanel.jsx'
 import UsersPanel from './components/UsersPanel.jsx'
 import LogsPanel from './components/LogsPanel.jsx'
+import EmailPanel from './components/EmailPanel.jsx'
 import NginxPanel from './components/NginxPanel.jsx'
 import NginxVisualManager from './components/NginxVisualManager.jsx'
 import api from './services/api.js'
@@ -106,6 +107,7 @@ const App = () => {
           <Route path="domains" element={<DomainsPanel />} />
           <Route path="files" element={<FileManager />} />
           <Route path="users" element={<UsersPanel />} />
+          <Route path="email" element={<EmailPanel />} />
           <Route path="logs" element={<LogsPanel />} />
         </Route>
         <Route path="*" element={<Navigate to="/" replace />} />

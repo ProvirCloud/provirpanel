@@ -104,3 +104,37 @@ model NginxSslCert {
   @@index([expiresAt], name: "idx_nginx_ssl_certs_expires")
   @@map("nginx_ssl_certs")
 }
+
+model SmtpConfig {
+  id                   Int      @id @default(autoincrement())
+  name                 String   @db.VarChar(120)
+  provider             String   @default("smtp") @db.VarChar(30)
+  host                 String   @db.VarChar(255)
+  port                 Int      @default(587)
+  secure               Boolean  @default(false)
+  username             String?  @db.VarChar(255)
+  password             String?  @db.VarChar(255)
+  fromName             String?  @map("from_name") @db.VarChar(120)
+  fromEmail            String   @map("from_email") @db.VarChar(255)
+  replyTo              String?  @map("reply_to") @db.VarChar(255)
+  tlsRejectUnauthorized Boolean @default(true) @map("tls_reject_unauthorized")
+  tlsCaText            String?  @map("tls_ca_text") @db.Text
+  isActive             Boolean  @default(true) @map("is_active")
+  createdAt            DateTime @default(now()) @map("created_at")
+  updatedAt            DateTime @updatedAt @map("updated_at")
+
+  @@map("smtp_configs")
+}
+
+model EmailTemplate {
+  id        Int      @id @default(autoincrement())
+  name      String   @db.VarChar(120)
+  subject   String   @db.VarChar(255)
+  preheader String?  @db.VarChar(255)
+  design    Json?    @default("null")
+  html      String   @db.Text
+  createdAt DateTime @default(now()) @map("created_at")
+  updatedAt DateTime @updatedAt @map("updated_at")
+
+  @@map("email_templates")
+}
