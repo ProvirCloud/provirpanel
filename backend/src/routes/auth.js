@@ -4,6 +4,8 @@ const express = require('express');
 const bcrypt = require('bcrypt');
 const crypto = require('crypto');
 const jwt = require('jsonwebtoken');
+const speakeasy = require('speakeasy');
+const qrcode = require('qrcode');
 const pool = require('../config/database');
 const authMiddleware = require('../middleware/auth');
 
@@ -57,7 +59,7 @@ router.post('/login', async (req, res, next) => {
     }
 
     const result = await pool.query(
-      'SELECT id, username, password, role FROM users WHERE username = $1',
+      'SELECT id, username, password, role, mfa_enabled, mfa_secret FROM users WHERE username = $1',
       [username]
     );
 
@@ -71,6 +73,19 @@ router.post('/login', async (req, res, next) => {
       return res.status(401).json({ message: 'Invalid credentials' });
     }
 
+    if (user.mfa_enabled && user.mfa_secret) {
+      const mfaToken = jwt.sign(
+        { sub: user.id, role: user.role, username: user.username, mfa: true },
+        jwtSecret,
+        { expiresIn: '5m' }
+      );
+      return res.json({
+        mfaRequired: true,
+        mfaToken,
+        user: { id: user.id, username: user.username, role: user.role }
+      });
+    }
+
     const token = jwt.sign(
       { sub: user.id, role: user.role, username: user.username },
       jwtSecret,
@@ -79,6 +94,57 @@ router.post('/login', async (req, res, next) => {
 
     return res.json({
       token,
+      user: { id: user.id, username: user.username, role: user.role }
+    });
+  } catch (err) {
+    return next(err);
+  }
+});
+
+router.post('/mfa/confirm', async (req, res, next) => {
+  try {
+    const { token, mfaToken } = req.body || {};
+    if (!token || !mfaToken) {
+      return res.status(400).json({ message: 'token and mfaToken are required' });
+    }
+
+    let payload;
+    try {
+      payload = jwt.verify(mfaToken, jwtSecret);
+    } catch (err) {
+      return res.status(401).json({ message: 'Invalid mfa token' });
+    }
+    if (!payload || !payload.sub || !payload.mfa) {
+      return res.status(401).json({ message: 'Invalid mfa token' });
+    }
+
+    const result = await pool.query(
+      'SELECT id, username, role, mfa_enabled, mfa_secret FROM users WHERE id = $1',
+      [payload.sub]
+    );
+    const user = result.rows[0];
+    if (!user || !user.mfa_enabled || !user.mfa_secret) {
+      return res.status(401).json({ message: 'MFA not enabled' });
+    }
+
+    const verified = speakeasy.totp.verify({
+      secret: user.mfa_secret,
+      encoding: 'base32',
+      token,
+      window: 1
+    });
+    if (!verified) {
+      return res.status(401).json({ message: 'Invalid MFA code' });
+    }
+
+    const authToken = jwt.sign(
+      { sub: user.id, role: user.role, username: user.username },
+      jwtSecret,
+      { expiresIn: jwtExpiresIn }
+    );
+
+    return res.json({
+      token: authToken,
       user: { id: user.id, username: user.username, role: user.role }
     });
   } catch (err) {
@@ -148,7 +214,7 @@ router.post('/users', authMiddleware, async (req, res, next) => {
 router.get('/me', authMiddleware, async (req, res, next) => {
   try {
     const result = await pool.query(
-      'SELECT id, username, role, created_at FROM users WHERE id = $1',
+      'SELECT id, username, role, created_at, mfa_enabled FROM users WHERE id = $1',
       [req.user.id]
     );
     const user = result.rows[0];
@@ -167,7 +233,7 @@ router.get('/users', authMiddleware, async (req, res, next) => {
       return res.status(403).json({ message: 'Forbidden' });
     }
     const result = await pool.query(
-      'SELECT id, username, role, created_at FROM users ORDER BY created_at DESC'
+      'SELECT id, username, role, created_at, mfa_enabled FROM users ORDER BY created_at DESC'
     );
     return res.json({ users: result.rows });
   } catch (err) {
@@ -201,6 +267,125 @@ router.put('/users/:id', authMiddleware, async (req, res, next) => {
     
     await pool.query(query, params);
     return res.json({ message: 'User updated' });
+  } catch (err) {
+    return next(err);
+  }
+});
+
+router.get('/mfa/status', authMiddleware, async (req, res, next) => {
+  try {
+    const result = await pool.query(
+      'SELECT mfa_enabled FROM users WHERE id = $1',
+      [req.user.id]
+    );
+    const user = result.rows[0];
+    return res.json({ enabled: !!user?.mfa_enabled });
+  } catch (err) {
+    return next(err);
+  }
+});
+
+router.post('/mfa/setup', authMiddleware, async (req, res, next) => {
+  try {
+    const userResult = await pool.query(
+      'SELECT id, username, mfa_enabled FROM users WHERE id = $1',
+      [req.user.id]
+    );
+    const user = userResult.rows[0];
+    if (!user) {
+      return res.status(404).json({ message: 'User not found' });
+    }
+    if (user.mfa_enabled) {
+      return res.status(400).json({ message: 'MFA already enabled' });
+    }
+
+    const secret = speakeasy.generateSecret({
+      name: `ProvirPanel (${user.username})`
+    });
+    await pool.query(
+      'UPDATE users SET mfa_temp_secret = $1 WHERE id = $2',
+      [secret.base32, user.id]
+    );
+
+    const qr = await qrcode.toDataURL(secret.otpauth_url || '');
+    return res.json({
+      otpauthUrl: secret.otpauth_url,
+      secret: secret.base32,
+      qr
+    });
+  } catch (err) {
+    return next(err);
+  }
+});
+
+router.post('/mfa/enable', authMiddleware, async (req, res, next) => {
+  try {
+    const { token } = req.body || {};
+    if (!token) {
+      return res.status(400).json({ message: 'token is required' });
+    }
+
+    const result = await pool.query(
+      'SELECT id, mfa_temp_secret FROM users WHERE id = $1',
+      [req.user.id]
+    );
+    const user = result.rows[0];
+    if (!user || !user.mfa_temp_secret) {
+      return res.status(400).json({ message: 'MFA not initialized' });
+    }
+
+    const verified = speakeasy.totp.verify({
+      secret: user.mfa_temp_secret,
+      encoding: 'base32',
+      token,
+      window: 1
+    });
+    if (!verified) {
+      return res.status(401).json({ message: 'Invalid MFA code' });
+    }
+
+    await pool.query(
+      'UPDATE users SET mfa_enabled = true, mfa_secret = $1, mfa_temp_secret = NULL WHERE id = $2',
+      [user.mfa_temp_secret, user.id]
+    );
+
+    return res.json({ enabled: true });
+  } catch (err) {
+    return next(err);
+  }
+});
+
+router.post('/mfa/disable', authMiddleware, async (req, res, next) => {
+  try {
+    const { token } = req.body || {};
+    if (!token) {
+      return res.status(400).json({ message: 'token is required' });
+    }
+
+    const result = await pool.query(
+      'SELECT id, mfa_secret FROM users WHERE id = $1',
+      [req.user.id]
+    );
+    const user = result.rows[0];
+    if (!user || !user.mfa_secret) {
+      return res.status(400).json({ message: 'MFA not enabled' });
+    }
+
+    const verified = speakeasy.totp.verify({
+      secret: user.mfa_secret,
+      encoding: 'base32',
+      token,
+      window: 1
+    });
+    if (!verified) {
+      return res.status(401).json({ message: 'Invalid MFA code' });
+    }
+
+    await pool.query(
+      'UPDATE users SET mfa_enabled = false, mfa_secret = NULL, mfa_temp_secret = NULL WHERE id = $1',
+      [user.id]
+    );
+    return res.json({ enabled: false });
   } catch (err) {
     return next(err);
   }

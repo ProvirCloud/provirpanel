@@ -2,7 +2,7 @@ import { useEffect, useRef, useState } from 'react'
 import { Bell, CircleUser, Shield, LogOut, KeyRound, UserPlus, ChevronDown } from 'lucide-react'
 import logoImg from '../assets/logo.png'
 
-const Navbar = ({ onLogout, onChangePassword, onCreateUser, username = 'admin' }) => {
+const Navbar = ({ onLogout, onChangePassword, onCreateUser, onManageMfa, username = 'admin' }) => {
   const [open, setOpen] = useState(false)
   const menuRef = useRef(null)
 
@@ -61,6 +61,16 @@ const Navbar = ({ onLogout, onChangePassword, onCreateUser, username = 'admin' }
               >
                 <UserPlus className="h-4 w-4" />
                 Novo usuario
+              </button>
+              <button
+                className="flex w-full items-center gap-2 rounded-lg px-3 py-2 text-slate-200 hover:bg-slate-800/60"
+                onClick={() => {
+                  setOpen(false)
+                  onManageMfa?.()
+                }}
+              >
+                <Shield className="h-4 w-4" />
+                MFA (Authenticator)
               </button>
               <div className="my-1 h-px bg-slate-800" />
               <button

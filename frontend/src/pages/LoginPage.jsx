@@ -7,18 +7,37 @@ const LoginPage = () => {
   const navigate = useNavigate()
   const [username, setUsername] = useState('')
   const [password, setPassword] = useState('')
+  const [mfaCode, setMfaCode] = useState('')
+  const [mfaToken, setMfaToken] = useState('')
+  const [mfaRequired, setMfaRequired] = useState(false)
   const [error, setError] = useState('')
 
   const handleSubmit = async (event) => {
     event.preventDefault()
     setError('')
     try {
+      if (mfaRequired) {
+        const response = await api.post('/auth/mfa/confirm', {
+          token: mfaCode,
+          mfaToken
+        })
+        localStorage.setItem('token', response.data.token)
+        window.dispatchEvent(new Event('provirpanel-auth'))
+        navigate('/')
+        return
+      }
+
       const response = await api.post('/auth/login', { username, password })
+      if (response.data?.mfaRequired) {
+        setMfaRequired(true)
+        setMfaToken(response.data.mfaToken || '')
+        return
+      }
       localStorage.setItem('token', response.data.token)
       window.dispatchEvent(new Event('provirpanel-auth'))
       navigate('/')
     } catch (err) {
-      setError('Credenciais invalidas')
+      setError(mfaRequired ? 'Codigo MFA invalido' : 'Credenciais invalidas')
     }
   }
 
@@ -44,6 +63,7 @@ const LoginPage = () => {
             placeholder="Usuario"
             value={username}
             onChange={(event) => setUsername(event.target.value)}
+            disabled={mfaRequired}
           />
           <input
             className="w-full rounded-xl border border-slate-800 bg-slate-950 px-4 py-3 text-sm text-slate-100 outline-none focus:border-emerald-400/60"
@@ -51,10 +71,19 @@ const LoginPage = () => {
             placeholder="Senha"
             value={password}
             onChange={(event) => setPassword(event.target.value)}
+            disabled={mfaRequired}
           />
+          {mfaRequired && (
+            <input
+              className="w-full rounded-xl border border-slate-800 bg-slate-950 px-4 py-3 text-sm text-slate-100 outline-none focus:border-emerald-400/60"
+              placeholder="Codigo MFA (6 digitos)"
+              value={mfaCode}
+              onChange={(event) => setMfaCode(event.target.value)}
+            />
+          )}
           {error && <p className="text-xs text-rose-300">{error}</p>}
           <button className="w-full rounded-xl bg-emerald-500 py-3 text-sm font-semibold text-slate-950 transition hover:bg-emerald-400">
-            Entrar
+            {mfaRequired ? 'Validar MFA' : 'Entrar'}
           </button>
         </form>
       </div>
