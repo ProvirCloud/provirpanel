@@ -10,12 +10,31 @@ const LoginPage = () => {
   const [mfaCode, setMfaCode] = useState('')
   const [mfaToken, setMfaToken] = useState('')
   const [mfaRequired, setMfaRequired] = useState(false)
+  const [mfaSetupToken, setMfaSetupToken] = useState('')
+  const [mfaSetupRequired, setMfaSetupRequired] = useState(false)
+  const [mfaSetup, setMfaSetup] = useState(null)
   const [error, setError] = useState('')
 
   const handleSubmit = async (event) => {
     event.preventDefault()
     setError('')
     try {
+      if (mfaSetupRequired) {
+        if (!mfaSetup) {
+          const setupResponse = await api.post('/auth/mfa/setup-login', { mfaSetupToken })
+          setMfaSetup(setupResponse.data)
+          return
+        }
+        const enableResponse = await api.post('/auth/mfa/enable-login', {
+          token: mfaCode,
+          mfaSetupToken
+        })
+        localStorage.setItem('token', enableResponse.data.token)
+        window.dispatchEvent(new Event('provirpanel-auth'))
+        navigate('/')
+        return
+      }
+
       if (mfaRequired) {
         const response = await api.post('/auth/mfa/confirm', {
           token: mfaCode,
@@ -28,6 +47,11 @@ const LoginPage = () => {
       }
 
       const response = await api.post('/auth/login', { username, password })
+      if (response.data?.mfaSetupRequired) {
+        setMfaSetupRequired(true)
+        setMfaSetupToken(response.data.mfaSetupToken || '')
+        return
+      }
       if (response.data?.mfaRequired) {
         setMfaRequired(true)
         setMfaToken(response.data.mfaToken || '')
@@ -37,7 +61,11 @@ const LoginPage = () => {
       window.dispatchEvent(new Event('provirpanel-auth'))
       navigate('/')
     } catch (err) {
-      setError(mfaRequired ? 'Codigo MFA invalido' : 'Credenciais invalidas')
+      if (mfaSetupRequired) {
+        setError('Nao foi possivel configurar o MFA')
+      } else {
+        setError(mfaRequired ? 'Codigo MFA invalido' : 'Credenciais invalidas')
+      }
     }
   }
 
@@ -63,7 +91,7 @@ const LoginPage = () => {
             placeholder="Usuario"
             value={username}
             onChange={(event) => setUsername(event.target.value)}
-            disabled={mfaRequired}
+            disabled={mfaRequired || mfaSetupRequired}
           />
           <input
             className="w-full rounded-xl border border-slate-800 bg-slate-950 px-4 py-3 text-sm text-slate-100 outline-none focus:border-emerald-400/60"
@@ -71,9 +99,27 @@ const LoginPage = () => {
             placeholder="Senha"
             value={password}
             onChange={(event) => setPassword(event.target.value)}
-            disabled={mfaRequired}
+            disabled={mfaRequired || mfaSetupRequired}
           />
-          {mfaRequired && (
+          {mfaSetupRequired && (
+            <>
+              {!mfaSetup ? (
+                <div className="rounded-xl border border-slate-800 bg-slate-950 px-4 py-3 text-xs text-slate-300">
+                  MFA obrigatorio. Clique em continuar para gerar o QR Code.
+                </div>
+              ) : (
+                <>
+                  {mfaSetup.qr && (
+                    <img src={mfaSetup.qr} alt="QR Code MFA" className="mx-auto h-36 w-36 rounded-xl bg-white p-2" />
+                  )}
+                  <div className="rounded-xl border border-slate-800 bg-slate-950 px-4 py-3 text-xs text-slate-200">
+                    Codigo manual: <span className="font-mono text-emerald-300">{mfaSetup.secret}</span>
+                  </div>
+                </>
+              )}
+            </>
+          )}
+          {(mfaRequired || mfaSetupRequired) && (
             <input
               className="w-full rounded-xl border border-slate-800 bg-slate-950 px-4 py-3 text-sm text-slate-100 outline-none focus:border-emerald-400/60"
               placeholder="Codigo MFA (6 digitos)"
@@ -83,7 +129,7 @@ const LoginPage = () => {
           )}
           {error && <p className="text-xs text-rose-300">{error}</p>}
           <button className="w-full rounded-xl bg-emerald-500 py-3 text-sm font-semibold text-slate-950 transition hover:bg-emerald-400">
-            {mfaRequired ? 'Validar MFA' : 'Entrar'}
+            {mfaSetupRequired ? 'Configurar MFA' : mfaRequired ? 'Validar MFA' : 'Entrar'}
           </button>
         </form>
       </div>

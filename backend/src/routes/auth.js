@@ -59,7 +59,7 @@ router.post('/login', async (req, res, next) => {
     }
 
     const result = await pool.query(
-      'SELECT id, username, password, role, mfa_enabled, mfa_secret FROM users WHERE username = $1',
+      'SELECT id, username, password, role, mfa_enabled, mfa_secret, mfa_required FROM users WHERE username = $1',
       [username]
     );
 
@@ -82,6 +82,19 @@ router.post('/login', async (req, res, next) => {
       return res.json({
         mfaRequired: true,
         mfaToken,
+        user: { id: user.id, username: user.username, role: user.role }
+      });
+    }
+
+    if (user.mfa_required) {
+      const mfaSetupToken = jwt.sign(
+        { sub: user.id, role: user.role, username: user.username, mfaSetup: true },
+        jwtSecret,
+        { expiresIn: '10m' }
+      );
+      return res.json({
+        mfaSetupRequired: true,
+        mfaSetupToken,
         user: { id: user.id, username: user.username, role: user.role }
       });
     }
@@ -187,7 +200,7 @@ router.post('/users', authMiddleware, async (req, res, next) => {
     if (req.user.role !== 'admin') {
       return res.status(403).json({ message: 'Forbidden' });
     }
-    const { username, password, role } = req.body || {};
+    const { username, password, role, mfaRequired } = req.body || {};
     if (!username || !password || !role) {
       return res.status(400).json({ message: 'username, password and role are required' });
     }
@@ -202,8 +215,8 @@ router.post('/users', authMiddleware, async (req, res, next) => {
 
     const passwordHash = await bcrypt.hash(password, 12);
     const insert = await pool.query(
-      'INSERT INTO users (id, username, password, role) VALUES ($1, $2, $3, $4) RETURNING id, username, role, created_at',
-      [generateUuid(), username, passwordHash, role]
+      'INSERT INTO users (id, username, password, role, mfa_required) VALUES ($1, $2, $3, $4, $5) RETURNING id, username, role, created_at, mfa_required',
+      [generateUuid(), username, passwordHash, role, !!mfaRequired]
     );
     return res.status(201).json({ user: insert.rows[0] });
   } catch (err) {
@@ -214,7 +227,7 @@ router.post('/users', authMiddleware, async (req, res, next) => {
 router.get('/me', authMiddleware, async (req, res, next) => {
   try {
     const result = await pool.query(
-      'SELECT id, username, role, created_at, mfa_enabled FROM users WHERE id = $1',
+      'SELECT id, username, role, created_at, mfa_enabled, mfa_required FROM users WHERE id = $1',
       [req.user.id]
     );
     const user = result.rows[0];
@@ -233,7 +246,7 @@ router.get('/users', authMiddleware, async (req, res, next) => {
       return res.status(403).json({ message: 'Forbidden' });
     }
     const result = await pool.query(
-      'SELECT id, username, role, created_at, mfa_enabled FROM users ORDER BY created_at DESC'
+      'SELECT id, username, role, created_at, mfa_enabled, mfa_required FROM users ORDER BY created_at DESC'
     );
     return res.json({ users: result.rows });
   } catch (err) {
@@ -247,7 +260,7 @@ router.put('/users/:id', authMiddleware, async (req, res, next) => {
       return res.status(403).json({ message: 'Forbidden' });
     }
     const { id } = req.params;
-    const { username, password, role } = req.body || {};
+    const { username, password, role, mfaRequired } = req.body || {};
     
     if (!username || !role) {
       return res.status(400).json({ message: 'username and role are required' });
@@ -256,13 +269,13 @@ router.put('/users/:id', authMiddleware, async (req, res, next) => {
       return res.status(400).json({ message: 'Invalid role' });
     }
 
-    let query = 'UPDATE users SET username = $1, role = $2 WHERE id = $3';
-    let params = [username, role, id];
+    let query = 'UPDATE users SET username = $1, role = $2, mfa_required = $3 WHERE id = $4';
+    let params = [username, role, !!mfaRequired, id];
     
     if (password) {
       const passwordHash = await bcrypt.hash(password, 12);
-      query = 'UPDATE users SET username = $1, role = $2, password = $3 WHERE id = $4';
-      params = [username, role, passwordHash, id];
+      query = 'UPDATE users SET username = $1, role = $2, password = $3, mfa_required = $4 WHERE id = $5';
+      params = [username, role, passwordHash, !!mfaRequired, id];
     }
     
     await pool.query(query, params);
@@ -312,6 +325,114 @@ router.post('/mfa/setup', authMiddleware, async (req, res, next) => {
       otpauthUrl: secret.otpauth_url,
       secret: secret.base32,
       qr
+    });
+  } catch (err) {
+    return next(err);
+  }
+});
+
+router.post('/mfa/setup-login', async (req, res, next) => {
+  try {
+    const { mfaSetupToken } = req.body || {};
+    if (!mfaSetupToken) {
+      return res.status(400).json({ message: 'mfaSetupToken is required' });
+    }
+    let payload;
+    try {
+      payload = jwt.verify(mfaSetupToken, jwtSecret);
+    } catch (err) {
+      return res.status(401).json({ message: 'Invalid setup token' });
+    }
+    if (!payload?.sub || !payload.mfaSetup) {
+      return res.status(401).json({ message: 'Invalid setup token' });
+    }
+
+    const userResult = await pool.query(
+      'SELECT id, username, mfa_enabled, mfa_required FROM users WHERE id = $1',
+      [payload.sub]
+    );
+    const user = userResult.rows[0];
+    if (!user) {
+      return res.status(404).json({ message: 'User not found' });
+    }
+    if (user.mfa_enabled) {
+      return res.status(400).json({ message: 'MFA already enabled' });
+    }
+    if (!user.mfa_required) {
+      return res.status(400).json({ message: 'MFA not required' });
+    }
+
+    const secret = speakeasy.generateSecret({
+      name: `ProvirPanel (${user.username})`
+    });
+    await pool.query(
+      'UPDATE users SET mfa_temp_secret = $1 WHERE id = $2',
+      [secret.base32, user.id]
+    );
+
+    const qr = await qrcode.toDataURL(secret.otpauth_url || '');
+    return res.json({
+      otpauthUrl: secret.otpauth_url,
+      secret: secret.base32,
+      qr
+    });
+  } catch (err) {
+    return next(err);
+  }
+});
+
+router.post('/mfa/enable-login', async (req, res, next) => {
+  try {
+    const { token, mfaSetupToken } = req.body || {};
+    if (!token || !mfaSetupToken) {
+      return res.status(400).json({ message: 'token and mfaSetupToken are required' });
+    }
+    let payload;
+    try {
+      payload = jwt.verify(mfaSetupToken, jwtSecret);
+    } catch (err) {
+      return res.status(401).json({ message: 'Invalid setup token' });
+    }
+    if (!payload?.sub || !payload.mfaSetup) {
+      return res.status(401).json({ message: 'Invalid setup token' });
+    }
+
+    const result = await pool.query(
+      'SELECT id, username, role, mfa_temp_secret, mfa_required FROM users WHERE id = $1',
+      [payload.sub]
+    );
+    const user = result.rows[0];
+    if (!user || !user.mfa_temp_secret) {
+      return res.status(400).json({ message: 'MFA not initialized' });
+    }
+    if (!user.mfa_required) {
+      return res.status(400).json({ message: 'MFA not required' });
+    }
+
+    const verified = speakeasy.totp.verify({
+      secret: user.mfa_temp_secret,
+      encoding: 'base32',
+      token,
+      window: 1
+    });
+    if (!verified) {
+      return res.status(401).json({ message: 'Invalid MFA code' });
+    }
+
+    await pool.query(
+      'UPDATE users SET mfa_enabled = true, mfa_secret = $1, mfa_temp_secret = NULL WHERE id = $2',
+      [user.mfa_temp_secret, user.id]
+    );
+
+    const authToken = jwt.sign(
+      { sub: user.id, role: user.role, username: user.username },
+      jwtSecret,
+      { expiresIn: jwtExpiresIn }
+    );
+
+    return res.json({
+      token: authToken,
+      user: { id: user.id, username: user.username, role: user.role }
     });
   } catch (err) {
     return next(err);

@@ -10,7 +10,8 @@ const UsersPanel = () => {
   const [formData, setFormData] = useState({
     username: '',
     password: '',
-    role: 'viewer'
+    role: 'viewer',
+    mfaRequired: false
   })
 
   const loadUsers = async () => {
@@ -39,7 +40,7 @@ const UsersPanel = () => {
       loadUsers()
       setShowModal(false)
       setEditUser(null)
-      setFormData({ username: '', password: '', role: 'viewer' })
+      setFormData({ username: '', password: '', role: 'viewer', mfaRequired: false })
     } catch (error) {
       console.error('Erro ao salvar usuário:', error)
     }
@@ -60,8 +61,9 @@ const UsersPanel = () => {
     setFormData(user ? { 
       username: user.username, 
       password: '', 
-      role: user.role 
-    } : { username: '', password: '', role: 'viewer' })
+      role: user.role,
+      mfaRequired: !!user.mfa_required
+    } : { username: '', password: '', role: 'viewer', mfaRequired: false })
     setShowModal(true)
   }
 
@@ -204,6 +206,14 @@ const UsersPanel = () => {
                   <option value="admin">Administrador</option>
                 </select>
               </div>
+              <label className="flex items-center gap-2 text-sm text-slate-300">
+                <input
+                  type="checkbox"
+                  checked={formData.mfaRequired}
+                  onChange={(e) => setFormData({ ...formData, mfaRequired: e.target.checked })}
+                />
+                Exigir MFA no primeiro login
+              </label>
               <div className="flex gap-2 pt-4">
                 <button
                   type="submit"
