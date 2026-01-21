@@ -14,6 +14,20 @@ const normalizePath = (value) => {
 };
 
 const normalizeMethod = (value) => String(value || 'GET').toUpperCase();
+const normalizeBodyType = (value) => String(value || 'json').toLowerCase();
+
+const parseJsonField = (value, fallback = null) => {
+  if (!value) return fallback;
+  if (typeof value === 'object') return value;
+  if (typeof value === 'string') {
+    try {
+      return JSON.parse(value);
+    } catch (err) {
+      return fallback;
+    }
+  }
+  return fallback;
+};
 
 const validateSql = (sql) => {
   if (!sql || typeof sql !== 'string') return 'SQL obrigatorio';
@@ -69,13 +83,30 @@ const executeRoute = async (route, req) => {
 
   const url = buildTargetUrl(route, req);
   const agent = buildTlsAgent(route);
+  const headers = {
+    ...(route.headers && typeof route.headers === 'object' ? route.headers : {}),
+    ...(req.headers['content-type'] ? { 'content-type': req.headers['content-type'] } : {})
+  };
+  const bodyType = normalizeBodyType(route.bodyType);
+  let data = req.body;
+  if (bodyType === 'form') {
+    const params = new URLSearchParams();
+    const formSource = route.formBody && typeof route.formBody === 'object' ? route.formBody : req.body;
+    Object.entries(formSource || {}).forEach(([key, value]) => {
+      if (value === undefined || value === null) return;
+      params.append(key, String(value));
+    });
+    data = params.toString();
+    if (!headers['content-type']) {
+      headers['content-type'] = 'application/x-www-form-urlencoded';
+    }
+  }
+
   const response = await axios({
     method: route.method,
     url,
-    data: req.body,
-    headers: {
-      ...(req.headers['content-type'] ? { 'content-type': req.headers['content-type'] } : {})
-    },
+    data,
+    headers,
     httpsAgent: agent || undefined,
     validateStatus: () => true
   });
@@ -109,6 +140,9 @@ router.post('/routes', async (req, res, next) => {
         method: normalizeMethod(payload.method),
         path: normalizePath(payload.path),
         type: payload.type,
+        bodyType: normalizeBodyType(payload.bodyType),
+        headers: parseJsonField(payload.headers, {}),
+        formBody: parseJsonField(payload.formBody, null),
         targetUrl: payload.targetUrl || null,
         targetHost: payload.targetHost || null,
         targetPort: payload.targetPort ? Number(payload.targetPort) : null,
@@ -153,6 +187,9 @@ router.put('/routes/:id', async (req, res, next) => {
         method: normalizeMethod(payload.method),
         path: normalizePath(payload.path),
         type: payload.type,
+        bodyType: normalizeBodyType(payload.bodyType),
+        headers: parseJsonField(payload.headers, {}),
+        formBody: parseJsonField(payload.formBody, null),
         targetUrl: payload.targetUrl || null,
         targetHost: payload.targetHost || null,
         targetPort: payload.targetPort ? Number(payload.targetPort) : null,
@@ -201,7 +238,7 @@ router.post('/test', async (req, res, next) => {
       path: route.path,
       url: route.path,
       body: payload.body || {},
-      headers: {}
+      headers: payload.headers && typeof payload.headers === 'object' ? payload.headers : {}
     };
     const result = await executeRoute(route, fakeReq);
     res.status(result.status).json({ data: result.data });

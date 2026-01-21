@@ -7,6 +7,9 @@ const defaultRoute = {
   method: 'GET',
   path: '/meu-endpoint',
   type: 'service',
+  bodyType: 'json',
+  headers: {},
+  formBody: {},
   targetHost: '',
   targetPort: 3000,
   targetPath: '',
@@ -174,12 +177,27 @@ const ProvirGateway = () => {
 
 const GatewayModal = ({ data, onClose, onSave, postgresServices }) => {
   const [form, setForm] = useState(data)
+  const [headersText, setHeadersText] = useState(JSON.stringify(data.headers || {}, null, 2))
+  const [formBodyText, setFormBodyText] = useState(JSON.stringify(data.formBody || {}, null, 2))
+  const [parseError, setParseError] = useState('')
 
   useEffect(() => {
     setForm(data)
+    setHeadersText(JSON.stringify(data.headers || {}, null, 2))
+    setFormBodyText(JSON.stringify(data.formBody || {}, null, 2))
+    setParseError('')
   }, [data])
 
   const updateField = (key, value) => setForm((prev) => ({ ...prev, [key]: value }))
+  const parseJsonField = (label, value) => {
+    if (!value || !value.trim()) return {}
+    try {
+      return JSON.parse(value)
+    } catch (err) {
+      setParseError(`${label} precisa ser um JSON valido.`)
+      return null
+    }
+  }
   const loadPemFile = (file, targetField) => {
     if (!file) return
     const reader = new FileReader()
@@ -371,6 +389,40 @@ const GatewayModal = ({ data, onClose, onSave, postgresServices }) => {
             </>
           )}
 
+          {form.type !== 'postgres' && (
+            <>
+              <div className="col-span-2">
+                <label className="text-xs text-slate-400">Headers (JSON)</label>
+                <textarea
+                  className="mt-1 h-24 w-full rounded-xl border border-slate-800 bg-slate-950 px-3 py-2 text-xs"
+                  value={headersText}
+                  onChange={(e) => setHeadersText(e.target.value)}
+                />
+              </div>
+              <div>
+                <label className="text-xs text-slate-400">Tipo de body</label>
+                <select
+                  className="mt-1 w-full rounded-xl border border-slate-800 bg-slate-950 px-3 py-2 text-sm"
+                  value={form.bodyType || 'json'}
+                  onChange={(e) => updateField('bodyType', e.target.value)}
+                >
+                  <option value="json">JSON</option>
+                  <option value="form">Form URL Encoded</option>
+                </select>
+              </div>
+              {form.bodyType === 'form' && (
+                <div className="col-span-2">
+                  <label className="text-xs text-slate-400">Body form (JSON)</label>
+                  <textarea
+                    className="mt-1 h-24 w-full rounded-xl border border-slate-800 bg-slate-950 px-3 py-2 text-xs"
+                    value={formBodyText}
+                    onChange={(e) => setFormBodyText(e.target.value)}
+                  />
+                </div>
+              )}
+            </>
+          )}
+
           <div className="col-span-2 flex items-center gap-2">
             <input
               type="checkbox"
@@ -428,9 +480,25 @@ const GatewayModal = ({ data, onClose, onSave, postgresServices }) => {
           )}
         </div>
 
+        {parseError && (
+          <p className="mt-3 rounded-lg border border-rose-800 bg-rose-950/40 px-3 py-2 text-xs text-rose-200">
+            {parseError}
+          </p>
+        )}
+
         <div className="mt-5 flex gap-2 justify-end">
           <button
-            onClick={() => onSave(form)}
+            onClick={() => {
+              setParseError('')
+              const headers = parseJsonField('Headers', headersText)
+              if (headers === null) return
+              let formBody = {}
+              if (form.bodyType === 'form') {
+                formBody = parseJsonField('Body form', formBodyText)
+                if (formBody === null) return
+              }
+              onSave({ ...form, headers, formBody })
+            }}
             className="rounded-xl bg-emerald-500 px-4 py-2 text-xs font-semibold text-slate-950"
           >
             Salvar
