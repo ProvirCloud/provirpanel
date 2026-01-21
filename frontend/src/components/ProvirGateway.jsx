@@ -74,7 +74,14 @@ const ProvirGateway = () => {
       const response = await api.post('/gateway/test', payload)
       setMessage(JSON.stringify(response.data.data, null, 2))
     } catch (err) {
-      setMessage(err.response?.data?.message || err.message)
+      const status = err.response?.status
+      const data = err.response?.data
+      const detail = {
+        status: status || 'erro',
+        message: data?.message || err.message,
+        response: data || null
+      }
+      setMessage(JSON.stringify(detail, null, 2))
     } finally {
       setSending(false)
     }
