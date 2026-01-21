@@ -173,6 +173,12 @@ const GatewayModal = ({ data, onClose, onSave, postgresServices }) => {
   }, [data])
 
   const updateField = (key, value) => setForm((prev) => ({ ...prev, [key]: value }))
+  const loadPemFile = (file, targetField) => {
+    if (!file) return
+    const reader = new FileReader()
+    reader.onload = () => updateField(targetField, reader.result || '')
+    reader.readAsText(file)
+  }
 
   const fillFromService = (serviceId) => {
     const svc = postgresServices.find((item) => String(item.id) === String(serviceId))
@@ -376,6 +382,12 @@ const GatewayModal = ({ data, onClose, onSave, postgresServices }) => {
                   value={form.tlsCert || ''}
                   onChange={(e) => updateField('tlsCert', e.target.value)}
                 />
+                <input
+                  type="file"
+                  accept=".crt,.pem"
+                  className="mt-2 text-xs text-slate-300"
+                  onChange={(e) => loadPemFile(e.target.files?.[0], 'tlsCert')}
+                />
               </div>
               <div className="col-span-2">
                 <label className="text-xs text-slate-400">Key PEM</label>
@@ -384,6 +396,12 @@ const GatewayModal = ({ data, onClose, onSave, postgresServices }) => {
                   value={form.tlsKey || ''}
                   onChange={(e) => updateField('tlsKey', e.target.value)}
                 />
+                <input
+                  type="file"
+                  accept=".key,.pem"
+                  className="mt-2 text-xs text-slate-300"
+                  onChange={(e) => loadPemFile(e.target.files?.[0], 'tlsKey')}
+                />
               </div>
               <div className="col-span-2">
                 <label className="text-xs text-slate-400">CA (opcional)</label>
@@ -391,6 +409,12 @@ const GatewayModal = ({ data, onClose, onSave, postgresServices }) => {
                   className="mt-1 h-20 w-full rounded-xl border border-slate-800 bg-slate-950 px-3 py-2 text-xs"
                   value={form.tlsCa || ''}
                   onChange={(e) => updateField('tlsCa', e.target.value)}
+                />
+                <input
+                  type="file"
+                  accept=".crt,.pem"
+                  className="mt-2 text-xs text-slate-300"
+                  onChange={(e) => loadPemFile(e.target.files?.[0], 'tlsCa')}
                 />
               </div>
             </>
