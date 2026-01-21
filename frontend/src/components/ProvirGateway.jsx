@@ -478,8 +478,6 @@ const GatewayModal = ({ data, onClose, onSave, postgresServices }) => {
               </div>
             </>
           )}
-        </div>
-
           {parseError && (
             <p className="mt-3 rounded-lg border border-rose-800 bg-rose-950/40 px-3 py-2 text-xs text-rose-200 col-span-2">
               {parseError}
