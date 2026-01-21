@@ -10,6 +10,7 @@ import DomainsPanel from './components/DomainsPanel.jsx'
 import UsersPanel from './components/UsersPanel.jsx'
 import LogsPanel from './components/LogsPanel.jsx'
 import EmailPanel from './components/EmailPanel.jsx'
+import ProvirGateway from './components/ProvirGateway.jsx'
 import NginxPanel from './components/NginxPanel.jsx'
 import NginxVisualManager from './components/NginxVisualManager.jsx'
 import api from './services/api.js'
@@ -108,6 +109,7 @@ const App = () => {
           <Route path="files" element={<FileManager />} />
           <Route path="users" element={<UsersPanel />} />
           <Route path="email" element={<EmailPanel />} />
+          <Route path="gateway" element={<ProvirGateway />} />
           <Route path="logs" element={<LogsPanel />} />
         </Route>
         <Route path="*" element={<Navigate to="/" replace />} />

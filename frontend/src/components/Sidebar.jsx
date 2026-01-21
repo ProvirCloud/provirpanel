@@ -1,5 +1,5 @@
 import { NavLink } from 'react-router-dom'
-import { Activity, Boxes, Files, Terminal, Globe, Users, FileText, Server, Mail } from 'lucide-react'
+import { Activity, Boxes, Files, Terminal, Globe, Users, FileText, Server, Mail, Route } from 'lucide-react'
 
 const linkBase =
   'flex items-center gap-3 rounded-xl px-4 py-3 text-sm font-medium transition hover:bg-slate-800/70'
@@ -85,6 +85,15 @@ const Sidebar = () => {
         >
           <Mail className="h-4 w-4" />
           Email
+        </NavLink>
+        <NavLink
+          to="/gateway"
+          className={({ isActive }) =>
+            `${linkBase} ${isActive ? 'bg-emerald-500/15 text-emerald-200' : ''}`
+          }
+        >
+          <Route className="h-4 w-4" />
+          Provir Gateway
         </NavLink>
         <NavLink
           to="/logs"

@@ -138,3 +138,32 @@ model EmailTemplate {
 
   @@map("email_templates")
 }
+
+model ApiGatewayRoute {
+  id        Int      @id @default(autoincrement())
+  name      String   @db.VarChar(120)
+  method    String   @db.VarChar(10)
+  path      String   @db.VarChar(255)
+  type      String   @db.VarChar(30)
+  targetUrl String?  @map("target_url") @db.VarChar(500)
+  targetHost String? @map("target_host") @db.VarChar(255)
+  targetPort Int?    @map("target_port")
+  targetPath String? @map("target_path") @db.VarChar(255)
+  dbHost    String?  @map("db_host") @db.VarChar(255)
+  dbPort    Int?     @map("db_port")
+  dbName    String?  @map("db_name") @db.VarChar(255)
+  dbUser    String?  @map("db_user") @db.VarChar(255)
+  dbPassword String? @map("db_password") @db.VarChar(255)
+  dbSsl     Boolean  @default(false) @map("db_ssl")
+  sqlQuery  String?  @map("sql_query") @db.Text
+  tlsEnabled Boolean @default(false) @map("tls_enabled")
+  tlsCert   String?  @map("tls_cert") @db.Text
+  tlsKey    String?  @map("tls_key") @db.Text
+  tlsCa     String?  @map("tls_ca") @db.Text
+  tlsRejectUnauthorized Boolean @default(true) @map("tls_reject_unauthorized")
+  createdAt DateTime @default(now()) @map("created_at")
+  updatedAt DateTime @updatedAt @map("updated_at")
+
+  @@index([method, path], name: "idx_gateway_method_path")
+  @@map("api_gateway_routes")
+}
