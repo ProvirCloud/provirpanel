@@ -218,9 +218,9 @@ const GatewayModal = ({ data, onClose, onSave, postgresServices }) => {
 
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 p-4">
-      <div className="w-full max-w-3xl rounded-2xl border border-slate-800 bg-slate-900/90 p-6 text-slate-100">
+      <div className="w-full max-w-3xl rounded-2xl border border-slate-800 bg-slate-900/90 p-6 text-slate-100 max-h-[85vh] flex flex-col">
         <h3 className="text-lg font-semibold">Endpoint</h3>
-        <div className="mt-4 grid grid-cols-2 gap-3">
+        <div className="mt-4 grid grid-cols-2 gap-3 overflow-y-auto pr-2">
           <div className="col-span-2">
             <label className="text-xs text-slate-400">Nome</label>
             <input
@@ -480,13 +480,14 @@ const GatewayModal = ({ data, onClose, onSave, postgresServices }) => {
           )}
         </div>
 
-        {parseError && (
-          <p className="mt-3 rounded-lg border border-rose-800 bg-rose-950/40 px-3 py-2 text-xs text-rose-200">
-            {parseError}
-          </p>
-        )}
+          {parseError && (
+            <p className="mt-3 rounded-lg border border-rose-800 bg-rose-950/40 px-3 py-2 text-xs text-rose-200 col-span-2">
+              {parseError}
+            </p>
+          )}
+        </div>
 
-        <div className="mt-5 flex gap-2 justify-end">
+        <div className="mt-4 flex gap-2 justify-end border-t border-slate-800 pt-4">
           <button
             onClick={() => {
               setParseError('')
