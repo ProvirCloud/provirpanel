@@ -1130,13 +1130,19 @@ const TemplateModal = ({ data, onClose, onSave }) => {
                   <div className="mb-2 grid grid-cols-2 gap-2">
                     <button
                       className={`rounded-lg border px-2 py-1 text-[10px] ${brandStyle === 'logo' ? 'border-emerald-400 text-emerald-200' : 'border-slate-800 text-slate-300'}`}
-                      onClick={() => setBrandStyle('logo')}
+                      onClick={() => {
+                        setBrandStyle('logo')
+                        updateTheme('brandStyle', 'logo')
+                      }}
                     >
                       Apenas logo
                     </button>
                     <button
                       className={`rounded-lg border px-2 py-1 text-[10px] ${brandStyle === 'logo_text' ? 'border-emerald-400 text-emerald-200' : 'border-slate-800 text-slate-300'}`}
-                      onClick={() => setBrandStyle('logo_text')}
+                      onClick={() => {
+                        setBrandStyle('logo_text')
+                        updateTheme('brandStyle', 'logo_text')
+                      }}
                     >
                       Logo + texto
                     </button>
