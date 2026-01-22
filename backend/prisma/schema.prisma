@@ -50,6 +50,8 @@ model NginxServer {
   proxyReadTimeout     String    @default("60s") @map("proxy_read_timeout") @db.VarChar(20)
   proxySendTimeout     String    @default("60s") @map("proxy_send_timeout") @db.VarChar(20)
   securityHeadersEnabled Boolean @default(false) @map("security_headers_enabled")
+  serverTokensOff     Boolean   @default(true) @map("server_tokens_off")
+  tlsMinVersionEnforced Boolean @default(true) @map("tls_min_version_enforced")
   isActive             Boolean   @default(true) @map("is_active")
   configFilePath       String?   @map("config_file_path") @db.VarChar(500)
   dockerMeta           Json      @default("{}") @map("docker_meta")

@@ -48,7 +48,7 @@ const buildCheck = (id, title, status, recommendation, detail, weight) => ({
   weight
 });
 
-const buildSecuritySnippet = ({ includeHsts, includeCsp }) => {
+const buildSecuritySnippet = ({ includeHsts, includeCsp, includeTlsMin }) => {
   const lines = [
     '# ProvirPanel Security Headers',
     'add_header X-Frame-Options "SAMEORIGIN" always;',
@@ -56,6 +56,10 @@ const buildSecuritySnippet = ({ includeHsts, includeCsp }) => {
     'add_header Referrer-Policy "strict-origin-when-cross-origin" always;',
     'add_header X-XSS-Protection "1; mode=block" always;'
   ];
+  if (includeTlsMin) {
+    lines.push('# TLS Min Version');
+    lines.push('ssl_protocols TLSv1.2 TLSv1.3;');
+  }
   if (includeHsts) {
     lines.push('add_header Strict-Transport-Security "max-age=31536000; includeSubDomains; preload" always;');
   }
@@ -193,7 +197,9 @@ router.post('/audit', async (req, res) => {
       buildCheck(
         'tls-min',
         'Versao TLS Minima',
-        'WARNING',
+        negotiatedProtocol && ['TLSv1.2', 'TLSv1.3'].includes(negotiatedProtocol)
+          ? 'PASS'
+          : 'WARNING',
         'Garanta TLS 1.2+ no servidor',
         negotiatedProtocol ? `Negociado: ${negotiatedProtocol}` : 'Nao detectado',
         5
@@ -217,8 +223,10 @@ router.post('/audit', async (req, res) => {
       buildCheck(
         'server-header',
         'Divulgacao de Servidor (Server Header)',
-        serverHeader ? 'WARNING' : 'PASS',
-        'Remova o header Server para reduzir fingerprinting',
+        serverHeader && String(serverHeader).includes('/')
+          ? 'WARNING'
+          : 'PASS',
+        'Configure server_tokens off para ocultar a versao do Nginx',
         serverHeader || 'Header ausente',
         5
       ),
@@ -288,7 +296,7 @@ router.post('/plan', async (req, res) => {
   const confDir = nginxManager.confD;
   const filename = 'provirpanel-security.conf';
   const filePath = path.join(confDir, filename);
-  const content = buildSecuritySnippet({ includeHsts: httpsEnabled, includeCsp: true });
+  const content = buildSecuritySnippet({ includeHsts: httpsEnabled, includeCsp: true, includeTlsMin: httpsEnabled });
 
   return res.json({
     filePath,
@@ -318,7 +326,7 @@ router.post('/apply', async (req, res) => {
   const confDir = nginxManager.confD;
   const filename = 'provirpanel-security.conf';
   const filePath = path.join(confDir, filename);
-  const content = buildSecuritySnippet({ includeHsts: httpsEnabled, includeCsp: true });
+  const content = buildSecuritySnippet({ includeHsts: httpsEnabled, includeCsp: true, includeTlsMin: httpsEnabled });
 
   let backupPath = null;
   try {

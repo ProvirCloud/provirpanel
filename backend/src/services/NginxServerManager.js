@@ -113,6 +113,8 @@ class NginxServerManager {
         proxyReadTimeout: data.proxy_read_timeout || '60s',
         proxySendTimeout: data.proxy_send_timeout || '60s',
         securityHeadersEnabled: data.security_headers_enabled ?? false,
+        serverTokensOff: data.server_tokens_off ?? true,
+        tlsMinVersionEnforced: data.tls_min_version_enforced ?? true,
         isActive: data.is_active ?? true,
         configFilePath,
         dockerMeta,
@@ -155,6 +157,8 @@ class NginxServerManager {
       proxy_read_timeout: 'proxyReadTimeout',
       proxy_send_timeout: 'proxySendTimeout',
       security_headers_enabled: 'securityHeadersEnabled',
+      server_tokens_off: 'serverTokensOff',
+      tls_min_version_enforced: 'tlsMinVersionEnforced',
       is_active: 'isActive',
       notes: 'notes'
     };
@@ -282,6 +286,8 @@ class NginxServerManager {
       proxy_read_timeout: server.proxyReadTimeout,
       proxy_send_timeout: server.proxySendTimeout,
       security_headers_enabled: server.securityHeadersEnabled,
+      server_tokens_off: server.serverTokensOff,
+      tls_min_version_enforced: server.tlsMinVersionEnforced,
       is_active: server.isActive,
       config_file_path: server.configFilePath,
       docker_meta: server.dockerMeta || {},
@@ -403,6 +409,8 @@ class NginxServerManager {
     const domains = [server.primary_domain, ...(server.additional_domains || [])].filter(Boolean).join(' ');
     const pathRules = Array.isArray(server.path_rules) ? server.path_rules : [];
     const securityHeadersEnabled = !!server.security_headers_enabled;
+    const serverTokensOff = server.server_tokens_off ?? true;
+    const tlsMinVersionEnforced = server.tls_min_version_enforced ?? true;
 
     let config = '';
 
@@ -447,10 +455,19 @@ class NginxServerManager {
       config += `
     ssl_certificate ${certPath};
     ssl_certificate_key ${keyPath};
-    ssl_protocols TLSv1.2 TLSv1.3;
-    ssl_ciphers HIGH:!aNULL:!MD5;
+`;
+      if (tlsMinVersionEnforced) {
+        config += `    ssl_protocols TLSv1.2 TLSv1.3;\n`;
+      }
+      config += `    ssl_ciphers HIGH:!aNULL:!MD5;
     ssl_prefer_server_ciphers on;
     ssl_session_cache shared:SSL:10m;
+`;
+    }
+
+    if (serverTokensOff) {
+      config += `
+    server_tokens off;
 `;
     }
 
@@ -1397,6 +1414,9 @@ ${buildProxyBlock(proxyTarget)}    }
       const securityHeadersEnabled = /add_header\s+X-Frame-Options/i.test(content)
         || /add_header\s+Content-Security-Policy/i.test(content)
         || /add_header\s+Strict-Transport-Security/i.test(content);
+      const serverTokensOff = /server_tokens\s+off;/i.test(content);
+      const tlsMinVersionEnforced = /ssl_protocols\s+TLSv1\.2\s+TLSv1\.3/i.test(content)
+        || /ssl_protocols\s+TLSv1\.3\s+TLSv1\.2/i.test(content);
 
       return {
         config_file_path: filePath,
@@ -1421,6 +1441,8 @@ ${buildProxyBlock(proxyTarget)}    }
         proxy_read_timeout: readTimeoutMatch ? readTimeoutMatch[1].trim() : '60s',
         proxy_send_timeout: sendTimeoutMatch ? sendTimeoutMatch[1].trim() : '60s',
         security_headers_enabled: securityHeadersEnabled,
+        server_tokens_off: serverTokensOff,
+        tls_min_version_enforced: tlsMinVersionEnforced,
         raw_config: content
       };
     } catch (err) {
@@ -1462,6 +1484,8 @@ ${buildProxyBlock(proxyTarget)}    }
       proxy_read_timeout: data.proxy_read_timeout || data.proxyReadTimeout || '60s',
       proxy_send_timeout: data.proxy_send_timeout || data.proxySendTimeout || '60s',
       security_headers_enabled: data.security_headers_enabled ?? data.securityHeadersEnabled ?? false,
+      server_tokens_off: data.server_tokens_off ?? data.serverTokensOff ?? true,
+      tls_min_version_enforced: data.tls_min_version_enforced ?? data.tlsMinVersionEnforced ?? true,
       is_active: data.is_active ?? data.isActive ?? true
     };
   }
@@ -1497,6 +1521,8 @@ ${buildProxyBlock(proxyTarget)}    }
       proxyReadTimeout: configData.proxy_read_timeout || '60s',
       proxySendTimeout: configData.proxy_send_timeout || '60s',
       securityHeadersEnabled: configData.security_headers_enabled ?? false,
+      serverTokensOff: configData.server_tokens_off ?? true,
+      tlsMinVersionEnforced: configData.tls_min_version_enforced ?? true,
       isActive: configData.is_enabled ?? true,
       configFilePath: configData.config_file_path,
       notes: `Imported from ${configData.filename}`

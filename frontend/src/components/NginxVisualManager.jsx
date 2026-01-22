@@ -480,6 +480,8 @@ const NewServerWizard = ({ servers, onCancel, onComplete }) => {
     proxy_read_timeout: '60s',
     proxy_send_timeout: '60s',
     security_headers_enabled: true,
+    server_tokens_off: true,
+    tls_min_version_enforced: true,
     is_active: true,
     notes: ''
   }
@@ -812,6 +814,8 @@ const ServerForm = ({ server, onSave, onApply, onCancel, dockerContainers, docke
     proxy_read_timeout: '60s',
     proxy_send_timeout: '60s',
     security_headers_enabled: true,
+    server_tokens_off: true,
+    tls_min_version_enforced: true,
     is_active: true,
     notes: ''
   })
@@ -1983,6 +1987,22 @@ const ServerForm = ({ server, onSave, onApply, onCancel, dockerContainers, docke
                 onChange={(e) => setForm({ ...form, security_headers_enabled: e.target.checked })}
               />
               Security Headers Provir
+            </label>
+            <label className="flex items-center gap-2 text-xs text-slate-300">
+              <input
+                type="checkbox"
+                checked={form.server_tokens_off}
+                onChange={(e) => setForm({ ...form, server_tokens_off: e.target.checked })}
+              />
+              Ocultar versao do Nginx (server_tokens off)
+            </label>
+            <label className="flex items-center gap-2 text-xs text-slate-300">
+              <input
+                type="checkbox"
+                checked={form.tls_min_version_enforced}
+                onChange={(e) => setForm({ ...form, tls_min_version_enforced: e.target.checked })}
+              />
+              Forcar TLS 1.2/1.3
             </label>
             <div>
               <label className="text-xs text-slate-400">Max Upload</label>
