@@ -43,8 +43,18 @@ const MainLayout = () => {
     } catch (err) {
       // ignore
     }
+    try {
+      localStorage.clear()
+      sessionStorage.clear()
+      if ('caches' in window) {
+        const keys = await caches.keys()
+        await Promise.all(keys.map((key) => caches.delete(key)))
+      }
+    } catch (err) {
+      // ignore cache cleanup failures
+    }
     window.dispatchEvent(new Event('provirpanel-auth'))
-    navigate('/login')
+    navigate('/login', { replace: true })
   }
 
   const openMfaModal = async () => {
