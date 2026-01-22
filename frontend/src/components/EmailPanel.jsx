@@ -689,6 +689,36 @@ const SmtpModal = ({ data, onClose, onSave }) => {
           </button>
         </div>
       </div>
+      {editorExpanded && (
+        <div className="fixed inset-0 z-[60] bg-slate-950/90 p-4">
+          <div className="flex h-full flex-col rounded-2xl border border-slate-800 bg-slate-950">
+            <div className="flex items-center justify-between border-b border-slate-800 px-4 py-3 text-xs text-slate-300">
+              <span>Editor HTML (tela cheia)</span>
+              <button
+                className="rounded-md border border-slate-700 bg-slate-900 px-3 py-1 text-xs text-slate-200"
+                onClick={() => setEditorExpanded(false)}
+              >
+                Fechar
+              </button>
+            </div>
+            <div className="flex-1">
+              <Editor
+                height="100%"
+                language="html"
+                theme="vs-dark"
+                value={html}
+                onChange={(value) => setHtml(value || '')}
+                options={{
+                  minimap: { enabled: false },
+                  fontSize: 13,
+                  wordWrap: 'on',
+                  scrollBeyondLastLine: false
+                }}
+              />
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   )
 }
@@ -1859,20 +1889,18 @@ const TemplateModal = ({ data, onClose, onSave }) => {
             )}
 
             {htmlMode && (
-              <div
-                className={`w-full overflow-hidden rounded-xl border border-slate-800 bg-slate-950 ${editorExpanded ? 'h-[70vh]' : 'h-96'}`}
-              >
+              <div className="w-full overflow-hidden rounded-xl border border-slate-800 bg-slate-950">
                 <div className="flex items-center justify-between border-b border-slate-800 px-2 py-1 text-[10px] text-slate-400">
                   <span>HTML</span>
                   <button
                     className="rounded-md border border-slate-700 bg-slate-900 px-2 py-1 text-[10px] text-slate-200"
-                    onClick={() => setEditorExpanded((prev) => !prev)}
+                    onClick={() => setEditorExpanded(true)}
                   >
-                    {editorExpanded ? 'Recolher' : 'Expandir'}
+                    Expandir
                   </button>
                 </div>
                 <Editor
-                  height="100%"
+                  height="384px"
                   language="html"
                   theme="vs-dark"
                   value={html}
