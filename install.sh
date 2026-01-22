@@ -237,6 +237,8 @@ DATABASE_SSL=false
 CORS_ORIGIN=*
 JWT_SECRET=${jwt_secret}
 JWT_EXPIRES_IN=1d
+AUTH_COOKIE_NAME=provirpanel_token
+AUTH_COOKIE_SECURE=true
 CLOUDPAINEL_PROJECTS_DIR=${INSTALL_DIR}/projects
 DEFAULT_ADMIN_USER=${ADMIN_USER}
 DEFAULT_ADMIN_PASS=${ADMIN_PASS}
@@ -257,6 +259,8 @@ PROVIR_SES_SECRET_ACCESS_KEY=
 PROVIR_SES_FROM_NAME=
 PROVIR_SES_FROM_EMAIL=
 PROVIR_SES_REPLY_TO=
+REPUTATION_CHECK_URL=
+REPUTATION_CHECK_TOKEN=
 ENV
 
   ensure_env_var "${env_file}" "NGINX_CONFIG_PATH" "/etc/nginx"
@@ -275,6 +279,10 @@ ENV
   ensure_env_var "${env_file}" "PROVIR_SES_FROM_NAME" ""
   ensure_env_var "${env_file}" "PROVIR_SES_FROM_EMAIL" ""
   ensure_env_var "${env_file}" "PROVIR_SES_REPLY_TO" ""
+  ensure_env_var "${env_file}" "REPUTATION_CHECK_URL" ""
+  ensure_env_var "${env_file}" "REPUTATION_CHECK_TOKEN" ""
+  ensure_env_var "${env_file}" "AUTH_COOKIE_NAME" "provirpanel_token"
+  ensure_env_var "${env_file}" "AUTH_COOKIE_SECURE" "true"
 
   chown provirpanel:provirpanel "${env_file}"
   mkdir -p "${INSTALL_DIR}/projects"

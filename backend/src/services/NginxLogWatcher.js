@@ -5,6 +5,19 @@ const path = require('path');
 const { spawn } = require('child_process');
 const EventEmitter = require('events');
 const NginxServerManager = require('./NginxServerManager');
+const cookieName = process.env.AUTH_COOKIE_NAME || 'provirpanel_token';
+
+const parseCookies = (cookieHeader) => {
+  if (!cookieHeader) return {};
+  return cookieHeader.split(';').reduce((acc, pair) => {
+    const index = pair.indexOf('=');
+    if (index === -1) return acc;
+    const key = pair.slice(0, index).trim();
+    const value = pair.slice(index + 1).trim();
+    acc[key] = decodeURIComponent(value);
+    return acc;
+  }, {});
+};
 
 class NginxLogWatcher extends EventEmitter {
   constructor(io) {
@@ -60,7 +73,9 @@ class NginxLogWatcher extends EventEmitter {
 
       // Authenticate
       const token = socket.handshake.auth?.token ||
-                   socket.handshake.query?.token;
+                   socket.handshake.query?.token ||
+                   parseCookies(socket.handshake.headers?.cookie || '')[cookieName] ||
+                   parseCookies(socket.handshake.headers?.cookie || '').token;
 
       if (!token) {
         socket.emit('error', { message: 'Authentication required' });

@@ -17,6 +17,7 @@ const dockerManager = new DockerManager();
 const serviceLogsPath = path.join(__dirname, '..', 'logs', 'service-updates.log');
 fs.mkdirSync(path.dirname(serviceLogsPath), { recursive: true });
 const jwtSecret = process.env.JWT_SECRET || 'change-me';
+const cookieName = process.env.AUTH_COOKIE_NAME || 'provirpanel_token';
 let dockerBaseDir =
   process.env.DOCKER_VOLUME_BASE ||
   (process.env.CLOUDPAINEL_PROJECTS_DIR
@@ -1672,6 +1673,18 @@ const extractToken = (handshake) => {
     if (scheme === 'Bearer') {
       return token;
     }
+  }
+  const cookieHeader = handshake.headers && handshake.headers.cookie;
+  if (cookieHeader) {
+    const cookies = cookieHeader.split(';').reduce((acc, pair) => {
+      const index = pair.indexOf('=');
+      if (index === -1) return acc;
+      const key = pair.slice(0, index).trim();
+      const value = pair.slice(index + 1).trim();
+      acc[key] = decodeURIComponent(value);
+      return acc;
+    }, {});
+    return cookies[cookieName] || cookies.token || null;
   }
   return null;
 };

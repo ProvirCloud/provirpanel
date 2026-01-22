@@ -29,6 +29,8 @@ const SecurityAuditPanel = () => {
   const [applying, setApplying] = useState(false)
   const [plan, setPlan] = useState(null)
   const [applyResult, setApplyResult] = useState(null)
+  const [reputationResult, setReputationResult] = useState(null)
+  const [reputationLoading, setReputationLoading] = useState(false)
   const [error, setError] = useState('')
 
   useEffect(() => {
@@ -89,6 +91,23 @@ const SecurityAuditPanel = () => {
       setError(detail ? `${message} - ${detail}` : message)
     } finally {
       setApplying(false)
+    }
+  }
+
+  const runReputation = async () => {
+    if (!url) return
+    setReputationLoading(true)
+    setError('')
+    setReputationResult(null)
+    try {
+      const response = await api.post('/security/reputation', { url })
+      setReputationResult(response.data)
+    } catch (err) {
+      const message = err.response?.data?.message || err.message
+      const detail = err.response?.data?.detail
+      setError(detail ? `${message} - ${detail}` : message)
+    } finally {
+      setReputationLoading(false)
     }
   }
 
@@ -243,6 +262,34 @@ const SecurityAuditPanel = () => {
                 <textarea
                   className="mt-3 h-40 w-full rounded-xl border border-slate-800 bg-slate-950 px-3 py-2 text-xs text-slate-200"
                   value={plan.content || ''}
+                  readOnly
+                />
+              </div>
+            )}
+          </div>
+
+          <div className="rounded-2xl border border-slate-800 bg-slate-900/60 p-4">
+            <div className="flex flex-col gap-3 md:flex-row md:items-center md:justify-between">
+              <div>
+                <h3 className="text-sm font-semibold text-slate-200">Reputacao do dominio</h3>
+                <p className="text-xs text-slate-400">
+                  Consulta servicos externos para detectar alertas de malware.
+                </p>
+              </div>
+              <button
+                className="rounded-xl bg-blue-500 px-4 py-2 text-xs font-semibold text-slate-950"
+                onClick={runReputation}
+                disabled={reputationLoading}
+              >
+                {reputationLoading ? 'Consultando...' : 'Checar reputacao'}
+              </button>
+            </div>
+            {reputationResult && (
+              <div className="mt-4">
+                <p className="text-xs text-slate-400">Provider: {reputationResult.provider}</p>
+                <textarea
+                  className="mt-3 h-40 w-full rounded-xl border border-slate-800 bg-slate-950 px-3 py-2 text-xs text-slate-200"
+                  value={JSON.stringify(reputationResult.result, null, 2)}
                   readOnly
                 />
               </div>

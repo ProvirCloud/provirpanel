@@ -33,6 +33,7 @@ const pool = require('./config/database');
 const { runMigrations } = require('./config/migrate');
 
 const app = express();
+app.set('trust proxy', 1);
 const appLogsPath = path.join(__dirname, 'logs', 'app.log');
 fs.mkdirSync(path.dirname(appLogsPath), { recursive: true });
 const appendNodeLog = (message) => {
@@ -46,7 +47,10 @@ const appendNodeLog = (message) => {
 };
 
 app.use(helmet());
-app.use(cors());
+app.use(cors({
+  origin: process.env.CORS_ORIGIN || true,
+  credentials: true
+}));
 app.use(express.json());
 
 app.use('/auth', authRoutes);
@@ -70,7 +74,8 @@ app.use(errorHandler);
 const server = http.createServer(app);
 const io = new Server(server, {
   cors: {
-    origin: process.env.CORS_ORIGIN || '*'
+    origin: process.env.CORS_ORIGIN || true,
+    credentials: true
   }
 });
 

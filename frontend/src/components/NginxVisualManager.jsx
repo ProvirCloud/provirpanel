@@ -2141,10 +2141,7 @@ const LogsPanel = ({ serverId }) => {
   const socketRef = useRef(null)
 
   useEffect(() => {
-    const token = localStorage.getItem('token')
-    if (!token) return
-
-    socketRef.current = createNginxLogsSocket(token)
+    socketRef.current = createNginxLogsSocket()
     const socket = socketRef.current
 
     socket.on('connect', () => {

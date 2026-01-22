@@ -29,7 +29,6 @@ const LoginPage = () => {
           token: mfaCode,
           mfaSetupToken
         })
-        localStorage.setItem('token', enableResponse.data.token)
         window.dispatchEvent(new Event('provirpanel-auth'))
         navigate('/')
         return
@@ -40,7 +39,6 @@ const LoginPage = () => {
           token: mfaCode,
           mfaToken
         })
-        localStorage.setItem('token', response.data.token)
         window.dispatchEvent(new Event('provirpanel-auth'))
         navigate('/')
         return
@@ -57,7 +55,6 @@ const LoginPage = () => {
         setMfaToken(response.data.mfaToken || '')
         return
       }
-      localStorage.setItem('token', response.data.token)
       window.dispatchEvent(new Event('provirpanel-auth'))
       navigate('/')
     } catch (err) {

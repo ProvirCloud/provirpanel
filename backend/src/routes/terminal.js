@@ -6,6 +6,7 @@ const CommandExecutor = require('../services/CommandExecutor');
 
 const router = express.Router();
 const jwtSecret = process.env.JWT_SECRET || 'change-me';
+const cookieName = process.env.AUTH_COOKIE_NAME || 'provirpanel_token';
 const executor = new CommandExecutor();
 
 router.post('/execute', (req, res) => {
@@ -25,6 +26,18 @@ const extractToken = (handshake) => {
     if (scheme === 'Bearer') {
       return token;
     }
+  }
+  const cookieHeader = handshake.headers && handshake.headers.cookie;
+  if (cookieHeader) {
+    const cookies = cookieHeader.split(';').reduce((acc, pair) => {
+      const index = pair.indexOf('=');
+      if (index === -1) return acc;
+      const key = pair.slice(0, index).trim();
+      const value = pair.slice(index + 1).trim();
+      acc[key] = decodeURIComponent(value);
+      return acc;
+    }, {});
+    return cookies[cookieName] || cookies.token || null;
   }
   return null;
 };

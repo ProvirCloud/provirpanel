@@ -37,9 +37,13 @@ const MainLayout = () => {
       })
   }, [])
 
-  const handleLogout = () => {
-    localStorage.removeItem('token')
-    window.dispatchEvent(new Event('cloudpainel-auth'))
+  const handleLogout = async () => {
+    try {
+      await api.post('/auth/logout')
+    } catch (err) {
+      // ignore
+    }
+    window.dispatchEvent(new Event('provirpanel-auth'))
     navigate('/login')
   }
 

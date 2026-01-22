@@ -57,6 +57,10 @@ if [[ -f "${ENV_FILE}" ]]; then
   ensure_env_var "${ENV_FILE}" "PROVIR_SES_FROM_NAME" ""
   ensure_env_var "${ENV_FILE}" "PROVIR_SES_FROM_EMAIL" ""
   ensure_env_var "${ENV_FILE}" "PROVIR_SES_REPLY_TO" ""
+  ensure_env_var "${ENV_FILE}" "REPUTATION_CHECK_URL" ""
+  ensure_env_var "${ENV_FILE}" "REPUTATION_CHECK_TOKEN" ""
+  ensure_env_var "${ENV_FILE}" "AUTH_COOKIE_NAME" "provirpanel_token"
+  ensure_env_var "${ENV_FILE}" "AUTH_COOKIE_SECURE" "true"
 else
   log "Aviso: backend/.env nao encontrado, pulando configuracao do Nginx"
 fi

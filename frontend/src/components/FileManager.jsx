@@ -46,8 +46,7 @@ const FileManager = () => {
   const [moveTarget, setMoveTarget] = useState('/')
   const [dragItem, setDragItem] = useState(null)
   const uploadRef = useRef(null)
-  const token = localStorage.getItem('token')
-  const socket = useMemo(() => createMetricsSocket(token), [token])
+  const socket = useMemo(() => createMetricsSocket(), [])
 
   const loadTree = async () => {
     try {

@@ -231,9 +231,8 @@ const DockerPanel = () => {
   const [selectedRegistry, setSelectedRegistry] = useState('')
   const [registryDialog, setRegistryDialog] = useState(null)
   const [pullWorking, setPullWorking] = useState(false)
-  const token = localStorage.getItem('token')
-  const socket = useMemo(() => createDockerLogsSocket(token), [token])
-  const progressSocket = useMemo(() => createDockerProgressSocket(token), [token])
+  const socket = useMemo(() => createDockerLogsSocket(), [])
+  const progressSocket = useMemo(() => createDockerProgressSocket(), [])
 
   const validateServiceName = (name) => {
     if (!name || typeof name !== 'string') {

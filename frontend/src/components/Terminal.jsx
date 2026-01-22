@@ -125,8 +125,6 @@ const Terminal = () => {
   const cwdRef = useRef(new Map())
   const runningRef = useRef(new Map())
 
-  const [authToken, setAuthToken] = useState(() => localStorage.getItem('token'))
-
   useEffect(() => {
     tabsRef.current = tabs
   }, [tabs])
@@ -356,17 +354,8 @@ const Terminal = () => {
   )
 
   const connectSocket = useCallback(
-    (id, tokenValue) => {
-      const term = terminalsRef.current.get(id)
-      if (!tokenValue) {
-        updateTab(id, { status: 'auth-required' })
-        if (term) {
-          term.writeln('\x1b[33m[login necessario]\x1b[0m')
-          writePrompt(term, cwdRef.current.get(id))
-        }
-        return
-      }
-      const socket = createTerminalSocket(tokenValue)
+    (id) => {
+      const socket = createTerminalSocket()
       if (!socket) {
         updateTab(id, { status: 'disconnected' })
         return
@@ -425,31 +414,10 @@ const Terminal = () => {
   useEffect(() => {
     tabs.forEach((tab) => {
       if (!socketsRef.current.has(tab.id)) {
-        connectSocket(tab.id, authToken)
+        connectSocket(tab.id)
       }
     })
-  }, [tabs, connectSocket, authToken])
-
-  useEffect(() => {
-    const handleAuthChange = () => {
-      setAuthToken(localStorage.getItem('token'))
-    }
-    window.addEventListener('cloudpainel-auth', handleAuthChange)
-    window.addEventListener('storage', handleAuthChange)
-    return () => {
-      window.removeEventListener('cloudpainel-auth', handleAuthChange)
-      window.removeEventListener('storage', handleAuthChange)
-    }
-  }, [])
-
-  useEffect(() => {
-    if (!authToken) {
-      return
-    }
-    socketsRef.current.forEach((socket) => socket.disconnect())
-    socketsRef.current.clear()
-    tabsRef.current.forEach((tab) => connectSocket(tab.id, authToken))
-  }, [authToken, connectSocket])
+  }, [tabs, connectSocket])
 
   useEffect(() => {
     return () => {
@@ -513,7 +481,7 @@ const Terminal = () => {
       socketsRef.current.delete(activeId)
     }
     runningRef.current.set(activeId, false)
-    connectSocket(activeId, authToken)
+    connectSocket(activeId)
   }
 
   const copyLastOutput = async () => {

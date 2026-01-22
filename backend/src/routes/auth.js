@@ -13,6 +13,43 @@ const router = express.Router();
 
 const jwtSecret = process.env.JWT_SECRET || 'change-me';
 const jwtExpiresIn = process.env.JWT_EXPIRES_IN || '1d';
+const cookieName = process.env.AUTH_COOKIE_NAME || 'provirpanel_token';
+const cookieSecure =
+  process.env.AUTH_COOKIE_SECURE === 'true' ||
+  (process.env.NODE_ENV === 'production');
+
+const parseExpiresToMs = (value) => {
+  if (!value || typeof value !== 'string') return null;
+  const match = value.trim().match(/^(\d+)([smhd])$/);
+  if (!match) return null;
+  const amount = Number(match[1]);
+  const unit = match[2];
+  const multipliers = { s: 1000, m: 60000, h: 3600000, d: 86400000 };
+  return amount * multipliers[unit];
+};
+
+const setAuthCookie = (req, res, token) => {
+  const maxAge = parseExpiresToMs(jwtExpiresIn);
+  const options = {
+    httpOnly: true,
+    sameSite: 'lax',
+    secure: cookieSecure || req.secure,
+    path: '/'
+  };
+  if (maxAge) {
+    options.maxAge = maxAge;
+  }
+  res.cookie(cookieName, token, options);
+};
+
+const clearAuthCookie = (req, res) => {
+  res.clearCookie(cookieName, {
+    httpOnly: true,
+    sameSite: 'lax',
+    secure: cookieSecure || req.secure,
+    path: '/'
+  });
+};
 
 const generateUuid = () => {
   if (typeof crypto.randomUUID === 'function') {
@@ -105,6 +142,7 @@ router.post('/login', async (req, res, next) => {
       { expiresIn: jwtExpiresIn }
     );
 
+    setAuthCookie(req, res, token);
     return res.json({
       token,
       user: { id: user.id, username: user.username, role: user.role }
@@ -156,6 +194,7 @@ router.post('/mfa/confirm', async (req, res, next) => {
       { expiresIn: jwtExpiresIn }
     );
 
+    setAuthCookie(req, res, authToken);
     return res.json({
       token: authToken,
       user: { id: user.id, username: user.username, role: user.role }
@@ -166,6 +205,7 @@ router.post('/mfa/confirm', async (req, res, next) => {
 });
 
 router.post('/logout', (req, res) => {
+  clearAuthCookie(req, res);
   res.json({ message: 'Logged out' });
 });
 
@@ -430,6 +470,7 @@ router.post('/mfa/enable-login', async (req, res, next) => {
       { expiresIn: jwtExpiresIn }
     );
 
+    setAuthCookie(req, res, authToken);
     return res.json({
       token: authToken,
       user: { id: user.id, username: user.username, role: user.role }

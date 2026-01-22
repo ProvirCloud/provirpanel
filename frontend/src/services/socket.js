@@ -3,46 +3,36 @@ import { io } from 'socket.io-client'
 const baseUrl = import.meta.env.VITE_SOCKET_URL || window.location.origin
 
 export const createTerminalSocket = (token) => {
-  if (!token) {
-    return null
-  }
   return io(`${baseUrl}/api/terminal`, {
-    auth: { token }
+    auth: token ? { token } : undefined,
+    withCredentials: true
   })
 }
 
 export const createDockerLogsSocket = (token) => {
-  if (!token) {
-    return null
-  }
   return io(`${baseUrl}/api/docker/logs`, {
-    auth: { token }
+    auth: token ? { token } : undefined,
+    withCredentials: true
   })
 }
 
 export const createDockerProgressSocket = (token) => {
-  if (!token) {
-    return null
-  }
   return io(`${baseUrl}/api/docker/progress`, {
-    auth: { token }
+    auth: token ? { token } : undefined,
+    withCredentials: true
   })
 }
 
 export const createMetricsSocket = (token) => {
-  if (!token) {
-    return null
-  }
   return io(baseUrl, {
-    auth: { token }
+    auth: token ? { token } : undefined,
+    withCredentials: true
   })
 }
 
 export const createNginxLogsSocket = (token) => {
-  if (!token) {
-    return null
-  }
   return io(`${baseUrl}/api/nginx/logs`, {
-    auth: { token }
+    auth: token ? { token } : undefined,
+    withCredentials: true
   })
 }

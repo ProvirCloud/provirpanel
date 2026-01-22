@@ -55,8 +55,7 @@ const RingChart = ({ value, label }) => {
 const Dashboard = () => {
   const [metrics, setMetrics] = useState(null)
   const [socketStatus, setSocketStatus] = useState('disconnected')
-  const token = localStorage.getItem('token')
-  const socket = useMemo(() => createMetricsSocket(token), [token])
+  const socket = useMemo(() => createMetricsSocket(), [])
 
   useEffect(() => {
     if (!socket) {

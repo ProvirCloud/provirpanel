@@ -4,6 +4,8 @@ const tls = require('tls');
 const fs = require('fs');
 const path = require('path');
 const NginxManager = require('../services/NginxManager');
+const reputationUrl = process.env.REPUTATION_CHECK_URL || '';
+const reputationToken = process.env.REPUTATION_CHECK_TOKEN || '';
 
 const router = express.Router();
 
@@ -356,6 +358,42 @@ router.post('/apply', async (req, res) => {
     });
   } catch (err) {
     return res.status(500).json({ message: 'Falha ao aplicar correcoes.', detail: err.message });
+  }
+});
+
+router.post('/reputation', async (req, res) => {
+  const { url, domain } = req.body || {};
+  const target = url || (domain ? `https://${domain}` : '');
+  if (!target) {
+    return res.status(400).json({ message: 'URL obrigatoria.' });
+  }
+
+  if (!reputationUrl) {
+    return res.status(400).json({
+      message: 'Reputation provider nao configurado.',
+      detail: 'Defina REPUTATION_CHECK_URL no backend/.env'
+    });
+  }
+
+  try {
+    const headers = reputationToken
+      ? { Authorization: `Bearer ${reputationToken}` }
+      : {};
+    const response = await axios.post(
+      reputationUrl,
+      { url: target },
+      { headers, timeout: 10000 }
+    );
+    return res.json({
+      provider: reputationUrl,
+      url: target,
+      result: response.data
+    });
+  } catch (err) {
+    return res.status(500).json({
+      message: 'Falha ao consultar reputacao.',
+      detail: err.response?.data || err.message
+    });
   }
 });
 

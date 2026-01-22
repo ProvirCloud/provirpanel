@@ -20,12 +20,6 @@ const App = () => {
   const [authState, setAuthState] = useState({ loading: true, authenticated: false })
 
   const refreshAuth = useCallback(() => {
-    const token = localStorage.getItem('token')
-    if (!token) {
-      setAuthState({ loading: false, authenticated: false })
-      return
-    }
-
     let active = true
     api
       .get('/auth/me')
@@ -33,7 +27,6 @@ const App = () => {
         if (active) setAuthState({ loading: false, authenticated: true })
       })
       .catch(() => {
-        localStorage.removeItem('token')
         if (active) setAuthState({ loading: false, authenticated: false })
       })
     return () => {
