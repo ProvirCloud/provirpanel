@@ -1034,7 +1034,10 @@ const TemplateModal = ({ data, onClose, onSave }) => {
               onChange={(e) => setPreheader(e.target.value)}
             />
             <div className="rounded-xl border border-slate-800 bg-slate-950 px-3 py-2 text-[10px] text-slate-400">
-              Variaveis dinamicas: use `{{name}}`, `{{code}}`, `{{request_id}}` e outras chaves enviadas via API em `params`.
+              Variaveis dinamicas: use <span className="text-slate-200">{'{{name}}'}</span>,{' '}
+              <span className="text-slate-200">{'{{code}}'}</span>,{' '}
+              <span className="text-slate-200">{'{{request_id}}'}</span> e outras chaves enviadas via API em{' '}
+              <span className="text-slate-200">params</span>.
             </div>
 
             {!htmlMode && (
