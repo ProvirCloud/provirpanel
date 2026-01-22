@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useState } from 'react'
 import { Mail, Plus, Trash2, Pencil, Send, ShieldCheck } from 'lucide-react'
+import Editor from '@monaco-editor/react'
 import api from '../services/api.js'
 
 const DEFAULT_THEME = {
@@ -1857,11 +1858,21 @@ const TemplateModal = ({ data, onClose, onSave }) => {
             )}
 
             {htmlMode && (
-              <textarea
-                className="h-96 w-full rounded-xl border border-slate-800 bg-slate-950 px-3 py-2 text-xs"
-                value={html}
-                onChange={(e) => setHtml(e.target.value)}
-              />
+              <div className="h-96 w-full overflow-hidden rounded-xl border border-slate-800 bg-slate-950">
+                <Editor
+                  height="100%"
+                  language="html"
+                  theme="vs-dark"
+                  value={html}
+                  onChange={(value) => setHtml(value || '')}
+                  options={{
+                    minimap: { enabled: false },
+                    fontSize: 12,
+                    wordWrap: 'on',
+                    scrollBeyondLastLine: false
+                  }}
+                />
+              </div>
             )}
             </div>
           </div>
