@@ -49,6 +49,14 @@ const buildTransporter = (config) => {
   return nodemailer.createTransport(transportOptions);
 };
 
+const applyTemplateParams = (input, params = {}) => {
+  if (!input || !params || typeof params !== 'object') return input;
+  return String(input).replace(/\{\{\s*([A-Za-z0-9_.-]+)\s*\}\}/g, (match, key) => {
+    const value = params[key];
+    return value === undefined || value === null ? match : String(value);
+  });
+};
+
 const sendViaSes = async ({ to, subject, html }) => {
   const region = process.env.PROVIR_SES_REGION;
   const accessKeyId = process.env.PROVIR_SES_ACCESS_KEY_ID;
@@ -103,7 +111,7 @@ const resolveConfig = async (configId) => {
   return prisma.smtpConfig.findFirst({ where: { isActive: true } });
 };
 
-const sendEmail = async ({ to, subject, html, templateId, configId }) => {
+const sendEmail = async ({ to, subject, html, templateId, configId, params }) => {
   if (!to) {
     throw new Error('to is required');
   }
@@ -127,6 +135,9 @@ const sendEmail = async ({ to, subject, html, templateId, configId }) => {
   } else {
     finalHtml = applyPreheader(finalHtml, null);
   }
+
+  finalSubject = applyTemplateParams(finalSubject, params);
+  finalHtml = applyTemplateParams(finalHtml, params);
 
   if (!finalSubject || !finalHtml) {
     throw new Error('subject and html are required');

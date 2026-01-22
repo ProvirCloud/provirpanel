@@ -792,6 +792,7 @@ const TemplateModal = ({ data, onClose, onSave }) => {
   const [imageError, setImageError] = useState('')
   const [imageUploading, setImageUploading] = useState(false)
   const [urlInputs, setUrlInputs] = useState({})
+  const [logoUrlInput, setLogoUrlInput] = useState('')
 
   const preview = useMemo(() => {
     if (htmlMode) return html
@@ -865,6 +866,45 @@ const TemplateModal = ({ data, onClose, onSave }) => {
     }
   }
 
+  const handleLogoUpload = async (file) => {
+    if (!file) return
+    setImageUploading(true)
+    try {
+      const formData = new FormData()
+      formData.append('file', file)
+      const response = await api.post('/storage/email-images/upload', formData, {
+        headers: { 'Content-Type': 'multipart/form-data' }
+      })
+      const image = response.data.image
+      await loadImageLibrary()
+      if (image?.publicUrl) {
+        updateTheme('logoUrl', resolvePublicUrl(image.publicUrl))
+      }
+    } catch (err) {
+      setImageError('Falha ao enviar imagem')
+    } finally {
+      setImageUploading(false)
+    }
+  }
+
+  const handleLogoImportUrl = async () => {
+    if (!logoUrlInput) return
+    setImageUploading(true)
+    try {
+      const response = await api.post('/storage/email-images/from-url', { url: logoUrlInput })
+      const image = response.data.image
+      await loadImageLibrary()
+      if (image?.publicUrl) {
+        updateTheme('logoUrl', resolvePublicUrl(image.publicUrl))
+      }
+      setLogoUrlInput('')
+    } catch (err) {
+      setImageError('Falha ao importar imagem')
+    } finally {
+      setImageUploading(false)
+    }
+  }
+
   const handleImportUrl = async (index, blockId) => {
     const url = urlInputs[blockId]
     if (!url) return
@@ -887,14 +927,75 @@ const TemplateModal = ({ data, onClose, onSave }) => {
     }
   }
 
-  const handleSave = () => {
+  const isStoredImageUrl = (url) => {
+    if (!url) return false
+    if (url.startsWith('/public/storage/image')) return true
+    if (typeof window !== 'undefined' && url.startsWith(`${window.location.origin}/public/storage/image`)) {
+      return true
+    }
+    return false
+  }
+
+  const importImageUrl = async (url) => {
+    if (!url || isStoredImageUrl(url)) return url
+    const response = await api.post('/storage/email-images/from-url', { url })
+    const image = response.data.image
+    await loadImageLibrary()
+    return image?.publicUrl ? resolvePublicUrl(image.publicUrl) : url
+  }
+
+  const normalizeTemplateImages = async () => {
+    const nextTheme = { ...theme }
+    if (nextTheme.logoUrl && !isStoredImageUrl(nextTheme.logoUrl)) {
+      nextTheme.logoUrl = await importImageUrl(nextTheme.logoUrl)
+    }
+
+    const nextBlocks = await Promise.all(
+      blocks.map(async (block) => {
+        if (block.type === 'image' && block.imageUrl && !isStoredImageUrl(block.imageUrl)) {
+          const imageUrl = await importImageUrl(block.imageUrl)
+          return { ...block, imageUrl }
+        }
+        if (block.type === 'grid') {
+          const leftImageUrl = block.leftImageUrl && !isStoredImageUrl(block.leftImageUrl)
+            ? await importImageUrl(block.leftImageUrl)
+            : block.leftImageUrl
+          const rightImageUrl = block.rightImageUrl && !isStoredImageUrl(block.rightImageUrl)
+            ? await importImageUrl(block.rightImageUrl)
+            : block.rightImageUrl
+          return { ...block, leftImageUrl, rightImageUrl }
+        }
+        return block
+      })
+    )
+
+    setTheme(nextTheme)
+    setBlocks(nextBlocks)
+    return { nextTheme, nextBlocks }
+  }
+
+  const handleSave = async () => {
+    setImageUploading(true)
+    setImageError('')
+    let nextTheme = theme
+    let nextBlocks = blocks
+    try {
+      const normalized = await normalizeTemplateImages()
+      nextTheme = normalized.nextTheme
+      nextBlocks = normalized.nextBlocks
+    } catch (err) {
+      setImageError('Falha ao salvar imagens no storage')
+    } finally {
+      setImageUploading(false)
+    }
+
     const payload = {
       id: data.id,
       name,
       subject,
       preheader,
       html: htmlMode ? html : preview,
-      design: htmlMode ? null : { blocks, theme }
+      design: htmlMode ? null : { blocks: nextBlocks, theme: nextTheme }
     }
     onSave(payload)
   }
@@ -932,6 +1033,9 @@ const TemplateModal = ({ data, onClose, onSave }) => {
               value={preheader}
               onChange={(e) => setPreheader(e.target.value)}
             />
+            <div className="rounded-xl border border-slate-800 bg-slate-950 px-3 py-2 text-[10px] text-slate-400">
+              Variaveis dinamicas: use `{{name}}`, `{{code}}`, `{{request_id}}` e outras chaves enviadas via API em `params`.
+            </div>
 
             {!htmlMode && (
               <div className="space-y-2">
@@ -945,10 +1049,74 @@ const TemplateModal = ({ data, onClose, onSave }) => {
                   />
                   <input
                     className="mt-2 w-full rounded-lg border border-slate-800 bg-slate-900 px-2 py-1 text-xs"
-                    placeholder="Logo (URL)"
+                    placeholder="Logo (URL salva no storage)"
                     value={theme.logoUrl || ''}
                     onChange={(e) => updateTheme('logoUrl', e.target.value)}
                   />
+                  <div className="mt-2 rounded-lg border border-slate-800 bg-slate-900 p-2">
+                    <p className="text-[10px] text-slate-400 mb-2">Upload de logo</p>
+                    <input
+                      type="file"
+                      accept="image/*"
+                      className="w-full text-[10px] text-slate-300"
+                      onChange={(e) => handleLogoUpload(e.target.files?.[0])}
+                    />
+                    <p className="mt-2 text-[10px] text-slate-500">
+                      {imageUploading ? 'Enviando...' : 'Salva no storage e usa no template.'}
+                    </p>
+                  </div>
+                  <div className="mt-2 rounded-lg border border-slate-800 bg-slate-900 p-2">
+                    <p className="text-[10px] text-slate-400 mb-2">Importar URL externa</p>
+                    <div className="flex gap-2">
+                      <input
+                        className="w-full rounded-lg border border-slate-800 bg-slate-950 px-2 py-1 text-xs"
+                        placeholder="https://..."
+                        value={logoUrlInput}
+                        onChange={(e) => setLogoUrlInput(e.target.value)}
+                      />
+                      <button
+                        className="rounded-lg border border-slate-800 bg-slate-950 px-2 py-1 text-[10px] text-slate-200"
+                        onClick={handleLogoImportUrl}
+                      >
+                        Salvar
+                      </button>
+                    </div>
+                    <p className="mt-2 text-[10px] text-slate-500">
+                      Baixa a imagem e guarda no storage do painel.
+                    </p>
+                  </div>
+                  <div className="mt-2 rounded-lg border border-slate-800 bg-slate-900 p-2">
+                    <div className="flex items-center justify-between">
+                      <p className="text-[10px] text-slate-400">Biblioteca de imagens</p>
+                      <button
+                        className="rounded-lg border border-slate-800 bg-slate-950 px-2 py-1 text-[10px] text-slate-200"
+                        onClick={loadImageLibrary}
+                      >
+                        Atualizar
+                      </button>
+                    </div>
+                    {imageError && <p className="mt-1 text-[10px] text-rose-300">{imageError}</p>}
+                    {imageLoading && <p className="mt-1 text-[10px] text-slate-500">Carregando...</p>}
+                    {!imageLoading && imageLibrary.length === 0 && (
+                      <p className="mt-1 text-[10px] text-slate-500">Nenhuma imagem no storage.</p>
+                    )}
+                    <div className="mt-2 grid grid-cols-3 gap-2">
+                      {imageLibrary.map((image) => (
+                        <button
+                          key={image.path}
+                          className="rounded-lg border border-slate-800 bg-slate-950 p-1 text-[10px] text-slate-200"
+                          onClick={() => updateTheme('logoUrl', resolvePublicUrl(image.publicUrl))}
+                        >
+                          <img
+                            src={resolvePublicUrl(image.publicUrl)}
+                            alt={image.name}
+                            className="h-10 w-full rounded-md object-cover"
+                          />
+                          <span className="mt-1 block truncate">{image.name}</span>
+                        </button>
+                      ))}
+                    </div>
+                  </div>
                 </div>
                 <div className="rounded-xl border border-slate-800 bg-slate-950 p-3 space-y-2">
                   <p className="text-xs text-slate-400">Tema</p>
