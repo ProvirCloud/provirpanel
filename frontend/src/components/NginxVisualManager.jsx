@@ -21,6 +21,12 @@ const STATUS_COLORS = {
 }
 
 const CHART_COLORS = ['#10b981', '#3b82f6', '#f59e0b', '#ef4444']
+const SECURITY_HEADERS_SNIPPET = `add_header X-Frame-Options "SAMEORIGIN" always;
+add_header X-Content-Type-Options "nosniff" always;
+add_header Referrer-Policy "strict-origin-when-cross-origin" always;
+add_header X-XSS-Protection "1; mode=block" always;
+add_header Strict-Transport-Security "max-age=31536000; includeSubDomains; preload" always;
+add_header Content-Security-Policy "default-src 'self' https: data:; img-src 'self' https: data:; style-src 'self' 'unsafe-inline' https:; script-src 'self' 'unsafe-inline' https:; connect-src 'self' https: wss:; frame-ancestors 'self';" always;`
 
 const AlertDialog = ({ title, message, onClose }) => {
   const lines = Array.isArray(message) ? message : String(message || '').split('\n')
@@ -473,6 +479,7 @@ const NewServerWizard = ({ servers, onCancel, onComplete }) => {
     proxy_connect_timeout: '5s',
     proxy_read_timeout: '60s',
     proxy_send_timeout: '60s',
+    security_headers_enabled: true,
     is_active: true,
     notes: ''
   }
@@ -804,6 +811,7 @@ const ServerForm = ({ server, onSave, onApply, onCancel, dockerContainers, docke
     proxy_connect_timeout: '5s',
     proxy_read_timeout: '60s',
     proxy_send_timeout: '60s',
+    security_headers_enabled: true,
     is_active: true,
     notes: ''
   })
@@ -1968,6 +1976,14 @@ const ServerForm = ({ server, onSave, onApply, onCancel, dockerContainers, docke
               />
               Forward Headers
             </label>
+            <label className="flex items-center gap-2 text-xs text-slate-300">
+              <input
+                type="checkbox"
+                checked={form.security_headers_enabled}
+                onChange={(e) => setForm({ ...form, security_headers_enabled: e.target.checked })}
+              />
+              Security Headers Provir
+            </label>
             <div>
               <label className="text-xs text-slate-400">Max Upload</label>
               <input
@@ -1986,6 +2002,16 @@ const ServerForm = ({ server, onSave, onApply, onCancel, dockerContainers, docke
                 className="mt-1 w-full rounded-lg border border-slate-700 bg-slate-950 px-2 py-1 text-xs text-white"
               />
             </div>
+            {form.security_headers_enabled && (
+              <div className="col-span-2">
+                <label className="text-xs text-slate-400">Security Headers (preview)</label>
+                <textarea
+                  value={SECURITY_HEADERS_SNIPPET}
+                  readOnly
+                  className="mt-1 h-32 w-full rounded-xl border border-slate-700 bg-slate-950 px-3 py-2 text-xs text-white font-mono"
+                />
+              </div>
+            )}
             <div className="col-span-2">
               <label className="text-xs text-slate-400">Notas</label>
               <textarea

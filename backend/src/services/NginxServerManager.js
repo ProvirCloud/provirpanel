@@ -112,6 +112,7 @@ class NginxServerManager {
         proxyConnectTimeout: data.proxy_connect_timeout || '5s',
         proxyReadTimeout: data.proxy_read_timeout || '60s',
         proxySendTimeout: data.proxy_send_timeout || '60s',
+        securityHeadersEnabled: data.security_headers_enabled ?? false,
         isActive: data.is_active ?? true,
         configFilePath,
         dockerMeta,
@@ -153,6 +154,7 @@ class NginxServerManager {
       proxy_connect_timeout: 'proxyConnectTimeout',
       proxy_read_timeout: 'proxyReadTimeout',
       proxy_send_timeout: 'proxySendTimeout',
+      security_headers_enabled: 'securityHeadersEnabled',
       is_active: 'isActive',
       notes: 'notes'
     };
@@ -279,6 +281,7 @@ class NginxServerManager {
       proxy_connect_timeout: server.proxyConnectTimeout,
       proxy_read_timeout: server.proxyReadTimeout,
       proxy_send_timeout: server.proxySendTimeout,
+      security_headers_enabled: server.securityHeadersEnabled,
       is_active: server.isActive,
       config_file_path: server.configFilePath,
       docker_meta: server.dockerMeta || {},
@@ -399,6 +402,7 @@ class NginxServerManager {
   generateNginxConfig(server) {
     const domains = [server.primary_domain, ...(server.additional_domains || [])].filter(Boolean).join(' ');
     const pathRules = Array.isArray(server.path_rules) ? server.path_rules : [];
+    const securityHeadersEnabled = !!server.security_headers_enabled;
 
     let config = '';
 
@@ -448,6 +452,19 @@ class NginxServerManager {
     ssl_prefer_server_ciphers on;
     ssl_session_cache shared:SSL:10m;
 `;
+    }
+
+    if (securityHeadersEnabled) {
+      config += `
+    add_header X-Frame-Options "SAMEORIGIN" always;
+    add_header X-Content-Type-Options "nosniff" always;
+    add_header Referrer-Policy "strict-origin-when-cross-origin" always;
+    add_header X-XSS-Protection "1; mode=block" always;
+`;
+      if (server.ssl_type !== 'none') {
+        config += `    add_header Strict-Transport-Security "max-age=31536000; includeSubDomains; preload" always;\n`;
+      }
+      config += `    add_header Content-Security-Policy "default-src 'self' https: data:; img-src 'self' https: data:; style-src 'self' 'unsafe-inline' https:; script-src 'self' 'unsafe-inline' https:; connect-src 'self' https: wss:; frame-ancestors 'self';" always;\n`;
     }
 
     if (server.server_type === 'static') {
@@ -1377,6 +1394,9 @@ ${buildProxyBlock(proxyTarget)}    }
 
       // Check for forward headers
       const forwardHeaders = content.includes('X-Real-IP') || content.includes('X-Forwarded-For');
+      const securityHeadersEnabled = /add_header\s+X-Frame-Options/i.test(content)
+        || /add_header\s+Content-Security-Policy/i.test(content)
+        || /add_header\s+Strict-Transport-Security/i.test(content);
 
       return {
         config_file_path: filePath,
@@ -1400,6 +1420,7 @@ ${buildProxyBlock(proxyTarget)}    }
         proxy_connect_timeout: connectTimeoutMatch ? connectTimeoutMatch[1].trim() : '5s',
         proxy_read_timeout: readTimeoutMatch ? readTimeoutMatch[1].trim() : '60s',
         proxy_send_timeout: sendTimeoutMatch ? sendTimeoutMatch[1].trim() : '60s',
+        security_headers_enabled: securityHeadersEnabled,
         raw_config: content
       };
     } catch (err) {
@@ -1440,6 +1461,7 @@ ${buildProxyBlock(proxyTarget)}    }
       proxy_connect_timeout: data.proxy_connect_timeout || data.proxyConnectTimeout || '5s',
       proxy_read_timeout: data.proxy_read_timeout || data.proxyReadTimeout || '60s',
       proxy_send_timeout: data.proxy_send_timeout || data.proxySendTimeout || '60s',
+      security_headers_enabled: data.security_headers_enabled ?? data.securityHeadersEnabled ?? false,
       is_active: data.is_active ?? data.isActive ?? true
     };
   }
@@ -1474,6 +1496,7 @@ ${buildProxyBlock(proxyTarget)}    }
       proxyConnectTimeout: configData.proxy_connect_timeout || '5s',
       proxyReadTimeout: configData.proxy_read_timeout || '60s',
       proxySendTimeout: configData.proxy_send_timeout || '60s',
+      securityHeadersEnabled: configData.security_headers_enabled ?? false,
       isActive: configData.is_enabled ?? true,
       configFilePath: configData.config_file_path,
       notes: `Imported from ${configData.filename}`
