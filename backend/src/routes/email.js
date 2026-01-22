@@ -132,7 +132,6 @@ const sendEmail = async ({ to, subject, html, templateId, configId }) => {
     throw new Error('subject and html are required');
   }
 
-  const transporter = buildTransporter(config);
   if (config.provider === 'provir') {
     return sendViaSes({ to, subject: finalSubject, html: finalHtml });
   }
