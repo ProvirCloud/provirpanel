@@ -767,7 +767,7 @@ const TemplateModal = ({ data, onClose, onSave }) => {
 
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 p-4">
-      <div className="w-full max-w-5xl rounded-2xl border border-slate-800 bg-slate-900/90 p-6 text-slate-100">
+      <div className="w-full max-w-5xl max-h-[92vh] overflow-y-auto rounded-2xl border border-slate-800 bg-slate-900/90 p-6 text-slate-100">
         <div className="flex items-center justify-between">
           <h3 className="text-lg font-semibold">Template</h3>
           <button
