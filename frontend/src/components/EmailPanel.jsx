@@ -808,7 +808,6 @@ const TemplateModal = ({ data, onClose, onSave }) => {
   const [imageUploading, setImageUploading] = useState(false)
   const [urlInputs, setUrlInputs] = useState({})
   const [logoUrlInput, setLogoUrlInput] = useState('')
-  const [brandStyle, setBrandStyle] = useState('logo')
   const [paramsText, setParamsText] = useState('{"name":"Samuel","code":"123456"}')
 
   const preview = useMemo(() => {
