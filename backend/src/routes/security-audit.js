@@ -6,6 +6,8 @@ const path = require('path');
 const NginxManager = require('../services/NginxManager');
 const reputationUrl = process.env.REPUTATION_CHECK_URL || '';
 const reputationToken = process.env.REPUTATION_CHECK_TOKEN || '';
+const reputationProvider = process.env.REPUTATION_PROVIDER || '';
+const googleSafeBrowsingKey = process.env.GOOGLE_SAFE_BROWSING_API_KEY || '';
 
 const router = express.Router();
 
@@ -369,23 +371,48 @@ router.post('/reputation', async (req, res) => {
   }
 
   if (!reputationUrl) {
-    return res.status(400).json({
-      message: 'Reputation provider nao configurado.',
-      detail: 'Defina REPUTATION_CHECK_URL no backend/.env'
-    });
+    if (!reputationProvider || reputationProvider === 'generic') {
+      return res.status(400).json({
+        message: 'Reputation provider nao configurado.',
+        detail: 'Defina REPUTATION_PROVIDER e/ou REPUTATION_CHECK_URL no backend/.env'
+      });
+    }
   }
 
   try {
-    const headers = reputationToken
-      ? { Authorization: `Bearer ${reputationToken}` }
-      : {};
-    const response = await axios.post(
-      reputationUrl,
-      { url: target },
-      { headers, timeout: 10000 }
-    );
+    if (reputationProvider === 'google_safe_browsing' || reputationProvider === 'google') {
+      if (!googleSafeBrowsingKey) {
+        return res.status(400).json({
+          message: 'Google Safe Browsing nao configurado.',
+          detail: 'Defina GOOGLE_SAFE_BROWSING_API_KEY no backend/.env'
+        });
+      }
+      const response = await axios.post(
+        `https://safebrowsing.googleapis.com/v4/threatMatches:find?key=${googleSafeBrowsingKey}`,
+        {
+          client: { clientId: 'provirpanel', clientVersion: '1.0.0' },
+          threatInfo: {
+            threatTypes: ['MALWARE', 'SOCIAL_ENGINEERING', 'UNWANTED_SOFTWARE', 'POTENTIALLY_HARMFUL_APPLICATION'],
+            platformTypes: ['ANY_PLATFORM'],
+            threatEntryTypes: ['URL'],
+            threatEntries: [{ url: target }]
+          }
+        },
+        { timeout: 10000 }
+      );
+      const matches = response.data?.matches || [];
+      return res.json({
+        provider: 'google_safe_browsing',
+        url: target,
+        verdict: matches.length > 0 ? 'malicious' : 'clean',
+        result: response.data
+      });
+    }
+
+    const headers = reputationToken ? { Authorization: `Bearer ${reputationToken}` } : {};
+    const response = await axios.post(reputationUrl, { url: target }, { headers, timeout: 10000 });
     return res.json({
-      provider: reputationUrl,
+      provider: reputationProvider || reputationUrl,
       url: target,
       result: response.data
     });

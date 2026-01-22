@@ -261,6 +261,8 @@ PROVIR_SES_FROM_EMAIL=
 PROVIR_SES_REPLY_TO=
 REPUTATION_CHECK_URL=
 REPUTATION_CHECK_TOKEN=
+REPUTATION_PROVIDER=
+GOOGLE_SAFE_BROWSING_API_KEY=
 ENV
 
   ensure_env_var "${env_file}" "NGINX_CONFIG_PATH" "/etc/nginx"
@@ -281,6 +283,8 @@ ENV
   ensure_env_var "${env_file}" "PROVIR_SES_REPLY_TO" ""
   ensure_env_var "${env_file}" "REPUTATION_CHECK_URL" ""
   ensure_env_var "${env_file}" "REPUTATION_CHECK_TOKEN" ""
+  ensure_env_var "${env_file}" "REPUTATION_PROVIDER" ""
+  ensure_env_var "${env_file}" "GOOGLE_SAFE_BROWSING_API_KEY" ""
   ensure_env_var "${env_file}" "AUTH_COOKIE_NAME" "provirpanel_token"
   ensure_env_var "${env_file}" "AUTH_COOKIE_SECURE" "true"
 

@@ -59,6 +59,8 @@ if [[ -f "${ENV_FILE}" ]]; then
   ensure_env_var "${ENV_FILE}" "PROVIR_SES_REPLY_TO" ""
   ensure_env_var "${ENV_FILE}" "REPUTATION_CHECK_URL" ""
   ensure_env_var "${ENV_FILE}" "REPUTATION_CHECK_TOKEN" ""
+  ensure_env_var "${ENV_FILE}" "REPUTATION_PROVIDER" ""
+  ensure_env_var "${ENV_FILE}" "GOOGLE_SAFE_BROWSING_API_KEY" ""
   ensure_env_var "${ENV_FILE}" "AUTH_COOKIE_NAME" "provirpanel_token"
   ensure_env_var "${ENV_FILE}" "AUTH_COOKIE_SECURE" "true"
 else
