@@ -1077,6 +1077,16 @@ const TemplateModal = ({ data, onClose, onSave }) => {
     onSave(payload)
   }
 
+  const handleToggleHtml = () => {
+    if (!htmlMode) {
+      const rawPreview = buildHtml(blocks, { title: name || 'Template', subtitle: preheader, theme })
+      setHtml(rawPreview)
+      setHtmlMode(true)
+      return
+    }
+    setHtmlMode(false)
+  }
+
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 p-4">
       <div className="w-full max-w-6xl max-h-[92vh] overflow-hidden rounded-2xl border border-slate-800 bg-slate-900/90 p-6 text-slate-100">
@@ -1084,7 +1094,7 @@ const TemplateModal = ({ data, onClose, onSave }) => {
           <h3 className="text-lg font-semibold">Template</h3>
           <button
             className="rounded-xl border border-slate-800 bg-slate-950 px-3 py-1 text-xs text-slate-200"
-            onClick={() => setHtmlMode((prev) => !prev)}
+            onClick={handleToggleHtml}
           >
             {htmlMode ? 'Editor visual' : 'Editar HTML'}
           </button>
