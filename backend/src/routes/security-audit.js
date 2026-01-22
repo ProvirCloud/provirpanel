@@ -117,6 +117,17 @@ router.post('/audit', async (req, res) => {
         if (loginResponse.headers?.['set-cookie']) {
           cookieEntries = loginResponse.headers['set-cookie'];
           cookieSource = 'login';
+        } else if (loginResponse.data?.mfaRequired && auth?.mfaCode) {
+          const mfaUrl = new URL('/api/auth/mfa/confirm', target.origin).toString();
+          const mfaResponse = await axios.post(
+            mfaUrl,
+            { token: auth.mfaCode, mfaToken: loginResponse.data.mfaToken },
+            { timeout: 8000, validateStatus: () => true }
+          );
+          if (mfaResponse.headers?.['set-cookie']) {
+            cookieEntries = mfaResponse.headers['set-cookie'];
+            cookieSource = 'mfa';
+          }
         }
       } catch (err) {
         cookieSource = 'login';

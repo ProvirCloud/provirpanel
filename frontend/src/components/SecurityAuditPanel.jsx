@@ -36,6 +36,7 @@ const SecurityAuditPanel = () => {
   const [cookieAuditEnabled, setCookieAuditEnabled] = useState(false)
   const [cookieUser, setCookieUser] = useState('')
   const [cookiePass, setCookiePass] = useState('')
+  const [cookieMfa, setCookieMfa] = useState('')
   const [error, setError] = useState('')
 
   useEffect(() => {
@@ -61,6 +62,9 @@ const SecurityAuditPanel = () => {
       const payload = { url }
       if (cookieAuditEnabled) {
         payload.auth = { username: cookieUser, password: cookiePass }
+        if (cookieMfa) {
+          payload.auth.mfaCode = cookieMfa
+        }
       }
       const response = await api.post('/security/audit', payload)
       setResult(response.data)
@@ -189,8 +193,14 @@ const SecurityAuditPanel = () => {
                 value={cookiePass}
                 onChange={(e) => setCookiePass(e.target.value)}
               />
+              <input
+                className="w-full rounded-lg border border-slate-800 bg-slate-950 px-3 py-2 text-xs text-slate-100"
+                placeholder="Codigo MFA (opcional)"
+                value={cookieMfa}
+                onChange={(e) => setCookieMfa(e.target.value)}
+              />
               <p className="md:col-span-2 text-[11px] text-slate-400">
-                Usado apenas para checar os flags do cookie em /auth/login.
+                Usado apenas para checar os flags do cookie em /auth/login e MFA.
               </p>
             </div>
           )}
@@ -311,33 +321,7 @@ const SecurityAuditPanel = () => {
             )}
           </div>
 
-          <div className="rounded-2xl border border-slate-800 bg-slate-900/60 p-4">
-            <div className="flex flex-col gap-3 md:flex-row md:items-center md:justify-between">
-              <div>
-                <h3 className="text-sm font-semibold text-slate-200">Reputacao do dominio</h3>
-                <p className="text-xs text-slate-400">
-                  Consulta servicos externos para detectar alertas de malware.
-                </p>
-              </div>
-              <button
-                className="rounded-xl bg-blue-500 px-4 py-2 text-xs font-semibold text-slate-950"
-                onClick={runReputation}
-                disabled={reputationLoading}
-              >
-                {reputationLoading ? 'Consultando...' : 'Checar reputacao'}
-              </button>
-            </div>
-            {reputationResult && (
-              <div className="mt-4">
-                <p className="text-xs text-slate-400">Provider: {reputationResult.provider}</p>
-                <textarea
-                  className="mt-3 h-40 w-full rounded-xl border border-slate-800 bg-slate-950 px-3 py-2 text-xs text-slate-200"
-                  value={JSON.stringify(reputationResult.result, null, 2)}
-                  readOnly
-                />
-              </div>
-            )}
-          </div>
+          {/* Reputacao do dominio ocultada temporariamente */}
         </>
       )}
     </div>
