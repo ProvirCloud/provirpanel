@@ -2,34 +2,109 @@ import { useEffect, useMemo, useState } from 'react'
 import { Mail, Plus, Trash2, Pencil, Send, ShieldCheck } from 'lucide-react'
 import api from '../services/api.js'
 
-const buildBlock = (type) => ({
-  id: crypto.randomUUID?.() || `${Date.now()}-${Math.random()}`,
-  type,
-  title: '',
-  subtitle: '',
-  text: '',
-  url: '',
-  label: '',
-  imageUrl: '',
-  imageAlt: ''
-})
+const DEFAULT_THEME = {
+  brandName: 'Provir Cloud',
+  logoUrl: '',
+  backgroundColor: '#0b1120',
+  surfaceColor: '#111827',
+  borderColor: '#1f2937',
+  accentColor: '#22c55e',
+  textColor: '#e2e8f0',
+  mutedColor: '#94a3b8',
+  buttonColor: '#22c55e',
+  buttonTextColor: '#0b1120',
+  fontFamily: "'Trebuchet MS', Verdana, sans-serif",
+  footerText: 'Enviado pelo ProvirPanel'
+}
+
+const buildBlock = (type) => {
+  const base = {
+    id: crypto.randomUUID?.() || `${Date.now()}-${Math.random()}`,
+    type,
+    align: 'left',
+    textColor: '',
+    backgroundColor: '',
+    padding: 0
+  }
+
+  if (type === 'header') {
+    return { ...base, title: '', subtitle: '' }
+  }
+  if (type === 'text') {
+    return { ...base, text: '', fontSize: 14 }
+  }
+  if (type === 'button') {
+    return { ...base, label: '', url: '', buttonColor: '', buttonTextColor: '', radius: 999 }
+  }
+  if (type === 'image') {
+    return { ...base, imageUrl: '', imageAlt: '', width: 100, radius: 14, linkUrl: '' }
+  }
+  if (type === 'divider') {
+    return { ...base, thickness: 1, color: '' }
+  }
+  if (type === 'footer') {
+    return { ...base, text: '' }
+  }
+  if (type === 'code') {
+    return { ...base, label: '', code: '', codeSize: 28 }
+  }
+  if (type === 'alert') {
+    return { ...base, title: '', text: '', tone: 'warning' }
+  }
+  if (type === 'spacer') {
+    return { ...base, height: 16 }
+  }
+  return base
+}
+
+const normalizeDesign = (design) => {
+  if (Array.isArray(design)) {
+    return { blocks: design, theme: { ...DEFAULT_THEME } }
+  }
+  if (design && typeof design === 'object') {
+    return {
+      blocks: Array.isArray(design.blocks) ? design.blocks : [],
+      theme: { ...DEFAULT_THEME, ...(design.theme || {}) }
+    }
+  }
+  return { blocks: [], theme: { ...DEFAULT_THEME } }
+}
 
 const buildHtml = (blocks = [], meta = {}) => {
+  const theme = { ...DEFAULT_THEME, ...(meta.theme || {}) }
+  const brandName = meta.brandName || theme.brandName
+  const title = meta.title || 'Mensagem'
+  const subtitle = meta.subtitle || ''
+
   const header = `
-    <table width="100%" cellpadding="0" cellspacing="0" style="background:#0f172a;padding:32px 0;font-family:Arial,sans-serif;">
+    <table width="100%" cellpadding="0" cellspacing="0" style="background:${theme.backgroundColor};padding:32px 0;font-family:${theme.fontFamily};">
       <tr><td align="center">
-        <table width="600" cellpadding="0" cellspacing="0" style="background:#0b1220;border-radius:20px;overflow:hidden;border:1px solid #1f2a44;">
-          <tr><td style="padding:32px;text-align:center;background:linear-gradient(135deg,#0ea5e9,#22c55e);color:#0b1220;">
-            <h1 style="margin:0;font-size:26px;font-weight:700;">${meta.title || 'Provir Cloud'}</h1>
-            <p style="margin:8px 0 0;font-size:14px;">${meta.subtitle || 'Mensagem automatica'}</p>
+        <table width="600" cellpadding="0" cellspacing="0" style="background:${theme.surfaceColor};border-radius:22px;overflow:hidden;border:1px solid ${theme.borderColor};box-shadow:0 20px 50px rgba(15,23,42,0.35);">
+          <tr><td style="padding:24px 28px;background:${theme.surfaceColor};">
+            <table width="100%" cellpadding="0" cellspacing="0">
+              <tr>
+                <td align="left" style="vertical-align:middle;">
+                  ${theme.logoUrl
+                    ? `<img src="${theme.logoUrl}" alt="${brandName}" style="max-height:38px;max-width:160px;display:block;" />`
+                    : `<span style="font-size:16px;font-weight:700;color:${theme.textColor};">${brandName}</span>`}
+                </td>
+                <td align="right" style="vertical-align:middle;">
+                  <span style="display:inline-block;background:${theme.accentColor};color:${theme.buttonTextColor};padding:6px 12px;border-radius:999px;font-size:11px;font-weight:700;letter-spacing:0.08em;">NOTIFICAÇÃO</span>
+                </td>
+              </tr>
+            </table>
           </td></tr>
-          <tr><td style="padding:28px 32px;background:#0b1220;color:#e2e8f0;">
+          <tr><td style="padding:28px 32px;background:${theme.surfaceColor};color:${theme.textColor};">
+            <div style="margin-bottom:18px;padding:18px 20px;border-radius:16px;background:${theme.borderColor};">
+              <h1 style="margin:0 0 6px;font-size:24px;line-height:1.3;color:${theme.textColor};">${title}</h1>
+              ${subtitle ? `<p style="margin:0;color:${theme.mutedColor};font-size:14px;line-height:1.5;">${subtitle}</p>` : ''}
+            </div>
   `
 
   const footer = `
           </td></tr>
-          <tr><td style="padding:20px 32px;background:#0f172a;color:#94a3b8;font-size:12px;text-align:center;">
-            ${meta.footer || 'Enviado pelo ProvirPanel'}
+          <tr><td style="padding:20px 32px;background:${theme.backgroundColor};color:${theme.mutedColor};font-size:12px;text-align:center;">
+            ${meta.footer || theme.footerText}
           </td></tr>
         </table>
       </td></tr>
@@ -37,43 +112,78 @@ const buildHtml = (blocks = [], meta = {}) => {
   `
 
   const body = blocks.map((block) => {
+    const blockTextColor = block.textColor || theme.textColor
+    const blockBackground = block.backgroundColor || 'transparent'
+    const blockPadding = block.padding ? `padding:${block.padding}px;` : ''
+
     if (block.type === 'header') {
       return `
-        <div style="margin-bottom:20px;">
-          <h2 style="margin:0 0 6px;font-size:20px;color:#f8fafc;">${block.title || 'Titulo'}</h2>
-          <p style="margin:0;color:#94a3b8;font-size:14px;">${block.subtitle || ''}</p>
+        <div style="margin-bottom:20px;text-align:${block.align || 'left'};background:${blockBackground};border-radius:12px;${blockPadding}">
+          <h2 style="margin:0 0 6px;font-size:20px;color:${blockTextColor};">${block.title || 'Titulo'}</h2>
+          <p style="margin:0;color:${theme.mutedColor};font-size:14px;">${block.subtitle || ''}</p>
         </div>
       `
     }
     if (block.type === 'text') {
       return `
-        <p style="margin:0 0 16px;color:#cbd5f5;font-size:14px;line-height:1.6;">
+        <p style="margin:0 0 16px;color:${blockTextColor};font-size:${block.fontSize || 14}px;line-height:1.7;text-align:${block.align || 'left'};background:${blockBackground};border-radius:12px;${blockPadding}">
           ${block.text || ''}
         </p>
       `
     }
     if (block.type === 'button') {
+      const buttonColor = block.buttonColor || theme.buttonColor
+      const buttonTextColor = block.buttonTextColor || theme.buttonTextColor
       return `
-        <div style="margin:18px 0;">
-          <a href="${block.url || '#'}" style="display:inline-block;padding:12px 22px;border-radius:999px;background:#22c55e;color:#0b1220;font-weight:600;font-size:14px;text-decoration:none;">
+        <div style="margin:18px 0;text-align:${block.align || 'left'};">
+          <a href="${block.url || '#'}" style="display:inline-block;padding:12px 24px;border-radius:${block.radius || 12}px;background:${buttonColor};color:${buttonTextColor};font-weight:700;font-size:14px;text-decoration:none;">
             ${block.label || 'Acessar'}
           </a>
         </div>
       `
     }
     if (block.type === 'image') {
+      const imageTag = `
+        <img src="${block.imageUrl || ''}" alt="${block.imageAlt || ''}" style="max-width:100%;width:${block.width || 100}%;border-radius:${block.radius || 12}px;border:1px solid ${theme.borderColor};" />
+      `
       return `
-        <div style="margin:20px 0;text-align:center;">
-          <img src="${block.imageUrl || ''}" alt="${block.imageAlt || ''}" style="max-width:100%;border-radius:14px;border:1px solid #1f2a44;" />
+        <div style="margin:20px 0;text-align:${block.align || 'center'};">
+          ${block.linkUrl ? `<a href="${block.linkUrl}" style="text-decoration:none;">${imageTag}</a>` : imageTag}
         </div>
       `
     }
     if (block.type === 'divider') {
-      return `<hr style="border:none;border-top:1px solid #1f2a44;margin:20px 0;" />`
+      return `<hr style="border:none;border-top:${block.thickness || 1}px solid ${block.color || theme.borderColor};margin:20px 0;" />`
+    }
+    if (block.type === 'code') {
+      return `
+        <div style="margin:18px 0;text-align:${block.align || 'left'};background:${blockBackground};border-radius:16px;border:1px dashed ${theme.borderColor};padding:16px;">
+          ${block.label ? `<p style="margin:0 0 8px;font-size:12px;color:${theme.mutedColor};text-transform:uppercase;letter-spacing:0.2em;">${block.label}</p>` : ''}
+          <div style="font-size:${block.codeSize || 28}px;font-weight:700;letter-spacing:0.35em;color:${blockTextColor};">${block.code || '123456'}</div>
+        </div>
+      `
+    }
+    if (block.type === 'alert') {
+      const toneMap = {
+        info: { bg: '#1e293b', border: '#38bdf8', text: '#e2e8f0' },
+        warning: { bg: '#312e1b', border: '#f59e0b', text: '#fde68a' },
+        danger: { bg: '#2b1118', border: '#f43f5e', text: '#fecdd3' }
+      }
+      const tone = toneMap[block.tone] || toneMap.warning
+      return `
+        <div style="margin:18px 0;padding:14px 16px;border-radius:14px;border:1px solid ${tone.border};background:${tone.bg};text-align:${block.align || 'left'};">
+          <p style="margin:0 0 6px;font-size:12px;letter-spacing:0.2em;text-transform:uppercase;color:${tone.text};">Alerta</p>
+          ${block.title ? `<h3 style="margin:0 0 6px;font-size:16px;color:${tone.text};">${block.title}</h3>` : ''}
+          <p style="margin:0;color:${tone.text};font-size:13px;line-height:1.6;">${block.text || ''}</p>
+        </div>
+      `
+    }
+    if (block.type === 'spacer') {
+      return `<div style="height:${block.height || 16}px;"></div>`
     }
     if (block.type === 'footer') {
       return `
-        <p style="margin:20px 0 0;color:#64748b;font-size:12px;line-height:1.6;">
+        <p style="margin:20px 0 0;color:${theme.mutedColor};font-size:12px;line-height:1.6;text-align:${block.align || 'left'};">
           ${block.text || ''}
         </p>
       `
@@ -278,7 +388,10 @@ const EmailPanel = () => {
                     name: '',
                     subject: '',
                     preheader: '',
-                    blocks: [buildBlock('header'), buildBlock('text'), buildBlock('button')],
+                    design: {
+                      blocks: [buildBlock('header'), buildBlock('text'), buildBlock('button')],
+                      theme: { ...DEFAULT_THEME }
+                    },
                     htmlMode: false,
                     html: ''
                   })
@@ -312,7 +425,7 @@ const EmailPanel = () => {
                           name: tpl.name,
                           subject: tpl.subject,
                           preheader: tpl.preheader || '',
-                          blocks: Array.isArray(tpl.design) ? tpl.design : [],
+                          design: tpl.design || null,
                           htmlMode: !tpl.design,
                           html: tpl.html || ''
                         })
@@ -520,18 +633,103 @@ const SmtpModal = ({ data, onClose, onSave }) => {
   )
 }
 
+const TEMPLATE_PRESETS = [
+  {
+    key: 'verification',
+    name: 'Verification code',
+    subject: 'Your verification code',
+    preheader: 'Use este código para confirmar seu acesso.',
+    build: () => ({
+      blocks: [
+        buildBlock('header'),
+        { ...buildBlock('text'), text: 'Use o código abaixo para confirmar seu acesso. Ele expira em 10 minutos.' },
+        { ...buildBlock('code'), label: 'Verification code', code: '123456', align: 'center' },
+        { ...buildBlock('text'), text: 'Se você não solicitou este código, ignore este e-mail.' },
+        { ...buildBlock('footer'), text: 'Segurança em primeiro lugar. Se precisar de ajuda, responda este e-mail.' }
+      ]
+    })
+  },
+  {
+    key: 'request-completed',
+    name: 'Request completed',
+    subject: 'Request completed successfully',
+    preheader: 'Sua solicitação foi concluída.',
+    build: () => ({
+      blocks: [
+        buildBlock('header'),
+        { ...buildBlock('text'), text: 'Boa notícia! Sua solicitação foi processada e concluída com sucesso.' },
+        { ...buildBlock('button'), label: 'Ver detalhes', url: 'https://example.com', align: 'left' },
+        { ...buildBlock('footer'), text: 'Obrigado por usar nosso serviço.' }
+      ]
+    })
+  },
+  {
+    key: 'password-reset',
+    name: 'Password reset',
+    subject: 'Password reset requested',
+    preheader: 'Recebemos um pedido de redefinição de senha.',
+    build: () => ({
+      blocks: [
+        buildBlock('header'),
+        { ...buildBlock('text'), text: 'Recebemos uma solicitação para redefinir sua senha. Se foi você, clique no botão abaixo.' },
+        { ...buildBlock('button'), label: 'Redefinir senha', url: 'https://example.com', align: 'left' },
+        { ...buildBlock('text'), text: 'Se não foi você, apenas ignore este e-mail.' }
+      ]
+    })
+  },
+  {
+    key: 'service-down',
+    name: 'Service DOWN alert',
+    subject: 'Service DOWN alert',
+    preheader: 'Detectamos indisponibilidade no serviço.',
+    build: () => ({
+      blocks: [
+        { ...buildBlock('alert'), tone: 'danger', title: 'Serviço indisponível', text: 'O serviço principal ficou indisponível. Nosso time já foi acionado.' },
+        { ...buildBlock('text'), text: 'Atualizaremos você a cada mudança de status.' }
+      ]
+    })
+  },
+  {
+    key: 'payment-update',
+    name: 'Payment update',
+    subject: 'New payment service update',
+    preheader: 'Atualização importante sobre pagamentos.',
+    build: () => ({
+      blocks: [
+        buildBlock('header'),
+        { ...buildBlock('text'), text: 'Publicamos uma atualização no serviço de pagamentos. Veja os detalhes e impacto.' },
+        { ...buildBlock('button'), label: 'Ver changelog', url: 'https://example.com', align: 'left' }
+      ]
+    })
+  },
+  {
+    key: 'memory-alert',
+    name: 'Memory alert',
+    subject: 'Memory usage threshold exceeded alert',
+    preheader: 'Uso de memória acima do limite.',
+    build: () => ({
+      blocks: [
+        { ...buildBlock('alert'), tone: 'warning', title: 'Memória acima do limite', text: 'O uso de memória ultrapassou 85%. Considere ajustar o plano ou otimizar serviços.' },
+        { ...buildBlock('button'), label: 'Ver métricas', url: 'https://example.com', align: 'left' }
+      ]
+    })
+  }
+]
+
 const TemplateModal = ({ data, onClose, onSave }) => {
+  const normalizedDesign = normalizeDesign(data.design)
   const [name, setName] = useState(data.name || '')
   const [subject, setSubject] = useState(data.subject || '')
   const [preheader, setPreheader] = useState(data.preheader || '')
-  const [blocks, setBlocks] = useState(data.blocks || [])
+  const [blocks, setBlocks] = useState(data.blocks || normalizedDesign.blocks || [])
+  const [theme, setTheme] = useState(normalizedDesign.theme || { ...DEFAULT_THEME })
   const [htmlMode, setHtmlMode] = useState(data.htmlMode || false)
   const [html, setHtml] = useState(data.html || '')
 
   const preview = useMemo(() => {
     if (htmlMode) return html
-    return buildHtml(blocks, { title: name || 'Template', subtitle: preheader })
-  }, [blocks, htmlMode, html, name, preheader])
+    return buildHtml(blocks, { title: name || 'Template', subtitle: preheader, theme })
+  }, [blocks, htmlMode, html, name, preheader, theme])
 
   const addBlock = (type) => setBlocks((prev) => [...prev, buildBlock(type)])
 
@@ -543,6 +741,18 @@ const TemplateModal = ({ data, onClose, onSave }) => {
     setBlocks((prev) => prev.filter((_, i) => i !== index))
   }
 
+  const updateTheme = (key, value) => {
+    setTheme((prev) => ({ ...prev, [key]: value }))
+  }
+
+  const applyPreset = (preset) => {
+    const next = preset.build()
+    setName(preset.name)
+    setSubject(preset.subject)
+    setPreheader(preset.preheader)
+    setBlocks(next.blocks || [])
+  }
+
   const handleSave = () => {
     const payload = {
       id: data.id,
@@ -550,7 +760,7 @@ const TemplateModal = ({ data, onClose, onSave }) => {
       subject,
       preheader,
       html: htmlMode ? html : preview,
-      design: htmlMode ? null : blocks
+      design: htmlMode ? null : { blocks, theme }
     }
     onSave(payload)
   }
@@ -590,9 +800,109 @@ const TemplateModal = ({ data, onClose, onSave }) => {
 
             {!htmlMode && (
               <div className="space-y-2">
+                <div className="rounded-xl border border-slate-800 bg-slate-950 p-3">
+                  <p className="text-xs text-slate-400 mb-2">Identidade</p>
+                  <input
+                    className="w-full rounded-lg border border-slate-800 bg-slate-900 px-2 py-1 text-xs"
+                    placeholder="Marca / Nome"
+                    value={theme.brandName || ''}
+                    onChange={(e) => updateTheme('brandName', e.target.value)}
+                  />
+                  <input
+                    className="mt-2 w-full rounded-lg border border-slate-800 bg-slate-900 px-2 py-1 text-xs"
+                    placeholder="Logo (URL)"
+                    value={theme.logoUrl || ''}
+                    onChange={(e) => updateTheme('logoUrl', e.target.value)}
+                  />
+                </div>
+                <div className="rounded-xl border border-slate-800 bg-slate-950 p-3 space-y-2">
+                  <p className="text-xs text-slate-400">Tema</p>
+                  <div className="grid grid-cols-2 gap-2">
+                    <label className="text-[10px] text-slate-400">
+                      Fundo
+                      <input
+                        type="color"
+                        className="mt-1 h-8 w-full rounded-lg border border-slate-800 bg-slate-900 p-1"
+                        value={theme.backgroundColor}
+                        onChange={(e) => updateTheme('backgroundColor', e.target.value)}
+                      />
+                    </label>
+                    <label className="text-[10px] text-slate-400">
+                      Cartao
+                      <input
+                        type="color"
+                        className="mt-1 h-8 w-full rounded-lg border border-slate-800 bg-slate-900 p-1"
+                        value={theme.surfaceColor}
+                        onChange={(e) => updateTheme('surfaceColor', e.target.value)}
+                      />
+                    </label>
+                    <label className="text-[10px] text-slate-400">
+                      Destaque
+                      <input
+                        type="color"
+                        className="mt-1 h-8 w-full rounded-lg border border-slate-800 bg-slate-900 p-1"
+                        value={theme.accentColor}
+                        onChange={(e) => updateTheme('accentColor', e.target.value)}
+                      />
+                    </label>
+                    <label className="text-[10px] text-slate-400">
+                      Texto
+                      <input
+                        type="color"
+                        className="mt-1 h-8 w-full rounded-lg border border-slate-800 bg-slate-900 p-1"
+                        value={theme.textColor}
+                        onChange={(e) => updateTheme('textColor', e.target.value)}
+                      />
+                    </label>
+                    <label className="text-[10px] text-slate-400">
+                      Botao
+                      <input
+                        type="color"
+                        className="mt-1 h-8 w-full rounded-lg border border-slate-800 bg-slate-900 p-1"
+                        value={theme.buttonColor}
+                        onChange={(e) => updateTheme('buttonColor', e.target.value)}
+                      />
+                    </label>
+                    <label className="text-[10px] text-slate-400">
+                      Texto botao
+                      <input
+                        type="color"
+                        className="mt-1 h-8 w-full rounded-lg border border-slate-800 bg-slate-900 p-1"
+                        value={theme.buttonTextColor}
+                        onChange={(e) => updateTheme('buttonTextColor', e.target.value)}
+                      />
+                    </label>
+                  </div>
+                  <input
+                    className="w-full rounded-lg border border-slate-800 bg-slate-900 px-2 py-1 text-xs"
+                    placeholder="Fonte (ex: Trebuchet MS)"
+                    value={theme.fontFamily}
+                    onChange={(e) => updateTheme('fontFamily', e.target.value)}
+                  />
+                  <input
+                    className="w-full rounded-lg border border-slate-800 bg-slate-900 px-2 py-1 text-xs"
+                    placeholder="Texto do rodape"
+                    value={theme.footerText}
+                    onChange={(e) => updateTheme('footerText', e.target.value)}
+                  />
+                </div>
+                <div className="rounded-xl border border-slate-800 bg-slate-950 p-3">
+                  <p className="text-xs text-slate-400 mb-2">Templates rapidos</p>
+                  <div className="flex flex-wrap gap-2">
+                    {TEMPLATE_PRESETS.map((preset) => (
+                      <button
+                        key={preset.key}
+                        className="rounded-lg border border-slate-800 bg-slate-900 px-2 py-1 text-[10px] text-slate-200"
+                        onClick={() => applyPreset(preset)}
+                      >
+                        {preset.name}
+                      </button>
+                    ))}
+                  </div>
+                </div>
                 <p className="text-xs text-slate-400">Blocos</p>
                 <div className="flex flex-wrap gap-2">
-                  {['header', 'text', 'button', 'image', 'divider', 'footer'].map((type) => (
+                  {['header', 'text', 'button', 'image', 'code', 'alert', 'divider', 'spacer', 'footer'].map((type) => (
                     <button
                       key={type}
                       className="rounded-lg border border-slate-800 bg-slate-950 px-2 py-1 text-xs text-slate-200"
@@ -628,15 +938,35 @@ const TemplateModal = ({ data, onClose, onSave }) => {
                             value={block.subtitle}
                             onChange={(e) => updateBlock(index, { subtitle: e.target.value })}
                           />
+                          <select
+                            className="mt-2 w-full rounded-lg border border-slate-800 bg-slate-900 px-2 py-1 text-xs"
+                            value={block.align || 'left'}
+                            onChange={(e) => updateBlock(index, { align: e.target.value })}
+                          >
+                            <option value="left">Alinhar esquerda</option>
+                            <option value="center">Centralizar</option>
+                            <option value="right">Alinhar direita</option>
+                          </select>
                         </>
                       )}
                       {block.type === 'text' && (
-                        <textarea
-                          className="w-full rounded-lg border border-slate-800 bg-slate-900 px-2 py-1 text-xs"
-                          placeholder="Texto"
-                          value={block.text}
-                          onChange={(e) => updateBlock(index, { text: e.target.value })}
-                        />
+                        <>
+                          <textarea
+                            className="w-full rounded-lg border border-slate-800 bg-slate-900 px-2 py-1 text-xs"
+                            placeholder="Texto"
+                            value={block.text}
+                            onChange={(e) => updateBlock(index, { text: e.target.value })}
+                          />
+                          <select
+                            className="mt-2 w-full rounded-lg border border-slate-800 bg-slate-900 px-2 py-1 text-xs"
+                            value={block.align || 'left'}
+                            onChange={(e) => updateBlock(index, { align: e.target.value })}
+                          >
+                            <option value="left">Alinhar esquerda</option>
+                            <option value="center">Centralizar</option>
+                            <option value="right">Alinhar direita</option>
+                          </select>
+                        </>
                       )}
                       {block.type === 'button' && (
                         <>
@@ -652,6 +982,35 @@ const TemplateModal = ({ data, onClose, onSave }) => {
                             value={block.url}
                             onChange={(e) => updateBlock(index, { url: e.target.value })}
                           />
+                          <div className="mt-2 grid grid-cols-2 gap-2">
+                            <label className="text-[10px] text-slate-400">
+                              Cor botao
+                              <input
+                                type="color"
+                                className="mt-1 h-8 w-full rounded-lg border border-slate-800 bg-slate-900 p-1"
+                                value={block.buttonColor || theme.buttonColor}
+                                onChange={(e) => updateBlock(index, { buttonColor: e.target.value })}
+                              />
+                            </label>
+                            <label className="text-[10px] text-slate-400">
+                              Texto botao
+                              <input
+                                type="color"
+                                className="mt-1 h-8 w-full rounded-lg border border-slate-800 bg-slate-900 p-1"
+                                value={block.buttonTextColor || theme.buttonTextColor}
+                                onChange={(e) => updateBlock(index, { buttonTextColor: e.target.value })}
+                              />
+                            </label>
+                          </div>
+                          <select
+                            className="mt-2 w-full rounded-lg border border-slate-800 bg-slate-900 px-2 py-1 text-xs"
+                            value={block.align || 'left'}
+                            onChange={(e) => updateBlock(index, { align: e.target.value })}
+                          >
+                            <option value="left">Alinhar esquerda</option>
+                            <option value="center">Centralizar</option>
+                            <option value="right">Alinhar direita</option>
+                          </select>
                         </>
                       )}
                       {block.type === 'image' && (
@@ -668,7 +1027,92 @@ const TemplateModal = ({ data, onClose, onSave }) => {
                             value={block.imageAlt}
                             onChange={(e) => updateBlock(index, { imageAlt: e.target.value })}
                           />
+                          <input
+                            className="mt-2 w-full rounded-lg border border-slate-800 bg-slate-900 px-2 py-1 text-xs"
+                            placeholder="Link (opcional)"
+                            value={block.linkUrl || ''}
+                            onChange={(e) => updateBlock(index, { linkUrl: e.target.value })}
+                          />
+                          <select
+                            className="mt-2 w-full rounded-lg border border-slate-800 bg-slate-900 px-2 py-1 text-xs"
+                            value={block.align || 'center'}
+                            onChange={(e) => updateBlock(index, { align: e.target.value })}
+                          >
+                            <option value="left">Alinhar esquerda</option>
+                            <option value="center">Centralizar</option>
+                            <option value="right">Alinhar direita</option>
+                          </select>
                         </>
+                      )}
+                      {block.type === 'code' && (
+                        <>
+                          <input
+                            className="w-full rounded-lg border border-slate-800 bg-slate-900 px-2 py-1 text-xs"
+                            placeholder="Label"
+                            value={block.label}
+                            onChange={(e) => updateBlock(index, { label: e.target.value })}
+                          />
+                          <input
+                            className="mt-2 w-full rounded-lg border border-slate-800 bg-slate-900 px-2 py-1 text-xs"
+                            placeholder="Codigo"
+                            value={block.code}
+                            onChange={(e) => updateBlock(index, { code: e.target.value })}
+                          />
+                          <select
+                            className="mt-2 w-full rounded-lg border border-slate-800 bg-slate-900 px-2 py-1 text-xs"
+                            value={block.align || 'left'}
+                            onChange={(e) => updateBlock(index, { align: e.target.value })}
+                          >
+                            <option value="left">Alinhar esquerda</option>
+                            <option value="center">Centralizar</option>
+                            <option value="right">Alinhar direita</option>
+                          </select>
+                        </>
+                      )}
+                      {block.type === 'alert' && (
+                        <>
+                          <input
+                            className="w-full rounded-lg border border-slate-800 bg-slate-900 px-2 py-1 text-xs"
+                            placeholder="Titulo"
+                            value={block.title}
+                            onChange={(e) => updateBlock(index, { title: e.target.value })}
+                          />
+                          <textarea
+                            className="mt-2 w-full rounded-lg border border-slate-800 bg-slate-900 px-2 py-1 text-xs"
+                            placeholder="Texto do alerta"
+                            value={block.text}
+                            onChange={(e) => updateBlock(index, { text: e.target.value })}
+                          />
+                          <select
+                            className="mt-2 w-full rounded-lg border border-slate-800 bg-slate-900 px-2 py-1 text-xs"
+                            value={block.tone || 'warning'}
+                            onChange={(e) => updateBlock(index, { tone: e.target.value })}
+                          >
+                            <option value="info">Info</option>
+                            <option value="warning">Warning</option>
+                            <option value="danger">Critical</option>
+                          </select>
+                        </>
+                      )}
+                      {block.type === 'divider' && (
+                        <label className="text-[10px] text-slate-400">
+                          Cor do divisor
+                          <input
+                            type="color"
+                            className="mt-1 h-8 w-full rounded-lg border border-slate-800 bg-slate-900 p-1"
+                            value={block.color || theme.borderColor}
+                            onChange={(e) => updateBlock(index, { color: e.target.value })}
+                          />
+                        </label>
+                      )}
+                      {block.type === 'spacer' && (
+                        <input
+                          type="number"
+                          className="w-full rounded-lg border border-slate-800 bg-slate-900 px-2 py-1 text-xs"
+                          placeholder="Altura"
+                          value={block.height || 16}
+                          onChange={(e) => updateBlock(index, { height: Number(e.target.value) || 16 })}
+                        />
                       )}
                       {block.type === 'footer' && (
                         <textarea
