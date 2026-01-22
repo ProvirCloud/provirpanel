@@ -812,6 +812,7 @@ const TemplateModal = ({ data, onClose, onSave }) => {
   const [urlInputs, setUrlInputs] = useState({})
   const [logoUrlInput, setLogoUrlInput] = useState('')
   const [paramsText, setParamsText] = useState('{"name":"Samuel","code":"123456"}')
+  const [editorExpanded, setEditorExpanded] = useState(false)
 
   const preview = useMemo(() => {
     if (htmlMode) return html
@@ -1858,7 +1859,18 @@ const TemplateModal = ({ data, onClose, onSave }) => {
             )}
 
             {htmlMode && (
-              <div className="h-96 w-full overflow-hidden rounded-xl border border-slate-800 bg-slate-950">
+              <div
+                className={`w-full overflow-hidden rounded-xl border border-slate-800 bg-slate-950 ${editorExpanded ? 'h-[70vh]' : 'h-96'}`}
+              >
+                <div className="flex items-center justify-between border-b border-slate-800 px-2 py-1 text-[10px] text-slate-400">
+                  <span>HTML</span>
+                  <button
+                    className="rounded-md border border-slate-700 bg-slate-900 px-2 py-1 text-[10px] text-slate-200"
+                    onClick={() => setEditorExpanded((prev) => !prev)}
+                  >
+                    {editorExpanded ? 'Recolher' : 'Expandir'}
+                  </button>
+                </div>
                 <Editor
                   height="100%"
                   language="html"
