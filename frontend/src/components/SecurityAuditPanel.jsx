@@ -5,13 +5,15 @@ import api from '../services/api.js'
 const statusStyles = {
   PASS: 'text-emerald-200 bg-emerald-500/15 border-emerald-500/30',
   WARNING: 'text-amber-200 bg-amber-500/15 border-amber-500/30',
-  FAIL: 'text-rose-200 bg-rose-500/15 border-rose-500/30'
+  FAIL: 'text-rose-200 bg-rose-500/15 border-rose-500/30',
+  INFO: 'text-sky-200 bg-sky-500/15 border-sky-500/30'
 }
 
 const statusIcon = {
   PASS: CheckCircle2,
   WARNING: AlertTriangle,
-  FAIL: XCircle
+  FAIL: XCircle,
+  INFO: AlertTriangle
 }
 
 const formatDate = (value) => {
@@ -31,6 +33,9 @@ const SecurityAuditPanel = () => {
   const [applyResult, setApplyResult] = useState(null)
   const [reputationResult, setReputationResult] = useState(null)
   const [reputationLoading, setReputationLoading] = useState(false)
+  const [cookieAuditEnabled, setCookieAuditEnabled] = useState(false)
+  const [cookieUser, setCookieUser] = useState('')
+  const [cookiePass, setCookiePass] = useState('')
   const [error, setError] = useState('')
 
   useEffect(() => {
@@ -46,10 +51,18 @@ const SecurityAuditPanel = () => {
 
   const runAudit = async () => {
     if (!url) return
+    if (cookieAuditEnabled && (!cookieUser || !cookiePass)) {
+      setError('Informe usuario e senha para validar cookies.')
+      return
+    }
     setLoading(true)
     setError('')
     try {
-      const response = await api.post('/security/audit', { url })
+      const payload = { url }
+      if (cookieAuditEnabled) {
+        payload.auth = { username: cookieUser, password: cookiePass }
+      }
+      const response = await api.post('/security/audit', payload)
       setResult(response.data)
       setPlan(null)
     } catch (err) {
@@ -152,6 +165,36 @@ const SecurityAuditPanel = () => {
             Correcoes aplicadas. Backup: {applyResult.backupPath || 'nenhum'}
           </p>
         )}
+        <div className="mt-4 rounded-xl border border-slate-800 bg-slate-950/60 p-3 text-xs text-slate-300">
+          <label className="flex items-center gap-2">
+            <input
+              type="checkbox"
+              checked={cookieAuditEnabled}
+              onChange={(e) => setCookieAuditEnabled(e.target.checked)}
+            />
+            Validar cookies usando login
+          </label>
+          {cookieAuditEnabled && (
+            <div className="mt-3 grid gap-2 md:grid-cols-2">
+              <input
+                className="w-full rounded-lg border border-slate-800 bg-slate-950 px-3 py-2 text-xs text-slate-100"
+                placeholder="Usuario"
+                value={cookieUser}
+                onChange={(e) => setCookieUser(e.target.value)}
+              />
+              <input
+                className="w-full rounded-lg border border-slate-800 bg-slate-950 px-3 py-2 text-xs text-slate-100"
+                type="password"
+                placeholder="Senha"
+                value={cookiePass}
+                onChange={(e) => setCookiePass(e.target.value)}
+              />
+              <p className="md:col-span-2 text-[11px] text-slate-400">
+                Usado apenas para checar os flags do cookie em /auth/login.
+              </p>
+            </div>
+          )}
+        </div>
       </div>
 
       {result && (

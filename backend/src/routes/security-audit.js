@@ -76,7 +76,7 @@ const buildSecuritySnippet = ({ includeHsts, includeCsp, includeTlsMin }) => {
 };
 
 router.post('/audit', async (req, res) => {
-  const { url } = req.body || {};
+  const { url, auth } = req.body || {};
   if (!url) {
     return res.status(400).json({ message: 'URL obrigatoria.' });
   }
@@ -102,7 +102,28 @@ router.post('/audit', async (req, res) => {
     const headers = Object.fromEntries(
       Object.entries(response.headers || {}).map(([key, value]) => [key.toLowerCase(), value])
     );
-    const cookies = parseCookies(headers['set-cookie']);
+    let cookieSource = 'response';
+    let cookieError = null;
+    let cookieEntries = headers['set-cookie'];
+    if (auth?.username && auth?.password) {
+      try {
+        const loginPath = auth?.path || '/api/auth/login';
+        const loginUrl = new URL(loginPath, target.origin).toString();
+        const loginResponse = await axios.post(
+          loginUrl,
+          { username: auth.username, password: auth.password },
+          { timeout: 8000, validateStatus: () => true }
+        );
+        if (loginResponse.headers?.['set-cookie']) {
+          cookieEntries = loginResponse.headers['set-cookie'];
+          cookieSource = 'login';
+        }
+      } catch (err) {
+        cookieSource = 'login';
+        cookieError = err.message;
+      }
+    }
+    const cookies = parseCookies(cookieEntries);
     const hasCookies = cookies.length > 0;
 
     const hsts = headers['strict-transport-security'];
@@ -211,17 +232,21 @@ router.post('/audit', async (req, res) => {
       buildCheck(
         'cookies-secure',
         'Secure Flag em Cookies',
-        hasCookies ? (cookieSecure ? 'PASS' : 'WARNING') : 'WARNING',
+        hasCookies ? (cookieSecure ? 'PASS' : 'WARNING') : 'INFO',
         'Adicione Secure em cookies HTTPS',
-        hasCookies ? (cookieSecure ? 'OK' : 'Alguns cookies sem Secure') : 'Nenhum cookie',
+        hasCookies
+          ? (cookieSecure ? 'OK' : 'Alguns cookies sem Secure')
+          : (cookieError ? `Falha ao validar cookies: ${cookieError}` : 'Nenhum cookie emitido'),
         5
       ),
       buildCheck(
         'cookies-samesite',
         'SameSite Flag em Cookies',
-        hasCookies ? (cookieSameSite ? 'PASS' : 'FAIL') : 'WARNING',
+        hasCookies ? (cookieSameSite ? 'PASS' : 'FAIL') : 'INFO',
         'Use SameSite=Lax ou SameSite=Strict',
-        hasCookies ? (cookieSameSite ? 'OK' : 'Alguns cookies sem SameSite') : 'Nenhum cookie',
+        hasCookies
+          ? (cookieSameSite ? 'OK' : 'Alguns cookies sem SameSite')
+          : (cookieError ? `Falha ao validar cookies: ${cookieError}` : 'Nenhum cookie emitido'),
         12
       ),
       buildCheck(
@@ -272,7 +297,8 @@ router.post('/audit', async (req, res) => {
       url: target.toString(),
       score,
       checks,
-      recommendations
+      recommendations,
+      cookieSource
     });
   } catch (err) {
     return res.status(500).json({
