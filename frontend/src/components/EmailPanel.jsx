@@ -37,7 +37,7 @@ const buildBlock = (type) => {
     return { ...base, label: '', url: '', buttonColor: '', buttonTextColor: '', radius: 999 }
   }
   if (type === 'image') {
-    return { ...base, imageUrl: '', imageAlt: '', width: 100, radius: 14, linkUrl: '' }
+    return { ...base, imageUrl: '', imageAlt: '', width: 100, height: 80, radius: 14, linkUrl: '' }
   }
   if (type === 'divider') {
     return { ...base, thickness: 1, color: '' }
@@ -53,6 +53,25 @@ const buildBlock = (type) => {
   }
   if (type === 'spacer') {
     return { ...base, height: 16 }
+  }
+  if (type === 'grid') {
+    return {
+      ...base,
+      columns: 2,
+      gap: 16,
+      leftTitle: '',
+      leftText: '',
+      leftImageUrl: '',
+      leftImageAlt: '',
+      leftImageWidth: 140,
+      leftImageHeight: 80,
+      rightTitle: '',
+      rightText: '',
+      rightImageUrl: '',
+      rightImageAlt: '',
+      rightImageWidth: 140,
+      rightImageHeight: 80
+    }
   }
   return base
 }
@@ -154,7 +173,7 @@ const buildHtml = (blocks = [], meta = {}) => {
     }
     if (block.type === 'image') {
       const imageTag = `
-        <img src="${block.imageUrl || ''}" alt="${block.imageAlt || ''}" style="max-width:100%;width:${block.width || 100}%;border-radius:${block.radius || 12}px;border:1px solid ${theme.borderColor};" />
+        <img src="${block.imageUrl || ''}" alt="${block.imageAlt || ''}" style="max-width:100%;width:${block.width || 100}%;height:${block.height || 80}px;object-fit:cover;border-radius:${block.radius || 12}px;border:1px solid ${theme.borderColor};" />
       `
       return `
         <div style="margin:20px 0;text-align:${block.align || 'center'};">
@@ -190,6 +209,28 @@ const buildHtml = (blocks = [], meta = {}) => {
     }
     if (block.type === 'spacer') {
       return `<div style="height:${block.height || 16}px;"></div>`
+    }
+    if (block.type === 'grid') {
+      return `
+        <table width="100%" cellpadding="0" cellspacing="0" style="margin:18px 0;">
+          <tr>
+            <td width="50%" style="vertical-align:top;padding-right:${block.gap || 16}px;">
+              ${block.leftImageUrl
+                ? `<img src="${block.leftImageUrl}" alt="${block.leftImageAlt || ''}" style="display:block;width:${block.leftImageWidth || 140}px;height:${block.leftImageHeight || 80}px;object-fit:cover;border-radius:12px;border:1px solid ${theme.borderColor};margin-bottom:12px;" />`
+                : ''}
+              ${block.leftTitle ? `<h3 style="margin:0 0 6px;font-size:16px;color:${theme.textColor};">${block.leftTitle}</h3>` : ''}
+              ${block.leftText ? `<p style="margin:0;color:${theme.mutedColor};font-size:13px;line-height:1.6;">${block.leftText}</p>` : ''}
+            </td>
+            <td width="50%" style="vertical-align:top;padding-left:${block.gap || 16}px;">
+              ${block.rightImageUrl
+                ? `<img src="${block.rightImageUrl}" alt="${block.rightImageAlt || ''}" style="display:block;width:${block.rightImageWidth || 140}px;height:${block.rightImageHeight || 80}px;object-fit:cover;border-radius:12px;border:1px solid ${theme.borderColor};margin-bottom:12px;" />`
+                : ''}
+              ${block.rightTitle ? `<h3 style="margin:0 0 6px;font-size:16px;color:${theme.textColor};">${block.rightTitle}</h3>` : ''}
+              ${block.rightText ? `<p style="margin:0;color:${theme.mutedColor};font-size:13px;line-height:1.6;">${block.rightText}</p>` : ''}
+            </td>
+          </tr>
+        </table>
+      `
     }
     if (block.type === 'footer') {
       return `
@@ -996,7 +1037,7 @@ const TemplateModal = ({ data, onClose, onSave }) => {
                 </div>
                 <p className="text-xs text-slate-400">Blocos</p>
                 <div className="flex flex-wrap gap-2">
-                  {['header', 'text', 'button', 'image', 'code', 'alert', 'divider', 'spacer', 'footer'].map((type) => (
+                  {['header', 'text', 'button', 'image', 'grid', 'code', 'alert', 'divider', 'spacer', 'footer'].map((type) => (
                     <button
                       key={type}
                       className="rounded-lg border border-slate-800 bg-slate-950 px-2 py-1 text-xs text-slate-200"
@@ -1133,6 +1174,22 @@ const TemplateModal = ({ data, onClose, onSave }) => {
                             value={block.imageAlt}
                             onChange={(e) => updateBlock(index, { imageAlt: e.target.value })}
                           />
+                          <div className="mt-2 grid grid-cols-2 gap-2">
+                            <input
+                              type="number"
+                              className="w-full rounded-lg border border-slate-800 bg-slate-900 px-2 py-1 text-xs"
+                              placeholder="Largura (%)"
+                              value={block.width || 100}
+                              onChange={(e) => updateBlock(index, { width: Number(e.target.value) || 100 })}
+                            />
+                            <input
+                              type="number"
+                              className="w-full rounded-lg border border-slate-800 bg-slate-900 px-2 py-1 text-xs"
+                              placeholder="Altura (px)"
+                              value={block.height || 80}
+                              onChange={(e) => updateBlock(index, { height: Number(e.target.value) || 80 })}
+                            />
+                          </div>
                           <input
                             className="mt-2 w-full rounded-lg border border-slate-800 bg-slate-900 px-2 py-1 text-xs"
                             placeholder="Link (opcional)"
@@ -1205,6 +1262,87 @@ const TemplateModal = ({ data, onClose, onSave }) => {
                               ))}
                             </div>
                           </div>
+                        </>
+                      )}
+                      {block.type === 'grid' && (
+                        <>
+                          <div className="grid grid-cols-2 gap-2">
+                            <input
+                              className="w-full rounded-lg border border-slate-800 bg-slate-900 px-2 py-1 text-xs"
+                              placeholder="Titulo esquerda"
+                              value={block.leftTitle || ''}
+                              onChange={(e) => updateBlock(index, { leftTitle: e.target.value })}
+                            />
+                            <input
+                              className="w-full rounded-lg border border-slate-800 bg-slate-900 px-2 py-1 text-xs"
+                              placeholder="Titulo direita"
+                              value={block.rightTitle || ''}
+                              onChange={(e) => updateBlock(index, { rightTitle: e.target.value })}
+                            />
+                          </div>
+                          <textarea
+                            className="mt-2 w-full rounded-lg border border-slate-800 bg-slate-900 px-2 py-1 text-xs"
+                            placeholder="Texto esquerda"
+                            value={block.leftText || ''}
+                            onChange={(e) => updateBlock(index, { leftText: e.target.value })}
+                          />
+                          <textarea
+                            className="mt-2 w-full rounded-lg border border-slate-800 bg-slate-900 px-2 py-1 text-xs"
+                            placeholder="Texto direita"
+                            value={block.rightText || ''}
+                            onChange={(e) => updateBlock(index, { rightText: e.target.value })}
+                          />
+                          <input
+                            className="mt-2 w-full rounded-lg border border-slate-800 bg-slate-900 px-2 py-1 text-xs"
+                            placeholder="Imagem esquerda (URL)"
+                            value={block.leftImageUrl || ''}
+                            onChange={(e) => updateBlock(index, { leftImageUrl: e.target.value })}
+                          />
+                          <div className="mt-2 grid grid-cols-2 gap-2">
+                            <input
+                              type="number"
+                              className="w-full rounded-lg border border-slate-800 bg-slate-900 px-2 py-1 text-xs"
+                              placeholder="Largura esq. (px)"
+                              value={block.leftImageWidth || 140}
+                              onChange={(e) => updateBlock(index, { leftImageWidth: Number(e.target.value) || 140 })}
+                            />
+                            <input
+                              type="number"
+                              className="w-full rounded-lg border border-slate-800 bg-slate-900 px-2 py-1 text-xs"
+                              placeholder="Altura esq. (px)"
+                              value={block.leftImageHeight || 80}
+                              onChange={(e) => updateBlock(index, { leftImageHeight: Number(e.target.value) || 80 })}
+                            />
+                          </div>
+                          <input
+                            className="mt-2 w-full rounded-lg border border-slate-800 bg-slate-900 px-2 py-1 text-xs"
+                            placeholder="Imagem direita (URL)"
+                            value={block.rightImageUrl || ''}
+                            onChange={(e) => updateBlock(index, { rightImageUrl: e.target.value })}
+                          />
+                          <div className="mt-2 grid grid-cols-2 gap-2">
+                            <input
+                              type="number"
+                              className="w-full rounded-lg border border-slate-800 bg-slate-900 px-2 py-1 text-xs"
+                              placeholder="Largura dir. (px)"
+                              value={block.rightImageWidth || 140}
+                              onChange={(e) => updateBlock(index, { rightImageWidth: Number(e.target.value) || 140 })}
+                            />
+                            <input
+                              type="number"
+                              className="w-full rounded-lg border border-slate-800 bg-slate-900 px-2 py-1 text-xs"
+                              placeholder="Altura dir. (px)"
+                              value={block.rightImageHeight || 80}
+                              onChange={(e) => updateBlock(index, { rightImageHeight: Number(e.target.value) || 80 })}
+                            />
+                          </div>
+                          <input
+                            type="number"
+                            className="mt-2 w-full rounded-lg border border-slate-800 bg-slate-900 px-2 py-1 text-xs"
+                            placeholder="Espacamento (px)"
+                            value={block.gap || 16}
+                            onChange={(e) => updateBlock(index, { gap: Number(e.target.value) || 16 })}
+                          />
                         </>
                       )}
                       {block.type === 'code' && (
@@ -1304,7 +1442,7 @@ const TemplateModal = ({ data, onClose, onSave }) => {
             <div className="sticky top-0 rounded-xl border border-slate-800 bg-slate-950 p-4">
               <p className="text-xs text-slate-400 mb-2">Preview</p>
               <div
-                className="rounded-lg border border-slate-800 bg-white p-2"
+                className="max-h-[62vh] overflow-y-auto rounded-lg border border-slate-800 bg-white p-2"
                 dangerouslySetInnerHTML={{ __html: preview }}
               />
             </div>
