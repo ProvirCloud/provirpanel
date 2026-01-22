@@ -14,7 +14,8 @@ const DEFAULT_THEME = {
   buttonColor: '#22c55e',
   buttonTextColor: '#0b1120',
   fontFamily: "'Trebuchet MS', Verdana, sans-serif",
-  footerText: 'Enviado pelo ProvirPanel'
+  footerText: 'Enviado pelo ProvirPanel',
+  logoSize: 32
 }
 
 const buildBlock = (type) => {
@@ -105,6 +106,7 @@ const buildHtml = (blocks = [], meta = {}) => {
   const title = meta.title || 'Mensagem'
   const subtitle = meta.subtitle || ''
   const brandStyle = theme.brandStyle || 'logo'
+  const logoSize = Number(theme.logoSize) || 32
 
   const header = `
     <table width="100%" cellpadding="0" cellspacing="0" style="background:${theme.backgroundColor};padding:32px 0;font-family:${theme.fontFamily};">
@@ -119,7 +121,7 @@ const buildHtml = (blocks = [], meta = {}) => {
                       ? `<img src="${theme.logoUrl}" alt="${brandName}" style="max-height:38px;max-width:160px;display:block;" />`
                       : `<span style="font-size:16px;font-weight:700;color:${theme.textColor};">${brandName}</span>`)
                     : `<div style="display:flex;align-items:center;gap:10px;">
-                        ${theme.logoUrl ? `<img src="${theme.logoUrl}" alt="${brandName}" style="height:32px;width:32px;border-radius:10px;object-fit:cover;border:1px solid ${theme.borderColor};" />` : ''}
+                        ${theme.logoUrl ? `<img src="${theme.logoUrl}" alt="${brandName}" style="height:${logoSize}px;width:${logoSize}px;border-radius:10px;object-fit:cover;border:1px solid ${theme.borderColor};" />` : ''}
                         <span style="font-size:16px;font-weight:700;color:${theme.textColor};">${brandName}</span>
                       </div>`}
                 </td>
@@ -1153,6 +1155,15 @@ const TemplateModal = ({ data, onClose, onSave }) => {
                     value={theme.brandName || ''}
                     onChange={(e) => updateTheme('brandName', e.target.value)}
                   />
+                  {brandStyle === 'logo_text' && (
+                    <input
+                      type="number"
+                      className="mt-2 w-full rounded-lg border border-slate-800 bg-slate-900 px-2 py-1 text-xs"
+                      placeholder="Tamanho da logo (px)"
+                      value={theme.logoSize || 32}
+                      onChange={(e) => updateTheme('logoSize', Number(e.target.value) || 32)}
+                    />
+                  )}
                   <input
                     className="mt-2 w-full rounded-lg border border-slate-800 bg-slate-900 px-2 py-1 text-xs"
                     placeholder="Logo (URL salva no storage)"
