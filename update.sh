@@ -61,6 +61,8 @@ if [[ -f "${ENV_FILE}" ]]; then
   ensure_env_var "${ENV_FILE}" "REPUTATION_CHECK_TOKEN" ""
   ensure_env_var "${ENV_FILE}" "REPUTATION_PROVIDER" ""
   ensure_env_var "${ENV_FILE}" "GOOGLE_SAFE_BROWSING_API_KEY" ""
+  ensure_env_var "${ENV_FILE}" "GOOGLE_SITE_VERIFICATION_FILE" "google4ce1fbbc8da57702.html"
+  ensure_env_var "${ENV_FILE}" "GOOGLE_SITE_VERIFICATION_ROOT" "/var/www/panel"
   ensure_env_var "${ENV_FILE}" "AUTH_COOKIE_NAME" "provirpanel_token"
   ensure_env_var "${ENV_FILE}" "AUTH_COOKIE_SECURE" "true"
 else

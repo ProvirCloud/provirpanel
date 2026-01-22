@@ -411,6 +411,8 @@ class NginxServerManager {
     const securityHeadersEnabled = !!server.security_headers_enabled;
     const serverTokensOff = server.server_tokens_off ?? true;
     const tlsMinVersionEnforced = server.tls_min_version_enforced ?? true;
+    const verificationFile = process.env.GOOGLE_SITE_VERIFICATION_FILE || 'google4ce1fbbc8da57702.html';
+    const verificationRoot = process.env.GOOGLE_SITE_VERIFICATION_ROOT || '/var/www/panel';
 
     let config = '';
 
@@ -462,6 +464,14 @@ class NginxServerManager {
       config += `    ssl_ciphers HIGH:!aNULL:!MD5;
     ssl_prefer_server_ciphers on;
     ssl_session_cache shared:SSL:10m;
+`;
+    }
+
+    if (verificationFile) {
+      config += `
+    location = /${verificationFile} {
+        root ${verificationRoot};
+    }
 `;
     }
 

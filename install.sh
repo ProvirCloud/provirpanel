@@ -263,6 +263,8 @@ REPUTATION_CHECK_URL=
 REPUTATION_CHECK_TOKEN=
 REPUTATION_PROVIDER=
 GOOGLE_SAFE_BROWSING_API_KEY=
+GOOGLE_SITE_VERIFICATION_FILE=google4ce1fbbc8da57702.html
+GOOGLE_SITE_VERIFICATION_ROOT=/var/www/panel
 ENV
 
   ensure_env_var "${env_file}" "NGINX_CONFIG_PATH" "/etc/nginx"
@@ -285,6 +287,8 @@ ENV
   ensure_env_var "${env_file}" "REPUTATION_CHECK_TOKEN" ""
   ensure_env_var "${env_file}" "REPUTATION_PROVIDER" ""
   ensure_env_var "${env_file}" "GOOGLE_SAFE_BROWSING_API_KEY" ""
+  ensure_env_var "${env_file}" "GOOGLE_SITE_VERIFICATION_FILE" "google4ce1fbbc8da57702.html"
+  ensure_env_var "${env_file}" "GOOGLE_SITE_VERIFICATION_ROOT" "/var/www/panel"
   ensure_env_var "${env_file}" "AUTH_COOKIE_NAME" "provirpanel_token"
   ensure_env_var "${env_file}" "AUTH_COOKIE_SECURE" "true"
 
