@@ -121,7 +121,7 @@ const buildHtml = (blocks = [], meta = {}) => {
                       ? `<img src="${theme.logoUrl}" alt="${brandName}" style="max-height:38px;max-width:160px;display:block;" />`
                       : `<span style="font-size:16px;font-weight:700;color:${theme.textColor};">${brandName}</span>`)
                     : `<div style="display:flex;align-items:center;gap:10px;">
-                        ${theme.logoUrl ? `<img src="${theme.logoUrl}" alt="${brandName}" style="height:${logoSize}px;width:${logoSize}px;border-radius:10px;object-fit:cover;border:1px solid ${theme.borderColor};" />` : ''}
+                        ${theme.logoUrl ? `<img src="${theme.logoUrl}" alt="${brandName}" style="height:${logoSize}px;width:${logoSize}px;border-radius:10px;object-fit:contain;border:1px solid ${theme.borderColor};background:${theme.surfaceColor};" />` : ''}
                         <span style="font-size:16px;font-weight:700;color:${theme.textColor};">${brandName}</span>
                       </div>`}
                 </td>
