@@ -930,7 +930,11 @@ const TemplateModal = ({ data, onClose, onSave }) => {
   const isStoredImageUrl = (url) => {
     if (!url) return false
     if (url.startsWith('/public/storage/image')) return true
+    if (url.startsWith('/api/public/storage/image')) return true
     if (typeof window !== 'undefined' && url.startsWith(`${window.location.origin}/public/storage/image`)) {
+      return true
+    }
+    if (typeof window !== 'undefined' && url.startsWith(`${window.location.origin}/api/public/storage/image`)) {
       return true
     }
     return false

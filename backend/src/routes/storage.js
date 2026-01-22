@@ -98,7 +98,7 @@ router.get('/email-images', async (req, res, next) => {
       .filter((item) => !item.isDir && item.isImage)
       .map((item) => ({
         ...item,
-        publicUrl: `/public/storage/image?path=${encodeURIComponent(item.path)}`
+        publicUrl: `/api/public/storage/image?path=${encodeURIComponent(item.path)}`
       }));
     res.json({ images });
   } catch (err) {
@@ -138,7 +138,7 @@ router.post('/email-images/upload', upload.single('file'), async (req, res, next
       image: {
         name: filename,
         path: publicPath,
-        publicUrl: `/public/storage/image?path=${encodeURIComponent(publicPath)}`
+        publicUrl: `/api/public/storage/image?path=${encodeURIComponent(publicPath)}`
       }
     });
   } catch (err) {
@@ -201,7 +201,7 @@ router.post('/email-images/from-url', async (req, res, next) => {
       image: {
         name: filename,
         path: publicPath,
-        publicUrl: `/public/storage/image?path=${encodeURIComponent(publicPath)}`
+        publicUrl: `/api/public/storage/image?path=${encodeURIComponent(publicPath)}`
       }
     });
   } catch (err) {

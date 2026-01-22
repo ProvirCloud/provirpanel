@@ -55,6 +55,7 @@ app.use(cors({
 app.use(express.json());
 
 app.use('/public/storage', publicStorageRoutes);
+app.use('/api/public/storage', publicStorageRoutes);
 app.use('/auth', authRoutes);
 app.use('/api/metrics', authMiddleware, metricsRoutes);
 app.use('/api', authMiddleware, logsRoutes);
