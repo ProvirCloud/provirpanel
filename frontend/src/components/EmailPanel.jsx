@@ -860,7 +860,7 @@ const TemplateModal = ({ data, onClose, onSave }) => {
 
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 p-4">
-      <div className="w-full max-w-5xl max-h-[92vh] overflow-y-auto rounded-2xl border border-slate-800 bg-slate-900/90 p-6 text-slate-100">
+      <div className="w-full max-w-6xl max-h-[92vh] overflow-hidden rounded-2xl border border-slate-800 bg-slate-900/90 p-6 text-slate-100">
         <div className="flex items-center justify-between">
           <h3 className="text-lg font-semibold">Template</h3>
           <button
@@ -870,8 +870,9 @@ const TemplateModal = ({ data, onClose, onSave }) => {
             {htmlMode ? 'Editor visual' : 'Editar HTML'}
           </button>
         </div>
-        <div className="mt-4 grid grid-cols-3 gap-4">
-          <div className="col-span-1 space-y-3">
+        <div className="mt-4 grid h-[74vh] grid-cols-5 gap-4">
+          <div className="col-span-2 overflow-y-auto pr-2">
+            <div className="space-y-3">
             <input
               className="w-full rounded-xl border border-slate-800 bg-slate-950 px-3 py-2 text-sm"
               placeholder="Nome do template"
@@ -1297,9 +1298,10 @@ const TemplateModal = ({ data, onClose, onSave }) => {
                 onChange={(e) => setHtml(e.target.value)}
               />
             )}
+            </div>
           </div>
-          <div className="col-span-2">
-            <div className="rounded-xl border border-slate-800 bg-slate-950 p-4">
+          <div className="col-span-3">
+            <div className="sticky top-0 rounded-xl border border-slate-800 bg-slate-950 p-4">
               <p className="text-xs text-slate-400 mb-2">Preview</p>
               <div
                 className="rounded-lg border border-slate-800 bg-white p-2"
