@@ -25,6 +25,10 @@ const SecurityAuditPanel = () => {
   const [url, setUrl] = useState('')
   const [result, setResult] = useState(null)
   const [loading, setLoading] = useState(false)
+  const [planning, setPlanning] = useState(false)
+  const [applying, setApplying] = useState(false)
+  const [plan, setPlan] = useState(null)
+  const [applyResult, setApplyResult] = useState(null)
   const [error, setError] = useState('')
 
   useEffect(() => {
@@ -45,11 +49,46 @@ const SecurityAuditPanel = () => {
     try {
       const response = await api.post('/security/audit', { url })
       setResult(response.data)
+      setPlan(null)
     } catch (err) {
       const message = err.response?.data?.message || err.message
       setError(message)
     } finally {
       setLoading(false)
+    }
+  }
+
+  const loadPlan = async () => {
+    if (!url) return
+    setPlanning(true)
+    setError('')
+    setApplyResult(null)
+    try {
+      const response = await api.post('/security/plan', { url })
+      setPlan(response.data)
+    } catch (err) {
+      const message = err.response?.data?.message || err.message
+      setError(message)
+    } finally {
+      setPlanning(false)
+    }
+  }
+
+  const applyPlan = async () => {
+    if (!url) return
+    setApplying(true)
+    setError('')
+    setApplyResult(null)
+    try {
+      const response = await api.post('/security/apply', { url })
+      setApplyResult(response.data)
+      await runAudit()
+    } catch (err) {
+      const message = err.response?.data?.message || err.message
+      const detail = err.response?.data?.detail
+      setError(detail ? `${message} - ${detail}` : message)
+    } finally {
+      setApplying(false)
     }
   }
 
@@ -87,6 +126,11 @@ const SecurityAuditPanel = () => {
         {error && (
           <p className="mt-3 rounded-xl border border-rose-800 bg-rose-950/40 px-3 py-2 text-xs text-rose-200">
             {error}
+          </p>
+        )}
+        {applyResult?.applied && (
+          <p className="mt-3 rounded-xl border border-emerald-700/60 bg-emerald-950/40 px-3 py-2 text-xs text-emerald-200">
+            Correcoes aplicadas. Backup: {applyResult.backupPath || 'nenhum'}
           </p>
         )}
       </div>
@@ -165,6 +209,44 @@ const SecurityAuditPanel = () => {
                 </div>
               ))}
             </div>
+          </div>
+
+          <div className="rounded-2xl border border-slate-800 bg-slate-900/60 p-4">
+            <div className="flex flex-col gap-3 md:flex-row md:items-center md:justify-between">
+              <div>
+                <h3 className="text-sm font-semibold text-slate-200">Correcoes automaticas</h3>
+                <p className="text-xs text-slate-400">
+                  Aplicacao segura com backup e teste do Nginx.
+                </p>
+              </div>
+              <div className="flex gap-2">
+                <button
+                  className="rounded-xl border border-slate-700 bg-slate-950 px-4 py-2 text-xs text-slate-200"
+                  onClick={loadPlan}
+                  disabled={planning}
+                >
+                  {planning ? 'Gerando...' : 'Gerar correcoes'}
+                </button>
+                <button
+                  className="rounded-xl bg-emerald-500 px-4 py-2 text-xs font-semibold text-slate-950"
+                  onClick={applyPlan}
+                  disabled={applying}
+                >
+                  {applying ? 'Aplicando...' : 'Aplicar no Nginx'}
+                </button>
+              </div>
+            </div>
+            {plan && (
+              <div className="mt-4">
+                <p className="text-xs text-slate-400">Arquivo: {plan.filePath}</p>
+                <p className="text-xs text-slate-400">Nota: {plan.notes}</p>
+                <textarea
+                  className="mt-3 h-40 w-full rounded-xl border border-slate-800 bg-slate-950 px-3 py-2 text-xs text-slate-200"
+                  value={plan.content || ''}
+                  readOnly
+                />
+              </div>
+            )}
           </div>
         </>
       )}

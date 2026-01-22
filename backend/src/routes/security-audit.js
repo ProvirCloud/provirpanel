@@ -1,6 +1,9 @@
 const express = require('express');
 const axios = require('axios');
 const tls = require('tls');
+const fs = require('fs');
+const path = require('path');
+const NginxManager = require('../services/NginxManager');
 
 const router = express.Router();
 
@@ -44,6 +47,25 @@ const buildCheck = (id, title, status, recommendation, detail, weight) => ({
   detail,
   weight
 });
+
+const buildSecuritySnippet = ({ includeHsts, includeCsp }) => {
+  const lines = [
+    '# ProvirPanel Security Headers',
+    'add_header X-Frame-Options "SAMEORIGIN" always;',
+    'add_header X-Content-Type-Options "nosniff" always;',
+    'add_header Referrer-Policy "strict-origin-when-cross-origin" always;',
+    'add_header X-XSS-Protection "1; mode=block" always;'
+  ];
+  if (includeHsts) {
+    lines.push('add_header Strict-Transport-Security "max-age=31536000; includeSubDomains; preload" always;');
+  }
+  if (includeCsp) {
+    lines.push(
+      'add_header Content-Security-Policy "default-src \'self\' https: data:; img-src \'self\' https: data:; style-src \'self\' \'unsafe-inline\' https:; script-src \'self\' \'unsafe-inline\' https:; connect-src \'self\' https: wss:; frame-ancestors \'self\';" always;'
+    );
+  }
+  return `${lines.join('\n')}\n`;
+};
 
 router.post('/audit', async (req, res) => {
   const { url } = req.body || {};
@@ -245,6 +267,87 @@ router.post('/audit', async (req, res) => {
       message: 'Falha ao auditar URL.',
       detail: err.message
     });
+  }
+});
+
+router.post('/plan', async (req, res) => {
+  const { url } = req.body || {};
+  if (!url) {
+    return res.status(400).json({ message: 'URL obrigatoria.' });
+  }
+
+  let target;
+  try {
+    target = new URL(url);
+  } catch (err) {
+    return res.status(400).json({ message: 'URL invalida.' });
+  }
+
+  const httpsEnabled = target.protocol === 'https:';
+  const nginxManager = new NginxManager();
+  const confDir = nginxManager.confD;
+  const filename = 'provirpanel-security.conf';
+  const filePath = path.join(confDir, filename);
+  const content = buildSecuritySnippet({ includeHsts: httpsEnabled, includeCsp: true });
+
+  return res.json({
+    filePath,
+    content,
+    notes: httpsEnabled
+      ? 'HSTS habilitado por HTTPS.'
+      : 'HSTS nao aplicado porque a URL esta em HTTP.',
+    requiresReload: true
+  });
+});
+
+router.post('/apply', async (req, res) => {
+  const { url } = req.body || {};
+  if (!url) {
+    return res.status(400).json({ message: 'URL obrigatoria.' });
+  }
+
+  let target;
+  try {
+    target = new URL(url);
+  } catch (err) {
+    return res.status(400).json({ message: 'URL invalida.' });
+  }
+
+  const httpsEnabled = target.protocol === 'https:';
+  const nginxManager = new NginxManager();
+  const confDir = nginxManager.confD;
+  const filename = 'provirpanel-security.conf';
+  const filePath = path.join(confDir, filename);
+  const content = buildSecuritySnippet({ includeHsts: httpsEnabled, includeCsp: true });
+
+  let backupPath = null;
+  try {
+    fs.mkdirSync(confDir, { recursive: true });
+    if (fs.existsSync(filePath)) {
+      const stamp = new Date().toISOString().replace(/[:.]/g, '-');
+      backupPath = `${filePath}.bak-${stamp}`;
+      fs.copyFileSync(filePath, backupPath);
+    }
+    fs.writeFileSync(filePath, content, 'utf8');
+
+    const test = nginxManager.testConfig();
+    if (!test.valid) {
+      if (backupPath) {
+        fs.copyFileSync(backupPath, filePath);
+      } else {
+        fs.unlinkSync(filePath);
+      }
+      return res.status(400).json({ message: 'Nginx -t falhou', detail: test.error });
+    }
+
+    nginxManager.reload();
+    return res.json({
+      applied: true,
+      filePath,
+      backupPath
+    });
+  } catch (err) {
+    return res.status(500).json({ message: 'Falha ao aplicar correcoes.', detail: err.message });
   }
 });
 
