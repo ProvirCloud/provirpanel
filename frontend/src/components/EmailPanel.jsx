@@ -57,13 +57,23 @@ const buildBlock = (type) => {
   return base
 }
 
+const hydrateBlock = (block) => {
+  const type = block?.type || 'text'
+  const base = buildBlock(type)
+  return {
+    ...base,
+    ...block,
+    id: block?.id || base.id
+  }
+}
+
 const normalizeDesign = (design) => {
   if (Array.isArray(design)) {
-    return { blocks: design, theme: { ...DEFAULT_THEME } }
+    return { blocks: design.map(hydrateBlock), theme: { ...DEFAULT_THEME } }
   }
   if (design && typeof design === 'object') {
     return {
-      blocks: Array.isArray(design.blocks) ? design.blocks : [],
+      blocks: Array.isArray(design.blocks) ? design.blocks.map(hydrateBlock) : [],
       theme: { ...DEFAULT_THEME, ...(design.theme || {}) }
     }
   }
@@ -633,6 +643,15 @@ const SmtpModal = ({ data, onClose, onSave }) => {
   )
 }
 
+const resolvePublicUrl = (url) => {
+  if (!url) return ''
+  if (url.startsWith('http://') || url.startsWith('https://')) return url
+  if (typeof window !== 'undefined') {
+    return `${window.location.origin}${url}`
+  }
+  return url
+}
+
 const TEMPLATE_PRESETS = [
   {
     key: 'verification',
@@ -721,10 +740,17 @@ const TemplateModal = ({ data, onClose, onSave }) => {
   const [name, setName] = useState(data.name || '')
   const [subject, setSubject] = useState(data.subject || '')
   const [preheader, setPreheader] = useState(data.preheader || '')
-  const [blocks, setBlocks] = useState(data.blocks || normalizedDesign.blocks || [])
+  const [blocks, setBlocks] = useState(
+    Array.isArray(data.blocks) ? data.blocks.map(hydrateBlock) : normalizedDesign.blocks || []
+  )
   const [theme, setTheme] = useState(normalizedDesign.theme || { ...DEFAULT_THEME })
   const [htmlMode, setHtmlMode] = useState(data.htmlMode || false)
   const [html, setHtml] = useState(data.html || '')
+  const [imageLibrary, setImageLibrary] = useState([])
+  const [imageLoading, setImageLoading] = useState(false)
+  const [imageError, setImageError] = useState('')
+  const [imageUploading, setImageUploading] = useState(false)
+  const [urlInputs, setUrlInputs] = useState({})
 
   const preview = useMemo(() => {
     if (htmlMode) return html
@@ -751,6 +777,73 @@ const TemplateModal = ({ data, onClose, onSave }) => {
     setSubject(preset.subject)
     setPreheader(preset.preheader)
     setBlocks(next.blocks || [])
+  }
+
+  const loadImageLibrary = async () => {
+    setImageLoading(true)
+    setImageError('')
+    try {
+      const response = await api.get('/storage/email-images')
+      setImageLibrary(response.data.images || [])
+    } catch (err) {
+      setImageError('Falha ao carregar imagens')
+    } finally {
+      setImageLoading(false)
+    }
+  }
+
+  useEffect(() => {
+    loadImageLibrary()
+  }, [])
+
+  const updateUrlInput = (blockId, value) => {
+    setUrlInputs((prev) => ({ ...prev, [blockId]: value }))
+  }
+
+  const handleImageUpload = async (file, index) => {
+    if (!file) return
+    setImageUploading(true)
+    try {
+      const formData = new FormData()
+      formData.append('file', file)
+      const response = await api.post('/storage/email-images/upload', formData, {
+        headers: { 'Content-Type': 'multipart/form-data' }
+      })
+      const image = response.data.image
+      await loadImageLibrary()
+      if (image?.publicUrl) {
+        updateBlock(index, {
+          imageUrl: resolvePublicUrl(image.publicUrl),
+          imageAlt: image.name || ''
+        })
+      }
+    } catch (err) {
+      setImageError('Falha ao enviar imagem')
+    } finally {
+      setImageUploading(false)
+    }
+  }
+
+  const handleImportUrl = async (index, blockId) => {
+    const url = urlInputs[blockId]
+    if (!url) return
+    setImageUploading(true)
+    try {
+      const response = await api.post('/storage/email-images/from-url', { url })
+      const image = response.data.image
+      await loadImageLibrary()
+      if (image?.publicUrl) {
+        updateBlock(index, {
+          imageUrl: resolvePublicUrl(image.publicUrl),
+          imageAlt: image.name || ''
+        })
+      }
+      updateUrlInput(blockId, '')
+    } catch (err) {
+      setImageError('Falha ao importar imagem')
+    } finally {
+      setImageUploading(false)
+    }
   }
 
   const handleSave = () => {
@@ -1021,6 +1114,18 @@ const TemplateModal = ({ data, onClose, onSave }) => {
                             value={block.imageUrl}
                             onChange={(e) => updateBlock(index, { imageUrl: e.target.value })}
                           />
+                          <div className="mt-2 rounded-lg border border-slate-800 bg-slate-900 p-2">
+                            <p className="text-[10px] text-slate-400 mb-2">Upload</p>
+                            <input
+                              type="file"
+                              accept="image/*"
+                              className="w-full text-[10px] text-slate-300"
+                              onChange={(e) => handleImageUpload(e.target.files?.[0], index)}
+                            />
+                            <p className="mt-2 text-[10px] text-slate-500">
+                              {imageUploading ? 'Enviando...' : 'Salva no storage e usa no template.'}
+                            </p>
+                          </div>
                           <input
                             className="mt-2 w-full rounded-lg border border-slate-800 bg-slate-900 px-2 py-1 text-xs"
                             placeholder="Alt"
@@ -1033,6 +1138,26 @@ const TemplateModal = ({ data, onClose, onSave }) => {
                             value={block.linkUrl || ''}
                             onChange={(e) => updateBlock(index, { linkUrl: e.target.value })}
                           />
+                          <div className="mt-2 rounded-lg border border-slate-800 bg-slate-900 p-2">
+                            <p className="text-[10px] text-slate-400 mb-2">Importar URL externa</p>
+                            <div className="flex gap-2">
+                              <input
+                                className="w-full rounded-lg border border-slate-800 bg-slate-950 px-2 py-1 text-xs"
+                                placeholder="https://..."
+                                value={urlInputs[block.id] || ''}
+                                onChange={(e) => updateUrlInput(block.id, e.target.value)}
+                              />
+                              <button
+                                className="rounded-lg border border-slate-800 bg-slate-950 px-2 py-1 text-[10px] text-slate-200"
+                                onClick={() => handleImportUrl(index, block.id)}
+                              >
+                                Salvar
+                              </button>
+                            </div>
+                            <p className="mt-2 text-[10px] text-slate-500">
+                              Baixa a imagem e guarda no storage do painel.
+                            </p>
+                          </div>
                           <select
                             className="mt-2 w-full rounded-lg border border-slate-800 bg-slate-900 px-2 py-1 text-xs"
                             value={block.align || 'center'}
@@ -1042,6 +1167,43 @@ const TemplateModal = ({ data, onClose, onSave }) => {
                             <option value="center">Centralizar</option>
                             <option value="right">Alinhar direita</option>
                           </select>
+                          <div className="mt-2 rounded-lg border border-slate-800 bg-slate-900 p-2">
+                            <div className="flex items-center justify-between">
+                              <p className="text-[10px] text-slate-400">Biblioteca de imagens</p>
+                              <button
+                                className="rounded-lg border border-slate-800 bg-slate-950 px-2 py-1 text-[10px] text-slate-200"
+                                onClick={loadImageLibrary}
+                              >
+                                Atualizar
+                              </button>
+                            </div>
+                            {imageError && <p className="mt-1 text-[10px] text-rose-300">{imageError}</p>}
+                            {imageLoading && <p className="mt-1 text-[10px] text-slate-500">Carregando...</p>}
+                            {!imageLoading && imageLibrary.length === 0 && (
+                              <p className="mt-1 text-[10px] text-slate-500">Nenhuma imagem no storage.</p>
+                            )}
+                            <div className="mt-2 grid grid-cols-3 gap-2">
+                              {imageLibrary.map((image) => (
+                                <button
+                                  key={image.path}
+                                  className="rounded-lg border border-slate-800 bg-slate-950 p-1 text-[10px] text-slate-200"
+                                  onClick={() =>
+                                    updateBlock(index, {
+                                      imageUrl: resolvePublicUrl(image.publicUrl),
+                                      imageAlt: image.name || ''
+                                    })
+                                  }
+                                >
+                                  <img
+                                    src={resolvePublicUrl(image.publicUrl)}
+                                    alt={image.name}
+                                    className="h-16 w-full rounded-md object-cover"
+                                  />
+                                  <span className="mt-1 block truncate">{image.name}</span>
+                                </button>
+                              ))}
+                            </div>
+                          </div>
                         </>
                       )}
                       {block.type === 'code' && (

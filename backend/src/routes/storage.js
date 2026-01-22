@@ -3,11 +3,44 @@
 const express = require('express');
 const multer = require('multer');
 const path = require('path');
+const fs = require('fs');
+const axios = require('axios');
 const StorageManager = require('../services/StorageManager');
 
 const router = express.Router();
 const storageManager = new StorageManager();
 const upload = multer({ storage: multer.memoryStorage() });
+const EMAIL_ASSETS_DIR = '/email-assets';
+const MAX_IMAGE_BYTES = 5 * 1024 * 1024;
+const ALLOWED_IMAGE_EXT = ['.png', '.jpg', '.jpeg', '.gif', '.webp', '.svg'];
+
+const sanitizeFilename = (name) => {
+  const base = path.basename(name || 'image');
+  const sanitized = base.replace(/[^A-Za-z0-9._-]/g, '_');
+  return sanitized || 'image';
+};
+
+const ensureUniqueName = (dirPath, filename) => {
+  const ext = path.extname(filename);
+  const base = path.basename(filename, ext);
+  let candidate = `${base}${ext}`;
+  let counter = 1;
+  while (fs.existsSync(path.join(dirPath, candidate))) {
+    candidate = `${base}-${counter}${ext}`;
+    counter += 1;
+  }
+  return candidate;
+};
+
+const mimeToExt = (mime) => {
+  if (!mime) return '';
+  if (mime === 'image/jpeg') return '.jpg';
+  if (mime === 'image/png') return '.png';
+  if (mime === 'image/gif') return '.gif';
+  if (mime === 'image/webp') return '.webp';
+  if (mime === 'image/svg+xml') return '.svg';
+  return '';
+};
 
 router.get('/', async (req, res, next) => {
   try {
@@ -55,6 +88,124 @@ router.post('/upload', upload.array('files'), async (req, res, next) => {
     res.json({ uploaded });
   } catch (err) {
     next(err);
+  }
+});
+
+router.get('/email-images', async (req, res, next) => {
+  try {
+    const items = await storageManager.listFiles(EMAIL_ASSETS_DIR);
+    const images = items
+      .filter((item) => !item.isDir && item.isImage)
+      .map((item) => ({
+        ...item,
+        publicUrl: `/public/storage/image?path=${encodeURIComponent(item.path)}`
+      }));
+    res.json({ images });
+  } catch (err) {
+    if (err.message === 'Invalid path' || err.code === 'ENOENT') {
+      return res.json({ images: [] });
+    }
+    return next(err);
+  }
+});
+
+router.post('/email-images/upload', upload.single('file'), async (req, res, next) => {
+  try {
+    const file = req.file;
+    if (!file) {
+      return res.status(400).json({ message: 'file is required' });
+    }
+    if (!file.mimetype || !file.mimetype.startsWith('image/')) {
+      return res.status(400).json({ message: 'file must be an image' });
+    }
+    if (file.size > MAX_IMAGE_BYTES) {
+      return res.status(400).json({ message: 'image too large' });
+    }
+    const assetsDir = storageManager.safeResolve(EMAIL_ASSETS_DIR);
+    await fs.promises.mkdir(assetsDir, { recursive: true });
+
+    const ext = mimeToExt(file.mimetype) || path.extname(file.originalname).toLowerCase();
+    if (!ALLOWED_IMAGE_EXT.includes(ext)) {
+      return res.status(400).json({ message: 'unsupported image type' });
+    }
+    const safeBase = sanitizeFilename(path.basename(file.originalname, path.extname(file.originalname)));
+    const filename = ensureUniqueName(assetsDir, `${safeBase}${ext}`);
+    const targetPath = path.join(assetsDir, filename);
+    await fs.promises.writeFile(targetPath, file.buffer);
+
+    const publicPath = path.join(EMAIL_ASSETS_DIR, filename);
+    return res.json({
+      image: {
+        name: filename,
+        path: publicPath,
+        publicUrl: `/public/storage/image?path=${encodeURIComponent(publicPath)}`
+      }
+    });
+  } catch (err) {
+    return next(err);
+  }
+});
+
+router.post('/email-images/from-url', async (req, res, next) => {
+  try {
+    const { url } = req.body || {};
+    if (!url) {
+      return res.status(400).json({ message: 'url is required' });
+    }
+    let parsed;
+    try {
+      parsed = new URL(url);
+    } catch (err) {
+      return res.status(400).json({ message: 'invalid url' });
+    }
+
+    const response = await axios.get(parsed.toString(), {
+      responseType: 'arraybuffer',
+      timeout: 10000,
+      maxContentLength: MAX_IMAGE_BYTES
+    });
+
+    const contentType = response.headers['content-type'] || '';
+    if (!contentType.startsWith('image/')) {
+      return res.status(400).json({ message: 'url is not an image' });
+    }
+
+    const contentLength = Number(response.headers['content-length'] || 0);
+    if (contentLength && contentLength > MAX_IMAGE_BYTES) {
+      return res.status(400).json({ message: 'image too large' });
+    }
+
+    const buffer = Buffer.from(response.data);
+    if (buffer.length > MAX_IMAGE_BYTES) {
+      return res.status(400).json({ message: 'image too large' });
+    }
+
+    const assetsDir = storageManager.safeResolve(EMAIL_ASSETS_DIR);
+    await fs.promises.mkdir(assetsDir, { recursive: true });
+
+    const extFromMime = mimeToExt(contentType);
+    const extFromUrl = path.extname(parsed.pathname).toLowerCase();
+    const ext = ALLOWED_IMAGE_EXT.includes(extFromMime)
+      ? extFromMime
+      : ALLOWED_IMAGE_EXT.includes(extFromUrl)
+        ? extFromUrl
+        : '.png';
+
+    const baseName = sanitizeFilename(path.basename(parsed.pathname, path.extname(parsed.pathname)) || 'remote-image');
+    const filename = ensureUniqueName(assetsDir, `${baseName}${ext}`);
+    const targetPath = path.join(assetsDir, filename);
+    await fs.promises.writeFile(targetPath, buffer);
+
+    const publicPath = path.join(EMAIL_ASSETS_DIR, filename);
+    return res.json({
+      image: {
+        name: filename,
+        path: publicPath,
+        publicUrl: `/public/storage/image?path=${encodeURIComponent(publicPath)}`
+      }
+    });
+  } catch (err) {
+    return next(err);
   }
 });
 

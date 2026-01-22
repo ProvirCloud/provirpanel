@@ -24,6 +24,7 @@ const nginxRoutes = require('./routes/nginx');
 const nginxServersRoutes = require('./routes/nginx-servers');
 const gatewayRoutes = require('./routes/gateway');
 const securityAuditRoutes = require('./routes/security-audit');
+const publicStorageRoutes = require('./routes/public-storage');
 const authMiddleware = require('./middleware/auth');
 const errorHandler = require('./middleware/errorHandler');
 const MetricsCollector = require('./services/MetricsCollector');
@@ -53,6 +54,7 @@ app.use(cors({
 }));
 app.use(express.json());
 
+app.use('/public/storage', publicStorageRoutes);
 app.use('/auth', authRoutes);
 app.use('/api/metrics', authMiddleware, metricsRoutes);
 app.use('/api', authMiddleware, logsRoutes);
