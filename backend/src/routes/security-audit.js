@@ -1,0 +1,251 @@
+const express = require('express');
+const axios = require('axios');
+const tls = require('tls');
+
+const router = express.Router();
+
+const parseCookies = (setCookie) => {
+  if (!setCookie || setCookie.length === 0) {
+    return [];
+  }
+  return setCookie.map((entry) =>
+    entry
+      .split(';')
+      .map((part) => part.trim().toLowerCase())
+  );
+};
+
+const checkTlsNegotiation = (hostname, port) =>
+  new Promise((resolve) => {
+    const socket = tls.connect(
+      {
+        host: hostname,
+        port,
+        servername: hostname,
+        timeout: 5000
+      },
+      () => {
+        resolve(socket.getProtocol());
+        socket.end();
+      }
+    );
+    socket.on('error', () => resolve(null));
+    socket.on('timeout', () => {
+      socket.destroy();
+      resolve(null);
+    });
+  });
+
+const buildCheck = (id, title, status, recommendation, detail, weight) => ({
+  id,
+  title,
+  status,
+  recommendation,
+  detail,
+  weight
+});
+
+router.post('/audit', async (req, res) => {
+  const { url } = req.body || {};
+  if (!url) {
+    return res.status(400).json({ message: 'URL obrigatoria.' });
+  }
+
+  let target;
+  try {
+    target = new URL(url);
+  } catch (err) {
+    return res.status(400).json({ message: 'URL invalida.' });
+  }
+
+  if (!['http:', 'https:'].includes(target.protocol)) {
+    return res.status(400).json({ message: 'Somente http/https sao suportados.' });
+  }
+
+  try {
+    const response = await axios.get(target.toString(), {
+      maxRedirects: 5,
+      timeout: 8000,
+      validateStatus: () => true
+    });
+
+    const headers = Object.fromEntries(
+      Object.entries(response.headers || {}).map(([key, value]) => [key.toLowerCase(), value])
+    );
+    const cookies = parseCookies(headers['set-cookie']);
+    const hasCookies = cookies.length > 0;
+
+    const hsts = headers['strict-transport-security'];
+    const xfo = headers['x-frame-options'];
+    const xcto = headers['x-content-type-options'];
+    const csp = headers['content-security-policy'];
+    const referrer = headers['referrer-policy'];
+    const xss = headers['x-xss-protection'];
+    const cors = headers['access-control-allow-origin'];
+    const serverHeader = headers['server'];
+    const poweredBy = headers['x-powered-by'];
+
+    const httpsEnabled = target.protocol === 'https:';
+    const negotiatedProtocol = httpsEnabled
+      ? await checkTlsNegotiation(target.hostname, Number(target.port || 443))
+      : null;
+
+    const cookieSecure = hasCookies
+      ? cookies.every((attrs) => attrs.includes('secure'))
+      : false;
+    const cookieSameSite = hasCookies
+      ? cookies.every((attrs) => attrs.some((attr) => attr.startsWith('samesite=')))
+      : false;
+
+    const checks = [
+      buildCheck(
+        'hsts',
+        'HSTS (HTTP Strict Transport Security)',
+        hsts ? 'PASS' : 'FAIL',
+        'Configure: Strict-Transport-Security: max-age=31536000; includeSubDomains; preload',
+        hsts || 'Header ausente',
+        12
+      ),
+      buildCheck(
+        'x-frame-options',
+        'X-Frame-Options',
+        xfo ? 'PASS' : 'FAIL',
+        'Configure: X-Frame-Options: SAMEORIGIN',
+        xfo || 'Header ausente',
+        12
+      ),
+      buildCheck(
+        'x-content-type-options',
+        'X-Content-Type-Options',
+        xcto && String(xcto).toLowerCase() === 'nosniff' ? 'PASS' : 'FAIL',
+        'Configure: X-Content-Type-Options: nosniff',
+        xcto || 'Header ausente',
+        12
+      ),
+      buildCheck(
+        'csp',
+        'Content Security Policy (CSP)',
+        csp ? 'PASS' : 'FAIL',
+        'Implemente CSP robusta com script-src, style-src, img-src restritivos',
+        csp || 'Header ausente',
+        12
+      ),
+      buildCheck(
+        'referrer-policy',
+        'Referrer-Policy',
+        referrer && String(referrer).toLowerCase().includes('strict-origin-when-cross-origin')
+          ? 'PASS'
+          : 'WARNING',
+        'Configure: Referrer-Policy: strict-origin-when-cross-origin',
+        referrer || 'Header ausente',
+        5
+      ),
+      buildCheck(
+        'x-xss-protection',
+        'X-XSS-Protection',
+        xss && String(xss).toLowerCase().includes('1')
+          ? 'PASS'
+          : 'WARNING',
+        'Configure: X-XSS-Protection: 1; mode=block',
+        xss || 'Header ausente',
+        5
+      ),
+      buildCheck(
+        'cors',
+        'CORS (Cross-Origin Resource Sharing)',
+        cors && String(cors).trim() === '*'
+          ? 'WARNING'
+          : 'PASS',
+        'Se usar CORS, especifique apenas origens confiaveis',
+        cors || 'Nao configurado',
+        5
+      ),
+      buildCheck(
+        'https',
+        'HTTPS/TLS',
+        httpsEnabled ? 'PASS' : 'FAIL',
+        'Habilite HTTPS no painel e nos servicos',
+        httpsEnabled ? 'HTTPS ativo' : 'HTTP detectado',
+        5
+      ),
+      buildCheck(
+        'tls-min',
+        'Versao TLS Minima',
+        'WARNING',
+        'Garanta TLS 1.2+ no servidor',
+        negotiatedProtocol ? `Negociado: ${negotiatedProtocol}` : 'Nao detectado',
+        5
+      ),
+      buildCheck(
+        'cookies-secure',
+        'Secure Flag em Cookies',
+        hasCookies ? (cookieSecure ? 'PASS' : 'WARNING') : 'WARNING',
+        'Adicione Secure em cookies HTTPS',
+        hasCookies ? (cookieSecure ? 'OK' : 'Alguns cookies sem Secure') : 'Nenhum cookie',
+        5
+      ),
+      buildCheck(
+        'cookies-samesite',
+        'SameSite Flag em Cookies',
+        hasCookies ? (cookieSameSite ? 'PASS' : 'FAIL') : 'WARNING',
+        'Use SameSite=Lax ou SameSite=Strict',
+        hasCookies ? (cookieSameSite ? 'OK' : 'Alguns cookies sem SameSite') : 'Nenhum cookie',
+        12
+      ),
+      buildCheck(
+        'server-header',
+        'Divulgacao de Servidor (Server Header)',
+        serverHeader ? 'WARNING' : 'PASS',
+        'Remova o header Server para reduzir fingerprinting',
+        serverHeader || 'Header ausente',
+        5
+      ),
+      buildCheck(
+        'x-powered-by',
+        'X-Powered-By Header',
+        poweredBy ? 'WARNING' : 'PASS',
+        'Remova o header X-Powered-By',
+        poweredBy || 'Header ausente',
+        5
+      )
+    ];
+
+    const score = Math.max(
+      0,
+      Math.min(
+        100,
+        Math.round(
+          checks.reduce((total, check) => {
+            if (check.status === 'PASS') return total + check.weight;
+            if (check.status === 'WARNING') return total + Math.round(check.weight / 2);
+            return total;
+          }, 0)
+        )
+      )
+    );
+
+    const recommendations = checks
+      .filter((check) => check.status !== 'PASS')
+      .map((check) => ({
+        id: check.id,
+        title: check.title,
+        status: check.status,
+        recommendation: check.recommendation
+      }));
+
+    return res.json({
+      generatedAt: new Date().toISOString(),
+      url: target.toString(),
+      score,
+      checks,
+      recommendations
+    });
+  } catch (err) {
+    return res.status(500).json({
+      message: 'Falha ao auditar URL.',
+      detail: err.message
+    });
+  }
+});
+
+module.exports = router;
