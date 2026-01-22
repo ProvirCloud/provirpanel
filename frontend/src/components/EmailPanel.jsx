@@ -104,6 +104,7 @@ const buildHtml = (blocks = [], meta = {}) => {
   const brandName = meta.brandName || theme.brandName
   const title = meta.title || 'Mensagem'
   const subtitle = meta.subtitle || ''
+  const brandStyle = theme.brandStyle || 'logo'
 
   const header = `
     <table width="100%" cellpadding="0" cellspacing="0" style="background:${theme.backgroundColor};padding:32px 0;font-family:${theme.fontFamily};">
@@ -113,9 +114,14 @@ const buildHtml = (blocks = [], meta = {}) => {
             <table width="100%" cellpadding="0" cellspacing="0">
               <tr>
                 <td align="left" style="vertical-align:middle;">
-                  ${theme.logoUrl
-                    ? `<img src="${theme.logoUrl}" alt="${brandName}" style="max-height:38px;max-width:160px;display:block;" />`
-                    : `<span style="font-size:16px;font-weight:700;color:${theme.textColor};">${brandName}</span>`}
+                  ${brandStyle === 'logo'
+                    ? (theme.logoUrl
+                      ? `<img src="${theme.logoUrl}" alt="${brandName}" style="max-height:38px;max-width:160px;display:block;" />`
+                      : `<span style="font-size:16px;font-weight:700;color:${theme.textColor};">${brandName}</span>`)
+                    : `<div style="display:flex;align-items:center;gap:10px;">
+                        ${theme.logoUrl ? `<img src="${theme.logoUrl}" alt="${brandName}" style="height:32px;width:32px;border-radius:10px;object-fit:cover;border:1px solid ${theme.borderColor};" />` : ''}
+                        <span style="font-size:16px;font-weight:700;color:${theme.textColor};">${brandName}</span>
+                      </div>`}
                 </td>
                 <td align="right" style="vertical-align:middle;">
                   <span style="display:inline-block;background:${theme.accentColor};color:${theme.buttonTextColor};padding:6px 12px;border-radius:999px;font-size:11px;font-weight:700;letter-spacing:0.08em;">NOTIFICAÇÃO</span>
@@ -693,6 +699,14 @@ const resolvePublicUrl = (url) => {
   return url
 }
 
+const applyTemplateParams = (input, params = {}) => {
+  if (!input) return input
+  return String(input).replace(/\{\{\s*([A-Za-z0-9_.-]+)\s*\}\}/g, (match, key) => {
+    const value = params[key]
+    return value === undefined || value === null ? match : String(value)
+  })
+}
+
 const TEMPLATE_PRESETS = [
   {
     key: 'verification',
@@ -785,6 +799,7 @@ const TemplateModal = ({ data, onClose, onSave }) => {
     Array.isArray(data.blocks) ? data.blocks.map(hydrateBlock) : normalizedDesign.blocks || []
   )
   const [theme, setTheme] = useState(normalizedDesign.theme || { ...DEFAULT_THEME })
+  const [brandStyle, setBrandStyle] = useState(normalizedDesign.theme?.brandStyle || 'logo')
   const [htmlMode, setHtmlMode] = useState(data.htmlMode || false)
   const [html, setHtml] = useState(data.html || '')
   const [imageLibrary, setImageLibrary] = useState([])
@@ -793,11 +808,20 @@ const TemplateModal = ({ data, onClose, onSave }) => {
   const [imageUploading, setImageUploading] = useState(false)
   const [urlInputs, setUrlInputs] = useState({})
   const [logoUrlInput, setLogoUrlInput] = useState('')
+  const [brandStyle, setBrandStyle] = useState('logo')
+  const [paramsText, setParamsText] = useState('{"name":"Samuel","code":"123456"}')
 
   const preview = useMemo(() => {
     if (htmlMode) return html
-    return buildHtml(blocks, { title: name || 'Template', subtitle: preheader, theme })
-  }, [blocks, htmlMode, html, name, preheader, theme])
+    let params = {}
+    try {
+      params = paramsText ? JSON.parse(paramsText) : {}
+    } catch (err) {
+      params = {}
+    }
+    const raw = buildHtml(blocks, { title: name || 'Template', subtitle: preheader, theme })
+    return applyTemplateParams(raw, params)
+  }, [blocks, htmlMode, html, name, preheader, theme, paramsText])
 
   const addBlock = (type) => setBlocks((prev) => [...prev, buildBlock(type)])
 
@@ -861,6 +885,53 @@ const TemplateModal = ({ data, onClose, onSave }) => {
       }
     } catch (err) {
       setImageError('Falha ao enviar imagem')
+    } finally {
+      setImageUploading(false)
+    }
+  }
+
+  const handleGridImageUpload = async (file, index, side) => {
+    if (!file) return
+    setImageUploading(true)
+    try {
+      const formData = new FormData()
+      formData.append('file', file)
+      const response = await api.post('/storage/email-images/upload', formData, {
+        headers: { 'Content-Type': 'multipart/form-data' }
+      })
+      const image = response.data.image
+      await loadImageLibrary()
+      if (image?.publicUrl) {
+        updateBlock(index, side === 'left'
+          ? { leftImageUrl: resolvePublicUrl(image.publicUrl), leftImageAlt: image.name || '' }
+          : { rightImageUrl: resolvePublicUrl(image.publicUrl), rightImageAlt: image.name || '' }
+        )
+      }
+    } catch (err) {
+      setImageError('Falha ao enviar imagem')
+    } finally {
+      setImageUploading(false)
+    }
+  }
+
+  const handleGridImportUrl = async (index, side, blockId) => {
+    const key = `${blockId}-${side}`
+    const url = urlInputs[key]
+    if (!url) return
+    setImageUploading(true)
+    try {
+      const response = await api.post('/storage/email-images/from-url', { url })
+      const image = response.data.image
+      await loadImageLibrary()
+      if (image?.publicUrl) {
+        updateBlock(index, side === 'left'
+          ? { leftImageUrl: resolvePublicUrl(image.publicUrl), leftImageAlt: image.name || '' }
+          : { rightImageUrl: resolvePublicUrl(image.publicUrl), rightImageAlt: image.name || '' }
+        )
+      }
+      updateUrlInput(key, '')
+    } catch (err) {
+      setImageError('Falha ao importar imagem')
     } finally {
       setImageUploading(false)
     }
@@ -987,6 +1058,7 @@ const TemplateModal = ({ data, onClose, onSave }) => {
       const normalized = await normalizeTemplateImages()
       nextTheme = normalized.nextTheme
       nextBlocks = normalized.nextBlocks
+      nextTheme.brandStyle = brandStyle
     } catch (err) {
       setImageError('Falha ao salvar imagens no storage')
     } finally {
@@ -999,7 +1071,7 @@ const TemplateModal = ({ data, onClose, onSave }) => {
       subject,
       preheader,
       html: htmlMode ? html : preview,
-      design: htmlMode ? null : { blocks: nextBlocks, theme: nextTheme }
+      design: htmlMode ? null : { blocks: nextBlocks, theme: { ...nextTheme, brandStyle } }
     }
     onSave(payload)
   }
@@ -1043,11 +1115,33 @@ const TemplateModal = ({ data, onClose, onSave }) => {
               <span className="text-slate-200">{'{{request_id}}'}</span> e outras chaves enviadas via API em{' '}
               <span className="text-slate-200">params</span>.
             </div>
+            <div className="rounded-xl border border-slate-800 bg-slate-950 px-3 py-2 text-[10px] text-slate-400">
+              <p className="mb-2 text-[10px] text-slate-400">Preview com params (JSON)</p>
+              <textarea
+                className="h-20 w-full rounded-lg border border-slate-800 bg-slate-900 px-2 py-1 text-[11px] text-slate-200"
+                value={paramsText}
+                onChange={(e) => setParamsText(e.target.value)}
+              />
+            </div>
 
             {!htmlMode && (
               <div className="space-y-2">
                 <div className="rounded-xl border border-slate-800 bg-slate-950 p-3">
                   <p className="text-xs text-slate-400 mb-2">Identidade</p>
+                  <div className="mb-2 grid grid-cols-2 gap-2">
+                    <button
+                      className={`rounded-lg border px-2 py-1 text-[10px] ${brandStyle === 'logo' ? 'border-emerald-400 text-emerald-200' : 'border-slate-800 text-slate-300'}`}
+                      onClick={() => setBrandStyle('logo')}
+                    >
+                      Apenas logo
+                    </button>
+                    <button
+                      className={`rounded-lg border px-2 py-1 text-[10px] ${brandStyle === 'logo_text' ? 'border-emerald-400 text-emerald-200' : 'border-slate-800 text-slate-300'}`}
+                      onClick={() => setBrandStyle('logo_text')}
+                    >
+                      Logo + texto
+                    </button>
+                  </div>
                   <input
                     className="w-full rounded-lg border border-slate-800 bg-slate-900 px-2 py-1 text-xs"
                     placeholder="Marca / Nome"
@@ -1473,6 +1567,72 @@ const TemplateModal = ({ data, onClose, onSave }) => {
                             value={block.leftImageUrl || ''}
                             onChange={(e) => updateBlock(index, { leftImageUrl: e.target.value })}
                           />
+                          <div className="mt-2 rounded-lg border border-slate-800 bg-slate-900 p-2">
+                            <p className="text-[10px] text-slate-400 mb-2">Upload imagem esquerda</p>
+                            <input
+                              type="file"
+                              accept="image/*"
+                              className="w-full text-[10px] text-slate-300"
+                              onChange={(e) => handleGridImageUpload(e.target.files?.[0], index, 'left')}
+                            />
+                            <p className="mt-2 text-[10px] text-slate-500">
+                              {imageUploading ? 'Enviando...' : 'Salva no storage e usa no template.'}
+                            </p>
+                          </div>
+                          <div className="mt-2 rounded-lg border border-slate-800 bg-slate-900 p-2">
+                            <p className="text-[10px] text-slate-400 mb-2">Importar URL externa</p>
+                            <div className="flex gap-2">
+                              <input
+                                className="w-full rounded-lg border border-slate-800 bg-slate-950 px-2 py-1 text-xs"
+                                placeholder="https://..."
+                                value={urlInputs[`${block.id}-left`] || ''}
+                                onChange={(e) => updateUrlInput(`${block.id}-left`, e.target.value)}
+                              />
+                              <button
+                                className="rounded-lg border border-slate-800 bg-slate-950 px-2 py-1 text-[10px] text-slate-200"
+                                onClick={() => handleGridImportUrl(index, 'left', block.id)}
+                              >
+                                Salvar
+                              </button>
+                            </div>
+                          </div>
+                          <div className="mt-2 rounded-lg border border-slate-800 bg-slate-900 p-2">
+                            <div className="flex items-center justify-between">
+                              <p className="text-[10px] text-slate-400">Biblioteca (esquerda)</p>
+                              <button
+                                className="rounded-lg border border-slate-800 bg-slate-950 px-2 py-1 text-[10px] text-slate-200"
+                                onClick={loadImageLibrary}
+                              >
+                                Atualizar
+                              </button>
+                            </div>
+                            {imageError && <p className="mt-1 text-[10px] text-rose-300">{imageError}</p>}
+                            {imageLoading && <p className="mt-1 text-[10px] text-slate-500">Carregando...</p>}
+                            {!imageLoading && imageLibrary.length === 0 && (
+                              <p className="mt-1 text-[10px] text-slate-500">Nenhuma imagem no storage.</p>
+                            )}
+                            <div className="mt-2 grid grid-cols-3 gap-2">
+                              {imageLibrary.map((image) => (
+                                <button
+                                  key={`${image.path}-left`}
+                                  className="rounded-lg border border-slate-800 bg-slate-950 p-1 text-[10px] text-slate-200"
+                                  onClick={() =>
+                                    updateBlock(index, {
+                                      leftImageUrl: resolvePublicUrl(image.publicUrl),
+                                      leftImageAlt: image.name || ''
+                                    })
+                                  }
+                                >
+                                  <img
+                                    src={resolvePublicUrl(image.publicUrl)}
+                                    alt={image.name}
+                                    className="h-10 w-full rounded-md object-cover"
+                                  />
+                                  <span className="mt-1 block truncate">{image.name}</span>
+                                </button>
+                              ))}
+                            </div>
+                          </div>
                           <div className="mt-2 grid grid-cols-2 gap-2">
                             <input
                               type="number"
@@ -1495,6 +1655,72 @@ const TemplateModal = ({ data, onClose, onSave }) => {
                             value={block.rightImageUrl || ''}
                             onChange={(e) => updateBlock(index, { rightImageUrl: e.target.value })}
                           />
+                          <div className="mt-2 rounded-lg border border-slate-800 bg-slate-900 p-2">
+                            <p className="text-[10px] text-slate-400 mb-2">Upload imagem direita</p>
+                            <input
+                              type="file"
+                              accept="image/*"
+                              className="w-full text-[10px] text-slate-300"
+                              onChange={(e) => handleGridImageUpload(e.target.files?.[0], index, 'right')}
+                            />
+                            <p className="mt-2 text-[10px] text-slate-500">
+                              {imageUploading ? 'Enviando...' : 'Salva no storage e usa no template.'}
+                            </p>
+                          </div>
+                          <div className="mt-2 rounded-lg border border-slate-800 bg-slate-900 p-2">
+                            <p className="text-[10px] text-slate-400 mb-2">Importar URL externa</p>
+                            <div className="flex gap-2">
+                              <input
+                                className="w-full rounded-lg border border-slate-800 bg-slate-950 px-2 py-1 text-xs"
+                                placeholder="https://..."
+                                value={urlInputs[`${block.id}-right`] || ''}
+                                onChange={(e) => updateUrlInput(`${block.id}-right`, e.target.value)}
+                              />
+                              <button
+                                className="rounded-lg border border-slate-800 bg-slate-950 px-2 py-1 text-[10px] text-slate-200"
+                                onClick={() => handleGridImportUrl(index, 'right', block.id)}
+                              >
+                                Salvar
+                              </button>
+                            </div>
+                          </div>
+                          <div className="mt-2 rounded-lg border border-slate-800 bg-slate-900 p-2">
+                            <div className="flex items-center justify-between">
+                              <p className="text-[10px] text-slate-400">Biblioteca (direita)</p>
+                              <button
+                                className="rounded-lg border border-slate-800 bg-slate-950 px-2 py-1 text-[10px] text-slate-200"
+                                onClick={loadImageLibrary}
+                              >
+                                Atualizar
+                              </button>
+                            </div>
+                            {imageError && <p className="mt-1 text-[10px] text-rose-300">{imageError}</p>}
+                            {imageLoading && <p className="mt-1 text-[10px] text-slate-500">Carregando...</p>}
+                            {!imageLoading && imageLibrary.length === 0 && (
+                              <p className="mt-1 text-[10px] text-slate-500">Nenhuma imagem no storage.</p>
+                            )}
+                            <div className="mt-2 grid grid-cols-3 gap-2">
+                              {imageLibrary.map((image) => (
+                                <button
+                                  key={`${image.path}-right`}
+                                  className="rounded-lg border border-slate-800 bg-slate-950 p-1 text-[10px] text-slate-200"
+                                  onClick={() =>
+                                    updateBlock(index, {
+                                      rightImageUrl: resolvePublicUrl(image.publicUrl),
+                                      rightImageAlt: image.name || ''
+                                    })
+                                  }
+                                >
+                                  <img
+                                    src={resolvePublicUrl(image.publicUrl)}
+                                    alt={image.name}
+                                    className="h-10 w-full rounded-md object-cover"
+                                  />
+                                  <span className="mt-1 block truncate">{image.name}</span>
+                                </button>
+                              ))}
+                            </div>
+                          </div>
                           <div className="mt-2 grid grid-cols-2 gap-2">
                             <input
                               type="number"
