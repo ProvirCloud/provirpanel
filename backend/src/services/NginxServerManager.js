@@ -413,6 +413,12 @@ class NginxServerManager {
     const tlsMinVersionEnforced = server.tls_min_version_enforced ?? true;
     const verificationFile = process.env.GOOGLE_SITE_VERIFICATION_FILE || 'google4ce1fbbc8da57702.html';
     const verificationRoot = process.env.GOOGLE_SITE_VERIFICATION_ROOT || '/var/www/panel';
+    const verificationPath = `/${verificationFile}`.replace(/\/+/g, '/');
+    const hasVerificationRule = pathRules.some((rule) => {
+      if (!rule || !rule.path) return false;
+      const rulePath = String(rule.path).startsWith('/') ? String(rule.path) : `/${rule.path}`;
+      return rulePath.replace(/\/+/g, '/') === verificationPath;
+    });
 
     let config = '';
 
@@ -467,7 +473,7 @@ class NginxServerManager {
 `;
     }
 
-    if (verificationFile) {
+    if (verificationFile && !hasVerificationRule) {
       config += `
     location = /${verificationFile} {
         root ${verificationRoot};
@@ -565,8 +571,17 @@ class NginxServerManager {
           return_location: rule.return_location
         }));
 
-      const rootRule = normalizedPaths.find((rule) => rule.path === '/');
-      const nonRootRules = normalizedPaths.filter((rule) => rule.path !== '/');
+      const dedupedPaths = [];
+      const seenPaths = new Set();
+      for (const rule of normalizedPaths) {
+        const key = `${rule.modifier || ''}|${rule.path}`;
+        if (seenPaths.has(key)) continue;
+        seenPaths.add(key);
+        dedupedPaths.push(rule);
+      }
+
+      const rootRule = dedupedPaths.find((rule) => rule.path === '/');
+      const nonRootRules = dedupedPaths.filter((rule) => rule.path !== '/');
 
       if (nonRootRules.length > 0) {
         nonRootRules.forEach((rule) => {
@@ -1345,12 +1360,16 @@ ${buildProxyBlock(proxyTarget)}    }
       // Extract additional path rules
       const pathRules = [];
       const locationRegex = /location\s+([=~^~*]*)\s*([^\s{]+)\s*\{([\s\S]*?)\}/g;
+      const verificationFile = process.env.GOOGLE_SITE_VERIFICATION_FILE || 'google4ce1fbbc8da57702.html';
+      const verificationPath = `/${verificationFile}`.replace(/\/+/g, '/');
       let locationMatch;
       while ((locationMatch = locationRegex.exec(content)) !== null) {
         const modifier = locationMatch[1]?.trim() || '';
         const locPath = locationMatch[2]?.trim();
         const block = locationMatch[3] || '';
         if (!locPath) continue;
+        const normalizedLocPath = (locPath.startsWith('/') ? locPath : `/${locPath}`).replace(/\/+/g, '/');
+        if (normalizedLocPath === verificationPath) continue;
 
         const returnMatch = block.match(/return\s+(\d+)\s+([^;]+);/);
         if (returnMatch) {
