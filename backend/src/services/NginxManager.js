@@ -352,6 +352,17 @@ server {
         return { success: true, message: 'Certbot ja instalado', ...status };
       }
       const osInfo = this.getOsInfo();
+      if (
+        osInfo.platform !== 'darwin' &&
+        typeof process.getuid === 'function' &&
+        process.getuid() !== 0
+      ) {
+        return {
+          success: false,
+          error: 'Instalacao automatica do Certbot requer permissao root. Execute o install.sh como root ou instale manualmente.',
+          osInfo
+        };
+      }
       const logs = [];
       const steps = [];
 

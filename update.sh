@@ -7,12 +7,46 @@ log() {
   printf "\n[update] %s\n" "$1"
 }
 
+run_as_root() {
+  if [[ "${EUID}" -eq 0 ]]; then
+    "$@"
+  else
+    sudo "$@"
+  fi
+}
+
 ensure_env_var() {
   local file="$1"
   local key="$2"
   local value="$3"
   if [[ -f "${file}" ]] && ! grep -q "^${key}=" "${file}"; then
     echo "${key}=${value}" >> "${file}"
+  fi
+}
+
+install_certbot() {
+  log "Verificando Certbot"
+  if command -v certbot >/dev/null 2>&1; then
+    log "Certbot ja instalado"
+    return
+  fi
+
+  if command -v apt-get >/dev/null 2>&1; then
+    run_as_root apt-get update -y
+    run_as_root apt-get install -y certbot python3-certbot-nginx || run_as_root apt-get install -y certbot || true
+  elif command -v dnf >/dev/null 2>&1; then
+    run_as_root dnf install -y certbot python3-certbot-nginx || run_as_root dnf install -y certbot || true
+  elif command -v yum >/dev/null 2>&1; then
+    run_as_root yum install -y certbot python3-certbot-nginx || run_as_root yum install -y certbot || true
+  elif command -v zypper >/dev/null 2>&1; then
+    run_as_root zypper refresh
+    run_as_root zypper install -y certbot python3-certbot-nginx || run_as_root zypper install -y certbot || true
+  fi
+
+  if command -v certbot >/dev/null 2>&1; then
+    log "Certbot instalado com sucesso"
+  else
+    log "Aviso: nao foi possivel instalar o Certbot automaticamente"
   fi
 }
 
@@ -27,16 +61,18 @@ cd "${INSTALL_DIR}"
 
 log "Verificando dependencias de extracao"
 if command -v apt-get >/dev/null 2>&1; then
-  apt-get update -y
-  apt-get install -y unzip tar
+  run_as_root apt-get update -y
+  run_as_root apt-get install -y unzip tar
 elif command -v dnf >/dev/null 2>&1; then
-  dnf install -y unzip tar
+  run_as_root dnf install -y unzip tar
 elif command -v yum >/dev/null 2>&1; then
-  yum install -y unzip tar
+  run_as_root yum install -y unzip tar
 elif command -v zypper >/dev/null 2>&1; then
-  zypper refresh
-  zypper install -y unzip tar
+  run_as_root zypper refresh
+  run_as_root zypper install -y unzip tar
 fi
+
+install_certbot
 
 log "Verificando variaveis do Nginx no .env"
 ENV_FILE="backend/.env"
@@ -64,7 +100,7 @@ if [[ -f "${ENV_FILE}" ]]; then
   ensure_env_var "${ENV_FILE}" "GOOGLE_SITE_VERIFICATION_FILE" "google4ce1fbbc8da57702.html"
   ensure_env_var "${ENV_FILE}" "GOOGLE_SITE_VERIFICATION_ROOT" "/var/www/panel"
   ensure_env_var "${ENV_FILE}" "AUTH_COOKIE_NAME" "provirpanel_token"
-  ensure_env_var "${ENV_FILE}" "AUTH_COOKIE_SECURE" "true"
+  ensure_env_var "${ENV_FILE}" "AUTH_COOKIE_SECURE" "auto"
 else
   log "Aviso: backend/.env nao encontrado, pulando configuracao do Nginx"
 fi

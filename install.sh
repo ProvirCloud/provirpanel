@@ -134,6 +134,38 @@ install_postgres() {
   fi
 }
 
+install_certbot() {
+  log "Installing Certbot"
+  if command -v certbot >/dev/null 2>&1; then
+    log "Certbot already installed"
+    return
+  fi
+
+  if [[ "${PKG_MANAGER}" == "apt" ]]; then
+    if ! apt-get install -y certbot python3-certbot-nginx; then
+      apt-get install -y certbot || true
+    fi
+  elif [[ "${PKG_MANAGER}" == "dnf" ]]; then
+    if ! dnf install -y certbot python3-certbot-nginx; then
+      dnf install -y certbot || true
+    fi
+  elif [[ "${PKG_MANAGER}" == "yum" ]]; then
+    if ! yum install -y certbot python3-certbot-nginx; then
+      yum install -y certbot || true
+    fi
+  elif [[ "${PKG_MANAGER}" == "zypper" ]]; then
+    if ! zypper install -y certbot python3-certbot-nginx; then
+      zypper install -y certbot || true
+    fi
+  fi
+
+  if command -v certbot >/dev/null 2>&1; then
+    log "Certbot installed successfully"
+  else
+    log "Could not install Certbot automatically. Install it manually and rerun SSL setup."
+  fi
+}
+
 install_pm2() {
   log "Installing pm2"
   npm install -g pm2
@@ -461,6 +493,7 @@ main() {
   install_node
   install_docker
   install_postgres
+  install_certbot
   install_pm2
   create_user
   clone_repo
