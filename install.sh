@@ -238,7 +238,7 @@ CORS_ORIGIN=*
 JWT_SECRET=${jwt_secret}
 JWT_EXPIRES_IN=1d
 AUTH_COOKIE_NAME=provirpanel_token
-AUTH_COOKIE_SECURE=true
+AUTH_COOKIE_SECURE=auto
 CLOUDPAINEL_PROJECTS_DIR=${INSTALL_DIR}/projects
 DEFAULT_ADMIN_USER=${ADMIN_USER}
 DEFAULT_ADMIN_PASS=${ADMIN_PASS}
@@ -290,7 +290,7 @@ ENV
   ensure_env_var "${env_file}" "GOOGLE_SITE_VERIFICATION_FILE" "google4ce1fbbc8da57702.html"
   ensure_env_var "${env_file}" "GOOGLE_SITE_VERIFICATION_ROOT" "/var/www/panel"
   ensure_env_var "${env_file}" "AUTH_COOKIE_NAME" "provirpanel_token"
-  ensure_env_var "${env_file}" "AUTH_COOKIE_SECURE" "true"
+  ensure_env_var "${env_file}" "AUTH_COOKIE_SECURE" "auto"
 
   chown provirpanel:provirpanel "${env_file}"
   mkdir -p "${INSTALL_DIR}/projects"

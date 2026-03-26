@@ -14,9 +14,18 @@ const router = express.Router();
 const jwtSecret = process.env.JWT_SECRET || 'change-me';
 const jwtExpiresIn = process.env.JWT_EXPIRES_IN || '1d';
 const cookieName = process.env.AUTH_COOKIE_NAME || 'provirpanel_token';
-const cookieSecure =
-  process.env.AUTH_COOKIE_SECURE === 'true' ||
-  (process.env.NODE_ENV === 'production');
+const cookieSecureMode = (process.env.AUTH_COOKIE_SECURE || 'auto').toLowerCase();
+
+const isSecureRequest = (req) => {
+  const forwardedProto = (req.headers['x-forwarded-proto'] || '').toString().split(',')[0].trim();
+  return req.secure || forwardedProto === 'https';
+};
+
+const shouldUseSecureCookie = (req) => {
+  if (cookieSecureMode === 'true') return true;
+  if (cookieSecureMode === 'false') return false;
+  return isSecureRequest(req);
+};
 
 const parseExpiresToMs = (value) => {
   if (!value || typeof value !== 'string') return null;
@@ -33,7 +42,7 @@ const setAuthCookie = (req, res, token) => {
   const options = {
     httpOnly: true,
     sameSite: 'lax',
-    secure: cookieSecure || req.secure,
+    secure: shouldUseSecureCookie(req),
     path: '/'
   };
   if (maxAge) {
@@ -46,7 +55,7 @@ const clearAuthCookie = (req, res) => {
   res.clearCookie(cookieName, {
     httpOnly: true,
     sameSite: 'lax',
-    secure: cookieSecure || req.secure,
+    secure: shouldUseSecureCookie(req),
     path: '/'
   });
 };

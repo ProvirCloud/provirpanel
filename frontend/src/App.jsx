@@ -27,6 +27,7 @@ const App = () => {
         if (active) setAuthState({ loading: false, authenticated: true })
       })
       .catch(() => {
+        localStorage.removeItem('provirpanel-token')
         if (active) setAuthState({ loading: false, authenticated: false })
       })
     return () => {

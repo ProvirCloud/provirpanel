@@ -29,6 +29,9 @@ const LoginPage = () => {
           token: mfaCode,
           mfaSetupToken
         })
+        if (enableResponse.data?.token) {
+          localStorage.setItem('provirpanel-token', enableResponse.data.token)
+        }
         window.dispatchEvent(new Event('provirpanel-auth'))
         navigate('/')
         return
@@ -39,6 +42,9 @@ const LoginPage = () => {
           token: mfaCode,
           mfaToken
         })
+        if (response.data?.token) {
+          localStorage.setItem('provirpanel-token', response.data.token)
+        }
         window.dispatchEvent(new Event('provirpanel-auth'))
         navigate('/')
         return
@@ -54,6 +60,9 @@ const LoginPage = () => {
         setMfaRequired(true)
         setMfaToken(response.data.mfaToken || '')
         return
+      }
+      if (response.data?.token) {
+        localStorage.setItem('provirpanel-token', response.data.token)
       }
       window.dispatchEvent(new Event('provirpanel-auth'))
       navigate('/')
