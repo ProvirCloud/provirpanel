@@ -312,7 +312,7 @@ class DockerManager {
     }));
   }
 
-  async buildImage(imageName, contextPath, onProgress) {
+  async buildImage(imageName, contextPath, onProgress, options = {}) {
     try {
       if (onProgress) {
         onProgress(`🔨 Construindo imagem ${imageName} a partir de ${contextPath}...`);
@@ -322,7 +322,14 @@ class DockerManager {
       const tarStream = tarfs.pack(contextPath);
       
       return new Promise((resolve, reject) => {
-        this.docker.buildImage(tarStream, { t: imageName }, (err, stream) => {
+        const buildOptions = { t: imageName };
+        if (options.dockerfileName) {
+          buildOptions.dockerfile = options.dockerfileName;
+        }
+        if (options.buildArgs && typeof options.buildArgs === 'object') {
+          buildOptions.buildargs = options.buildArgs;
+        }
+        this.docker.buildImage(tarStream, buildOptions, (err, stream) => {
           if (err) {
             return reject(err);
           }

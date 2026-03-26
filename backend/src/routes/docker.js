@@ -801,6 +801,103 @@ router.post('/images/pull', async (req, res, next) => {
   }
 });
 
+const isSafeRelativePath = (value) => {
+  if (!value || typeof value !== 'string') return false;
+  const normalized = value.replace(/\\/g, '/').trim();
+  if (!normalized) return false;
+  if (normalized.startsWith('/') || normalized.includes('..')) return false;
+  return true;
+};
+
+router.post('/images/build', upload.single('contextArchive'), async (req, res, next) => {
+  const progress = [];
+  let tempDir = null;
+  try {
+    const imageName = String(req.body?.imageName || '').trim();
+    const dockerfileContent = String(req.body?.dockerfileContent || '').trim();
+    const dockerfilePathInput = String(req.body?.dockerfilePath || '').trim();
+    const buildArgsRaw = String(req.body?.buildArgs || '').trim();
+
+    if (!imageName) {
+      return res.status(400).json({ message: 'imageName is required' });
+    }
+
+    tempDir = fs.mkdtempSync(path.join(os.tmpdir(), 'provir-build-'));
+    progress.push(`📁 Contexto temporario criado: ${tempDir}`);
+
+    if (req.file?.path) {
+      progress.push(`📦 Extraindo arquivo ${req.file.originalname}...`);
+      await extractArchiveTo(req.file.path, tempDir, req.file.originalname);
+      fs.unlink(req.file.path, () => {});
+    }
+
+    let dockerfileName = 'Dockerfile';
+    if (dockerfileContent) {
+      if (dockerfilePathInput && !isSafeRelativePath(dockerfilePathInput)) {
+        return res.status(400).json({ message: 'dockerfilePath inválido' });
+      }
+      dockerfileName = dockerfilePathInput || 'Dockerfile';
+      const dockerfileFullPath = path.join(tempDir, dockerfileName);
+      fs.mkdirSync(path.dirname(dockerfileFullPath), { recursive: true });
+      fs.writeFileSync(dockerfileFullPath, dockerfileContent, 'utf8');
+      progress.push(`📝 Dockerfile salvo em ${dockerfileName}`);
+    } else if (dockerfilePathInput) {
+      if (!isSafeRelativePath(dockerfilePathInput)) {
+        return res.status(400).json({ message: 'dockerfilePath inválido' });
+      }
+      const dockerfileFullPath = path.join(tempDir, dockerfilePathInput);
+      if (!fs.existsSync(dockerfileFullPath)) {
+        return res.status(400).json({ message: `Dockerfile não encontrado no contexto: ${dockerfilePathInput}` });
+      }
+      dockerfileName = dockerfilePathInput;
+      progress.push(`📄 Usando Dockerfile existente: ${dockerfileName}`);
+    } else {
+      const defaultDockerfile = path.join(tempDir, 'Dockerfile');
+      if (!fs.existsSync(defaultDockerfile)) {
+        return res.status(400).json({
+          message: 'Envie dockerfileContent ou um contexto com arquivo Dockerfile'
+        });
+      }
+      progress.push('📄 Usando Dockerfile padrão do contexto');
+    }
+
+    let buildArgs = undefined;
+    if (buildArgsRaw) {
+      try {
+        const parsed = JSON.parse(buildArgsRaw);
+        if (parsed && typeof parsed === 'object' && !Array.isArray(parsed)) {
+          buildArgs = parsed;
+        }
+      } catch (err) {
+        return res.status(400).json({ message: 'buildArgs deve ser um JSON válido' });
+      }
+    }
+
+    progress.push(`🔨 Iniciando build da imagem ${imageName}...`);
+    await dockerManager.buildImage(
+      imageName,
+      tempDir,
+      (msg) => {
+        if (msg) progress.push(msg);
+      },
+      { dockerfileName, buildArgs }
+    );
+    progress.push(`✅ Build finalizado: ${imageName}`);
+
+    return res.json({ status: 'built', imageName, progress });
+  } catch (err) {
+    progress.push(`❌ Falha no build: ${err.message}`);
+    return res.status(500).json({ message: err.message || 'Build failed', progress });
+  } finally {
+    if (req.file?.path) {
+      fs.unlink(req.file.path, () => {});
+    }
+    if (tempDir) {
+      fs.rm(tempDir, { recursive: true, force: true }, () => {});
+    }
+  }
+});
+
 router.get('/services', async (req, res, next) => {
   try {
     const services = dockerManager.listServices();
@@ -870,16 +967,42 @@ router.post('/services', async (req, res, next) => {
     
     progress.push(`✅ Nome do serviço validado com sucesso`);
     
-    const template = SERVICE_TEMPLATES.find((t) => t.id === templateId);
+    let template = SERVICE_TEMPLATES.find((t) => t.id === templateId);
+    const isCustomImage = templateId === 'custom-image';
+    const customImageName = String(req.body?.imageName || '').trim();
+    const customContainerPort = Number(req.body?.containerPort || 0);
+
+    if (isCustomImage) {
+      if (!customImageName) {
+        progress.push('❌ imageName é obrigatório para template custom-image');
+        return res.status(400).json({ message: 'imageName is required', progress });
+      }
+      template = {
+        id: 'custom-image',
+        label: 'Imagem customizada',
+        image: customImageName,
+        tag: '',
+        defaultPort: customContainerPort > 0 ? customContainerPort : 8080,
+        containerPort: customContainerPort > 0 ? customContainerPort : 8080,
+        volumes: [],
+        env: [],
+        description: 'Container baseado em imagem customizada',
+        hasProjectOption: false,
+        hasManagerOption: false
+      };
+    }
+
     if (!template) {
       progress.push(`❌ Template ${templateId} não encontrado`);
       return res.status(400).json({ message: 'Template not found', progress });
     }
 
-    progress.push(`📦 Preparando container ${template.image}:${template.tag}...`);
+    const imageName = isCustomImage
+      ? customImageName
+      : `${template.image}:${template.tag}`;
+    progress.push(`📦 Preparando container ${imageName}...`);
     
     const serviceId = crypto.randomUUID();
-    const imageName = `${template.image}:${template.tag}`;
     const usedPorts = await dockerManager.getUsedPorts();
     const desiredPort = hostPort ? Number(hostPort) : null;
     

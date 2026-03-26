@@ -40,12 +40,23 @@ const formatLogChunk = (chunk, ts) => {
 }
 
 const presetImages = [
-  { name: 'PostgreSQL', image: 'postgres', tag: '16', description: 'Banco relacional' },
-  { name: 'MySQL', image: 'mysql', tag: '8', description: 'Banco relacional' },
-  { name: 'Redis', image: 'redis', tag: '7', description: 'Cache em memoria' },
-  { name: 'Nginx', image: 'nginx', tag: 'latest', description: 'Proxy reverso' },
-  { name: 'Node.js', image: 'node', tag: '20', description: 'Runtime JS' }
+  { id: 'postgres-db', name: 'PostgreSQL', image: 'postgres', tag: '16', description: 'Banco relacional' },
+  { id: 'mysql-db', name: 'MySQL', image: 'mysql', tag: '8', description: 'Banco relacional' },
+  { id: 'redis-cache', name: 'Redis', image: 'redis', tag: '7', description: 'Cache em memoria' },
+  { id: 'nginx-static', name: 'Nginx', image: 'nginx', tag: 'latest', description: 'Proxy reverso' },
+  { id: 'node-app', name: 'Node.js', image: 'node', tag: '20', description: 'Runtime JS' }
 ]
+
+const guessContainerPort = (imageTag) => {
+  const lower = String(imageTag || '').toLowerCase()
+  if (lower.includes('postgres')) return 5432
+  if (lower.includes('mysql') || lower.includes('mariadb')) return 3306
+  if (lower.includes('redis')) return 6379
+  if (lower.includes('nginx')) return 80
+  if (lower.includes('node')) return 3000
+  if (lower.includes('java') || lower.includes('spring') || lower.includes('openjdk') || lower.includes('temurin')) return 8080
+  return 8080
+}
 
 const Toast = ({ message, type, onClose }) => (
   <div
@@ -227,10 +238,14 @@ const DockerPanel = () => {
   const [postgresDatabases, setPostgresDatabases] = useState([])
   const [logsExpanded, setLogsExpanded] = useState(false)
   const [customImageName, setCustomImageName] = useState('')
+  const [buildImageName, setBuildImageName] = useState('')
+  const [buildDockerfile, setBuildDockerfile] = useState('')
+  const [buildContextArchive, setBuildContextArchive] = useState(null)
   const [registryAdvanced, setRegistryAdvanced] = useState(false)
   const [selectedRegistry, setSelectedRegistry] = useState('')
   const [registryDialog, setRegistryDialog] = useState(null)
   const [pullWorking, setPullWorking] = useState(false)
+  const [buildWorking, setBuildWorking] = useState(false)
   const socket = useMemo(() => createDockerLogsSocket(), [])
   const progressSocket = useMemo(() => createDockerProgressSocket(), [])
 
@@ -363,6 +378,7 @@ const DockerPanel = () => {
     setServiceForm({
       name: tpl?.label ? tpl.label.replace(/[^a-zA-Z0-9_-]/g, '-').toLowerCase() : 'service-1',
       hostPort: '', // Iniciar com porta vazia
+      containerPort: tpl?.containerPort || 80,
       volumes:
         tpl?.volumes?.map((v) => ({
           hostPath: v.hostPath || (baseDir ? `${baseDir}/${tpl?.label ? tpl.label.replace(/[^a-zA-Z0-9_-]/g, '-').toLowerCase() : 'service'}` : ''),
@@ -538,6 +554,39 @@ const DockerPanel = () => {
     }
   }
 
+  const buildCustomImage = async () => {
+    if (!buildImageName.trim()) {
+      addToast('Informe o nome da imagem para build', 'error')
+      return
+    }
+    if (!buildDockerfile.trim()) {
+      addToast('Cole o conteúdo do Dockerfile', 'error')
+      return
+    }
+
+    const formData = new FormData()
+    formData.append('imageName', buildImageName.trim())
+    formData.append('dockerfileContent', buildDockerfile)
+    if (buildContextArchive) {
+      formData.append('contextArchive', buildContextArchive)
+    }
+
+    setBuildWorking(true)
+    try {
+      const response = await api.post('/docker/images/build', formData, {
+        headers: { 'Content-Type': 'multipart/form-data' },
+        timeout: 300000
+      })
+      addToast(`Imagem construída: ${response.data?.imageName || buildImageName}`)
+      setBuildContextArchive(null)
+      loadImages()
+    } catch (err) {
+      addToast(err.response?.data?.message || 'Erro ao construir imagem', 'error')
+    } finally {
+      setBuildWorking(false)
+    }
+  }
+
   const saveRegistry = async (payload) => {
     try {
       await api.post('/docker/registries', payload)
@@ -646,6 +695,8 @@ const DockerPanel = () => {
     try {
       const response = await api.post('/docker/services', {
         templateId: template.id,
+        imageName: template.fullImageName,
+        containerPort: form.containerPort,
         name: form.name,
         hostPort: form.hostPort,
         volumeMappings: form.volumes,
@@ -758,7 +809,7 @@ const DockerPanel = () => {
                 value={serviceForm.hostPort}
                 onChange={(e) => setServiceForm((p) => ({ ...p, hostPort: e.target.value }))}
               />
-              <span className="text-slate-300 text-sm">→ {tpl?.containerPort || 80}</span>
+              <span className="text-slate-300 text-sm">→ {serviceForm.containerPort || tpl?.containerPort || 80}</span>
               {serviceForm.hostPort && portAvailability != null && (
                 <span
                   className={`rounded-full px-2 py-0.5 text-[10px] ${
@@ -795,6 +846,21 @@ const DockerPanel = () => {
                 : 'Deixe vazio para seleção automática de porta'
               }
             </p>
+            {tpl?.id === 'custom-image' && (
+              <div className="mt-2 flex items-center gap-2">
+                <label className="text-xs text-slate-400">Porta interna do container</label>
+                <input
+                  type="number"
+                  min="1"
+                  max="65535"
+                  className="w-28 rounded-xl border border-slate-800 bg-slate-950 px-3 py-2 text-sm text-white"
+                  value={serviceForm.containerPort}
+                  onChange={(e) =>
+                    setServiceForm((p) => ({ ...p, containerPort: Number(e.target.value || 0) || 80 }))
+                  }
+                />
+              </div>
+            )}
           </div>
 
           <div className="grid gap-2">
@@ -1235,7 +1301,7 @@ const DockerPanel = () => {
         {activeTab === 'containers' && (
           <button
             className="flex items-center gap-2 rounded-xl bg-blue-500 px-4 py-2 text-sm font-semibold text-slate-950 transition hover:bg-blue-400"
-            onClick={() => setWizard({ image: 'nginx', tag: 'latest' })}
+            onClick={() => setWizard({ id: 'nginx-static' })}
           >
             <Plus className="h-4 w-4" />
             New Container
@@ -1700,6 +1766,26 @@ const DockerPanel = () => {
                     </div>
                     <div className="flex gap-2">
                       <button
+                        className="rounded-xl border border-emerald-800 bg-emerald-950 px-3 py-2 text-xs text-emerald-200 hover:bg-emerald-900"
+                        onClick={() =>
+                          setWizard({
+                            id: 'custom-image',
+                            label: tag.replace(/[^a-zA-Z0-9_-]/g, '-').toLowerCase(),
+                            image: tag.split(':')[0] || tag,
+                            tag: tag.includes(':') ? tag.split(':').slice(1).join(':') : 'latest',
+                            fullImageName: tag,
+                            containerPort: guessContainerPort(tag),
+                            defaultPort: guessContainerPort(tag),
+                            volumes: [],
+                            env: [],
+                            hasProjectOption: false,
+                            hasManagerOption: false
+                          })
+                        }
+                      >
+                        Usar
+                      </button>
+                      <button
                         className="rounded-xl border border-blue-800 bg-blue-950 px-3 py-2 text-xs text-blue-200 hover:bg-blue-900"
                         onClick={() => updateImage(img.Id)}
                       >
@@ -1718,6 +1804,42 @@ const DockerPanel = () => {
               {images.length === 0 && (
                 <p className="text-sm text-slate-400">Nenhuma imagem encontrada</p>
               )}
+            </div>
+          </div>
+
+          <div className="rounded-2xl border border-slate-800 bg-slate-900/60 p-4">
+            <p className="text-xs uppercase tracking-[0.3em] text-slate-400 mb-3">Build de Dockerfile</p>
+            <div className="space-y-3">
+              <input
+                className="w-full rounded-xl border border-slate-800 bg-slate-950 px-3 py-2 text-sm text-white"
+                placeholder="Nome da imagem (ex: sockets-one:latest)"
+                value={buildImageName}
+                onChange={(e) => setBuildImageName(e.target.value)}
+              />
+              <textarea
+                className="h-56 w-full rounded-xl border border-slate-800 bg-slate-950 px-3 py-2 font-mono text-xs text-slate-200"
+                placeholder="Cole seu Dockerfile aqui"
+                value={buildDockerfile}
+                onChange={(e) => setBuildDockerfile(e.target.value)}
+              />
+              <div className="flex flex-col gap-2 lg:flex-row lg:items-center lg:justify-between">
+                <div>
+                  <label className="text-xs text-slate-300">Contexto do build (zip/tar opcional)</label>
+                  <input
+                    type="file"
+                    accept=".zip,.tar,.tar.gz,.tgz"
+                    className="mt-1 block rounded-xl border border-slate-800 bg-slate-950 px-3 py-2 text-xs text-slate-200 file:mr-3 file:rounded-lg file:border-0 file:bg-blue-500 file:px-3 file:py-1.5 file:text-xs file:font-semibold file:text-slate-950"
+                    onChange={(e) => setBuildContextArchive(e.target.files?.[0] || null)}
+                  />
+                </div>
+                <button
+                  className="rounded-xl bg-emerald-500 px-4 py-2 text-sm font-semibold text-slate-950 hover:bg-emerald-400 disabled:opacity-50"
+                  onClick={buildCustomImage}
+                  disabled={buildWorking}
+                >
+                  {buildWorking ? 'Construindo...' : 'Construir imagem'}
+                </button>
+              </div>
             </div>
           </div>
 
