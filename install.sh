@@ -416,10 +416,31 @@ configure_pm2() {
 create_admin_user() {
   log "Creating default admin user"
   sleep 2
-  curl -fsSL -X POST "http://localhost:${PANEL_PORT}/auth/register" \
+  local response_file
+  local http_code
+  response_file=$(mktemp)
+
+  http_code=$(curl -sS -o "${response_file}" -w "%{http_code}" -X POST "http://localhost:${PANEL_PORT}/auth/register" \
     -H "Content-Type: application/json" \
     -d "{\"username\":\"${ADMIN_USER}\",\"password\":\"${ADMIN_PASS}\"}" \
-    || true
+    || echo "000")
+
+  case "${http_code}" in
+    201)
+      log "Default admin user created"
+      ;;
+    403)
+      log "Default admin already exists (registration closed). Continuing."
+      ;;
+    000)
+      log "Backend not reachable while creating admin user. Continuing."
+      ;;
+    *)
+      log "Admin bootstrap returned HTTP ${http_code}. Response: $(tr '\n' ' ' < "${response_file}")"
+      ;;
+  esac
+
+  rm -f "${response_file}"
 }
 
 print_summary() {
