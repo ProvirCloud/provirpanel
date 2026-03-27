@@ -1578,9 +1578,6 @@ router.post('/services/:id/project-upload', upload.single('archive'), async (req
     if (!service) {
       return res.status(404).json({ message: 'Service not found' });
     }
-    if (service.templateId !== 'node-app' && service.templateId !== 'node') {
-      return res.status(400).json({ message: 'Upload disponível apenas para serviços Node.' });
-    }
     if (!req.file) {
       return res.status(400).json({ message: 'Nenhum arquivo enviado.' });
     }
@@ -1639,12 +1636,16 @@ router.post('/services/:id/project-upload', upload.single('archive'), async (req
       }
     }
 
+    const isNodeService =
+      service.templateId === 'node-app' ||
+      service.templateId === 'node' ||
+      String(service.image || '').startsWith('node');
     const hasUserCommand = !!service.command;
     let containerCmd = service.command || template.command;
-    if (!service.command) {
+    if (isNodeService && !service.command) {
       containerCmd = resolveNodeCommand(service.volumes) || containerCmd;
     }
-    if (!hasUserCommand) {
+    if (isNodeService && !hasUserCommand) {
       containerCmd = ensureCommandWorkdir(containerCmd, workdir);
       const uploadCmdBefore = stringifyCommand(containerCmd);
       containerCmd = ensureNpmDevDependencies(containerCmd);
@@ -1664,7 +1665,7 @@ router.post('/services/:id/project-upload', upload.single('archive'), async (req
     } else {
       appendServiceLog('warn', `WorkingDir nao resolvido para ${service.name}`);
     }
-    if (!hasUserCommand) {
+    if (isNodeService && !hasUserCommand) {
       const envBeforeUpload = env;
       env = ensureNextBuildEnv(env, containerCmd);
       if (env !== envBeforeUpload) {

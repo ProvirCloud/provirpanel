@@ -1018,42 +1018,40 @@ const DockerPanel = () => {
             ))}
           </div>
 
-          {(tpl?.id === 'node-app' || tpl?.id === 'node' || (tpl?.image || '').startsWith('node')) && (
-            <div className="grid gap-2">
-              <label className="text-xs text-slate-300">Importar arquivo .env</label>
-              <input
-                type="file"
-                className="rounded-xl border border-slate-800 bg-slate-950 px-3 py-2 text-sm text-slate-200 file:mr-3 file:rounded-lg file:border-0 file:bg-blue-500 file:px-3 file:py-1.5 file:text-xs file:font-semibold file:text-slate-950"
-                onChange={async (e) => {
-                  const file = e.target.files?.[0]
-                  if (!file) return
-                  setEnvImportStatus({ status: 'loading', message: 'Lendo arquivo...' })
-                  const parsed = await parseEnvFile(file)
-                  const currentEnvs = serviceForm?.envs || []
-                  const { merged, overwrites } = buildEnvMerge(currentEnvs, parsed)
-                  if (overwrites.length) {
-                    setEnvImportDialog({ target: 'create', merged, overwrites })
-                    setEnvImportStatus({ status: 'waiting', message: 'Aguardando confirmacao de sobrescrita.' })
-                  } else {
-                    setServiceForm((p) => ({ ...p, envs: merged }))
-                    setEnvImportStatus({ status: 'done', message: 'Variaveis importadas com sucesso.' })
-                  }
-                  e.target.value = ''
-                }}
-              />
-              {envImportStatus && (
-                <div className="flex items-center gap-2 text-xs text-slate-300">
-                  {envImportStatus.status === 'loading' && (
-                    <span className="inline-flex h-3 w-3 animate-spin rounded-full border-2 border-slate-500 border-t-blue-400" />
-                  )}
-                  <span>{envImportStatus.message}</span>
-                </div>
-              )}
-              <p className="text-xs text-slate-400">
-                As chaves do arquivo substituem as existentes com o mesmo nome.
-              </p>
-            </div>
-          )}
+          <div className="grid gap-2">
+            <label className="text-xs text-slate-300">Importar arquivo .env</label>
+            <input
+              type="file"
+              className="rounded-xl border border-slate-800 bg-slate-950 px-3 py-2 text-sm text-slate-200 file:mr-3 file:rounded-lg file:border-0 file:bg-blue-500 file:px-3 file:py-1.5 file:text-xs file:font-semibold file:text-slate-950"
+              onChange={async (e) => {
+                const file = e.target.files?.[0]
+                if (!file) return
+                setEnvImportStatus({ status: 'loading', message: 'Lendo arquivo...' })
+                const parsed = await parseEnvFile(file)
+                const currentEnvs = serviceForm?.envs || []
+                const { merged, overwrites } = buildEnvMerge(currentEnvs, parsed)
+                if (overwrites.length) {
+                  setEnvImportDialog({ target: 'create', merged, overwrites })
+                  setEnvImportStatus({ status: 'waiting', message: 'Aguardando confirmacao de sobrescrita.' })
+                } else {
+                  setServiceForm((p) => ({ ...p, envs: merged }))
+                  setEnvImportStatus({ status: 'done', message: 'Variaveis importadas com sucesso.' })
+                }
+                e.target.value = ''
+              }}
+            />
+            {envImportStatus && (
+              <div className="flex items-center gap-2 text-xs text-slate-300">
+                {envImportStatus.status === 'loading' && (
+                  <span className="inline-flex h-3 w-3 animate-spin rounded-full border-2 border-slate-500 border-t-blue-400" />
+                )}
+                <span>{envImportStatus.message}</span>
+              </div>
+            )}
+            <p className="text-xs text-slate-400">
+              As chaves do arquivo substituem as existentes com o mesmo nome.
+            </p>
+          </div>
 
           <div className="grid gap-2">
             <label className="text-xs text-slate-300">Comando de inicializacao</label>
@@ -1068,23 +1066,21 @@ const DockerPanel = () => {
             </p>
           </div>
 
-          {(tpl?.id === 'node-app' || tpl?.id === 'node' || (tpl?.image || '').startsWith('node')) && (
-            <div className="grid gap-2">
-              <label className="text-xs text-slate-300">Projeto compactado (zip/tar)</label>
-              <input
-                type="file"
-                accept=".zip,.tar,.tar.gz,.tgz"
-                className="rounded-xl border border-slate-800 bg-slate-950 px-3 py-2 text-sm text-slate-200 file:mr-3 file:rounded-lg file:border-0 file:bg-blue-500 file:px-3 file:py-1.5 file:text-xs file:font-semibold file:text-slate-950"
-                onChange={(e) => {
-                  const file = e.target.files?.[0] || null
-                  setServiceForm((p) => ({ ...p, projectArchive: file }))
-                }}
-              />
-              <p className="text-xs text-slate-400">
-                Envie um .zip/.tar para atualizar o codigo do projeto apos a criacao.
-              </p>
-            </div>
-          )}
+          <div className="grid gap-2">
+            <label className="text-xs text-slate-300">Projeto compactado (zip/tar)</label>
+            <input
+              type="file"
+              accept=".zip,.tar,.tar.gz,.tgz"
+              className="rounded-xl border border-slate-800 bg-slate-950 px-3 py-2 text-sm text-slate-200 file:mr-3 file:rounded-lg file:border-0 file:bg-blue-500 file:px-3 file:py-1.5 file:text-xs file:font-semibold file:text-slate-950"
+              onChange={(e) => {
+                const file = e.target.files?.[0] || null
+                setServiceForm((p) => ({ ...p, projectArchive: file }))
+              }}
+            />
+            <p className="text-xs text-slate-400">
+              Envie um .zip/.tar para publicar o codigo no volume do servico apos a criacao.
+            </p>
+          </div>
 
           <div className="rounded-xl border border-blue-500/30 bg-blue-500/5 p-4">
             <div className="flex items-center justify-between mb-3">
@@ -2059,8 +2055,7 @@ const DockerPanel = () => {
                   As chaves do arquivo substituem as existentes com o mesmo nome.
                 </p>
               </div>
-              {(editDialog.templateId === 'node-app' || editDialog.templateId === 'node' || (editDialog.image || '').startsWith('node')) && (
-                <div>
+              <div>
                   <label className="block text-sm text-slate-300 mb-2">Atualizar projeto (zip/tar)</label>
                   <div className="flex flex-col gap-2">
                     <input
@@ -2152,7 +2147,6 @@ const DockerPanel = () => {
                     </div>
                   </div>
                 </div>
-              )}
             </div>
             <div className="flex gap-2 mt-6">
               <button
