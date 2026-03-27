@@ -1238,14 +1238,15 @@ const ServerForm = ({ server, onSave, onApply, onCancel, dockerContainers, docke
     const service = getServiceForContainer(container)
     const scriptEnv = service?.envVars?.find((env) => env.key === 'SCRIPT_NAME')?.value
     const suggestedPath = normalizePath(scriptEnv || container.path || container.name)
+    const targetPort = Number(service?.hostPort || container.port || 3000)
     setPathRuleModal({
       mode: 'create',
       index: null,
       rule: {
         path: suggestedPath.endsWith('/') ? suggestedPath : `${suggestedPath}/`,
         type: 'proxy',
-        proxy_host: container.ip || 'localhost',
-        proxy_port: container.port || 3000,
+        proxy_host: '127.0.0.1',
+        proxy_port: targetPort,
         docker: true,
         docker_container: container.name
       }
@@ -1439,12 +1440,14 @@ const ServerForm = ({ server, onSave, onApply, onCancel, dockerContainers, docke
   }
 
   const useDockerContainer = (container) => {
+    const service = getServiceForContainer(container)
+    const targetPort = Number(service?.hostPort || container.port || 3000)
     if (form.server_type === 'balancer') {
       setForm({
         ...form,
         upstream_servers: [
           ...form.upstream_servers,
-          { ip: container.ip || 'localhost', port: String(container.port), weight: '1', backup: false }
+          { ip: '127.0.0.1', port: String(targetPort), weight: '1', backup: false }
         ]
       })
     } else if (form.server_type === 'proxy') {

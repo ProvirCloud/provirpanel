@@ -289,22 +289,22 @@ server {
     try {
       const DockerManager = require('./DockerManager');
       const docker = new DockerManager();
+      const services = docker.listServices();
       const containers = await docker.listContainers();
-      
-      const formatted = containers
-        .filter(c => c.State === 'running')
-        .map(c => {
-          const ports = c.Ports || [];
-          const mainPort = ports.find(p => p.PublicPort);
-          
-          return {
-            id: c.Id,
-            name: c.Names?.[0]?.replace('/', '') || c.Id.slice(0, 12),
-            port: mainPort?.PublicPort || null,
-            ip: mainPort?.IP || 'localhost',
-            image: c.Image
-          };
-        });
+      const runningById = new Map(containers.map((container) => [container.Id, container]));
+
+      // Expose only services managed by the panel to avoid routing to infrastructure nginx.
+      const formatted = services
+        .filter((service) => service && service.hostPort)
+        .filter((service) => !service.containerId || runningById.has(service.containerId))
+        .map((service) => ({
+          id: service.containerId || service.id,
+          name: service.name,
+          port: Number(service.hostPort),
+          ip: '127.0.0.1',
+          image: service.image || 'unknown'
+        }));
+
       return { containers: formatted, error: null };
     } catch (err) {
       return {
