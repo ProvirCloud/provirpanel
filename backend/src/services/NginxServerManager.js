@@ -612,6 +612,9 @@ class NginxServerManager {
           let pathSuffix = '';
           if (rule.proxy_pass_path) {
             pathSuffix = rule.proxy_pass_path.startsWith('/') ? rule.proxy_pass_path : `/${rule.proxy_pass_path}`;
+          } else if (rule.path !== '/' && rule.path.endsWith('/')) {
+            // For prefix routes like /legacy-admin/, default to stripping the prefix upstream.
+            pathSuffix = '/';
           }
           const target = `http://${rule.proxy_host}:${rule.proxy_port}${pathSuffix}`;
           const rewriteFlag = rule.rewrite_flag || 'break';
