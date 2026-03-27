@@ -364,24 +364,32 @@ const ensureExtractor = async (command, hint) => {
   }
 };
 
-const flattenSingleRootDir = (targetDir) => {
+const cleanDirectory = (targetDir) => {
+  if (!targetDir || !fs.existsSync(targetDir)) return;
+  const entries = fs.readdirSync(targetDir);
+  entries.forEach((entry) => {
+    fs.rmSync(path.join(targetDir, entry), { recursive: true, force: true });
+  });
+};
+
+const flattenSingleRootDir = (targetDir, maxPasses = 5) => {
   try {
-    const entries = fs.readdirSync(targetDir, { withFileTypes: true });
-    const ignoredNames = new Set(['__MACOSX']);
-    const visibleEntries = entries.filter((entry) => {
-      if (ignoredNames.has(entry.name)) return false;
-      if (entry.isFile() && entry.name === '.DS_Store') return false;
-      return true;
-    });
-    const dirs = visibleEntries.filter((e) => e.isDirectory());
-    const files = visibleEntries.filter((e) => e.isFile());
-    if (files.length > 0 || dirs.length !== 1) {
-      return;
-    }
-    const rootDir = path.join(targetDir, dirs[0].name);
-    const rootPackage = path.join(targetDir, 'package.json');
-    const nestedPackage = path.join(rootDir, 'package.json');
-    if (!fs.existsSync(rootPackage) && fs.existsSync(nestedPackage)) {
+    let pass = 0;
+    while (pass < maxPasses) {
+      pass += 1;
+      const entries = fs.readdirSync(targetDir, { withFileTypes: true });
+      const ignoredNames = new Set(['__MACOSX']);
+      const visibleEntries = entries.filter((entry) => {
+        if (ignoredNames.has(entry.name)) return false;
+        if (entry.isFile() && entry.name === '.DS_Store') return false;
+        return true;
+      });
+      const dirs = visibleEntries.filter((e) => e.isDirectory());
+      const files = visibleEntries.filter((e) => e.isFile());
+      if (files.length > 0 || dirs.length !== 1) {
+        break;
+      }
+      const rootDir = path.join(targetDir, dirs[0].name);
       const nestedEntries = fs.readdirSync(rootDir);
       nestedEntries.forEach((entry) => {
         fs.renameSync(path.join(rootDir, entry), path.join(targetDir, entry));
@@ -1661,6 +1669,8 @@ router.post('/services/:id/project-upload', upload.single('archive'), async (req
     }
 
     fs.mkdirSync(projectDir, { recursive: true });
+    // Replace published project content to avoid stale files in static deployments.
+    cleanDirectory(projectDir);
     const archivePath = req.file.path;
     try {
       appendServiceLog('info', `Extraindo arquivo ${req.file.originalname} em ${projectDir}`);
