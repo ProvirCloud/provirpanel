@@ -2025,42 +2025,40 @@ const DockerPanel = () => {
                   </button>
                 </div>
               </div>
-              {(editDialog.templateId === 'node-app' || editDialog.templateId === 'node' || (editDialog.image || '').startsWith('node')) && (
-                <div>
-                  <label className="block text-sm text-slate-300 mb-2">Importar arquivo .env</label>
-                  <input
-                    type="file"
-                    className="w-full rounded-xl border border-slate-700 bg-slate-800 px-3 py-2 text-sm text-slate-200 file:mr-3 file:rounded-lg file:border-0 file:bg-blue-500 file:px-3 file:py-1.5 file:text-xs file:font-semibold file:text-slate-950"
-                    onChange={async (e) => {
-                      const file = e.target.files?.[0]
-                      if (!file) return
-                      setEnvImportStatus({ status: 'loading', message: 'Lendo arquivo...' })
-                      const parsed = await parseEnvFile(file)
-                      const currentEnvs = editDialog?.newEnvVars || []
-                      const { merged, overwrites } = buildEnvMerge(currentEnvs, parsed)
-                      if (overwrites.length) {
-                        setEnvImportDialog({ target: 'edit', merged, overwrites })
-                        setEnvImportStatus({ status: 'waiting', message: 'Aguardando confirmacao de sobrescrita.' })
-                      } else {
-                        setEditDialog((prev) => ({ ...prev, newEnvVars: merged }))
-                        setEnvImportStatus({ status: 'done', message: 'Variaveis importadas com sucesso.' })
-                      }
-                      e.target.value = ''
-                    }}
-                  />
-                  {envImportStatus && (
-                    <div className="flex items-center gap-2 text-xs text-slate-300 mt-2">
-                      {envImportStatus.status === 'loading' && (
-                        <span className="inline-flex h-3 w-3 animate-spin rounded-full border-2 border-slate-500 border-t-blue-400" />
-                      )}
-                      <span>{envImportStatus.message}</span>
-                    </div>
-                  )}
-                  <p className="text-xs text-slate-400 mt-1">
-                    As chaves do arquivo substituem as existentes com o mesmo nome.
-                  </p>
-                </div>
-              )}
+              <div>
+                <label className="block text-sm text-slate-300 mb-2">Importar arquivo .env</label>
+                <input
+                  type="file"
+                  className="w-full rounded-xl border border-slate-700 bg-slate-800 px-3 py-2 text-sm text-slate-200 file:mr-3 file:rounded-lg file:border-0 file:bg-blue-500 file:px-3 file:py-1.5 file:text-xs file:font-semibold file:text-slate-950"
+                  onChange={async (e) => {
+                    const file = e.target.files?.[0]
+                    if (!file) return
+                    setEnvImportStatus({ status: 'loading', message: 'Lendo arquivo...' })
+                    const parsed = await parseEnvFile(file)
+                    const currentEnvs = editDialog?.newEnvVars || []
+                    const { merged, overwrites } = buildEnvMerge(currentEnvs, parsed)
+                    if (overwrites.length) {
+                      setEnvImportDialog({ target: 'edit', merged, overwrites })
+                      setEnvImportStatus({ status: 'waiting', message: 'Aguardando confirmacao de sobrescrita.' })
+                    } else {
+                      setEditDialog((prev) => ({ ...prev, newEnvVars: merged }))
+                      setEnvImportStatus({ status: 'done', message: 'Variaveis importadas com sucesso.' })
+                    }
+                    e.target.value = ''
+                  }}
+                />
+                {envImportStatus && (
+                  <div className="flex items-center gap-2 text-xs text-slate-300 mt-2">
+                    {envImportStatus.status === 'loading' && (
+                      <span className="inline-flex h-3 w-3 animate-spin rounded-full border-2 border-slate-500 border-t-blue-400" />
+                    )}
+                    <span>{envImportStatus.message}</span>
+                  </div>
+                )}
+                <p className="text-xs text-slate-400 mt-1">
+                  As chaves do arquivo substituem as existentes com o mesmo nome.
+                </p>
+              </div>
               {(editDialog.templateId === 'node-app' || editDialog.templateId === 'node' || (editDialog.image || '').startsWith('node')) && (
                 <div>
                   <label className="block text-sm text-slate-300 mb-2">Atualizar projeto (zip/tar)</label>
