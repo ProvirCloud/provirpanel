@@ -179,6 +179,83 @@ const mergeEnvVars = (incoming = [], existing = []) => {
   });
 };
 
+const ENV_REFERENCE_PATTERN = /\$\{([A-Za-z_][A-Za-z0-9_]*)\}|\$([A-Za-z_][A-Za-z0-9_]*)/g;
+
+const parseEnvEntries = (content = '') =>
+  String(content)
+    .split(/\r?\n/)
+    .map((line) => line.trim())
+    .filter((line) => line && !line.startsWith('#'))
+    .map((line) => {
+      const normalizedLine = line.startsWith('export ') ? line.slice(7).trim() : line;
+      const idx = normalizedLine.indexOf('=');
+      if (idx <= 0) return null;
+      const key = normalizedLine.slice(0, idx).trim();
+      let value = normalizedLine.slice(idx + 1).trim();
+      if (
+        (value.startsWith('"') && value.endsWith('"')) ||
+        (value.startsWith("'") && value.endsWith("'"))
+      ) {
+        value = value.slice(1, -1);
+      }
+      return key ? { key, value, secret: false } : null;
+    })
+    .filter(Boolean);
+
+const readProjectEnvVars = (projectPath) => {
+  if (!projectPath?.hostPath) return [];
+  const filePath = path.join(projectPath.hostPath, '.env');
+  if (!fs.existsSync(filePath)) return [];
+  try {
+    const content = fs.readFileSync(filePath, 'utf8');
+    return parseEnvEntries(content);
+  } catch (err) {
+    return [];
+  }
+};
+
+const mergeEnvEntries = (...groups) => {
+  const map = new Map();
+  groups
+    .flat()
+    .forEach((entry) => {
+      if (!entry || !entry.key) return;
+      map.set(entry.key, {
+        key: entry.key,
+        value: entry.value ?? '',
+        secret: !!entry.secret
+      });
+    });
+  return Array.from(map.values());
+};
+
+const resolveEnvValue = (key, rawValue, lookup = {}) => {
+  let value = rawValue ?? '';
+  if (value === '' && Object.prototype.hasOwnProperty.call(process.env, key)) {
+    value = process.env[key] ?? '';
+  }
+  const text = String(value);
+  return text.replace(ENV_REFERENCE_PATTERN, (token, bracketed, simple) => {
+    const refKey = bracketed || simple;
+    if (Object.prototype.hasOwnProperty.call(lookup, refKey)) {
+      return lookup[refKey];
+    }
+    if (Object.prototype.hasOwnProperty.call(process.env, refKey)) {
+      return process.env[refKey] ?? '';
+    }
+    return token;
+  });
+};
+
+const buildContainerEnv = ({ templateEnv = [], explicitEnvVars = [], projectPath = null }) => {
+  const envFromFile = readProjectEnvVars(projectPath);
+  const merged = mergeEnvEntries(templateEnv, envFromFile, explicitEnvVars);
+  const rawLookup = Object.fromEntries(
+    merged.map((entry) => [entry.key, String(entry.value ?? '')])
+  );
+  return merged.map((entry) => `${entry.key}=${resolveEnvValue(entry.key, entry.value, rawLookup)}`);
+};
+
 const sanitizeServiceForClient = (service) => ({
   ...service,
   networkName: service.networkName || 'bridge',
@@ -369,18 +446,10 @@ const runContainerWithRetry = async (image, config, name) => {
 
 const writeEnvFile = (projectPath, envVars = [], templateEnv = []) => {
   if (!projectPath?.hostPath) return;
-  const envLines = [
-    ...templateEnv.map((e) => `${e.key}=${e.value ?? ''}`),
-    ...envVars.map((e) => `${e.key}=${e.value ?? ''}`)
-  ];
-  const unique = new Map();
-  envLines.forEach((line) => {
-    const idx = line.indexOf('=');
-    if (idx === -1) return;
-    const key = line.slice(0, idx);
-    unique.set(key, line);
-  });
-  const content = Array.from(unique.values()).join('\n') + '\n';
+  const existingEnv = readProjectEnvVars(projectPath);
+  const merged = mergeEnvEntries(templateEnv, existingEnv, envVars);
+  if (!merged.length) return;
+  const content = merged.map((entry) => `${entry.key}=${entry.value ?? ''}`).join('\n') + '\n';
   fs.writeFileSync(path.join(projectPath.hostPath, '.env'), content, 'utf8');
 };
 
@@ -1089,10 +1158,6 @@ router.post('/services', async (req, res, next) => {
     }
 
     const normalizedEnvVars = normalizeEnvVars(envVars);
-    let env = [
-      ...template.env.map((e) => `${e.key}=${e.value}`),
-      ...normalizedEnvVars.map((e) => `${e.key}=${e.value}`)
-    ];
 
     const projectPath = resolveProjectPathFromVolume(finalizedVolumes);
     if (projectPath?.hostPath) {
@@ -1101,6 +1166,11 @@ router.post('/services', async (req, res, next) => {
     } else {
       progress.push('⚠️ Nao foi possivel resolver o diretorio do projeto para gerar .env');
     }
+    let env = buildContainerEnv({
+      templateEnv: template.env,
+      explicitEnvVars: normalizedEnvVars,
+      projectPath
+    });
 
     let finalImageName = imageName;
     const normalizedCommand = normalizeCommand(command);
@@ -1440,10 +1510,6 @@ router.put('/services/:id', async (req, res, next) => {
     }
     
     const resolvedEnvVars = mergeEnvVars(envVars, service.envVars || []);
-    let env = [
-      ...template.env.map((e) => `${e.key}=${e.value}`),
-      ...resolvedEnvVars.map((e) => `${e.key}=${e.value}`)
-    ];
     if (projectPath?.hostPath) {
       writeEnvFile(projectPath, resolvedEnvVars, template.env);
       appendServiceLog('info', `Arquivo .env atualizado em ${projectPath.hostPath}`);
@@ -1465,6 +1531,11 @@ router.put('/services/:id', async (req, res, next) => {
         });
       }
     }
+    let env = buildContainerEnv({
+      templateEnv: template.env,
+      explicitEnvVars: resolvedEnvVars,
+      projectPath
+    });
 
     const normalizedCommand = normalizeCommand(command);
     const hasUserCommand = !!normalizedCommand;
@@ -1610,10 +1681,6 @@ router.post('/services/:id/project-upload', upload.single('archive'), async (req
     }
 
     const resolvedEnvVars = service.envVars || [];
-    let env = [
-      ...template.env.map((e) => `${e.key}=${e.value}`),
-      ...resolvedEnvVars.map((e) => `${e.key}=${e.value}`)
-    ];
     if (projectPath?.hostPath) {
       writeEnvFile(projectPath, resolvedEnvVars, template.env);
       appendServiceLog('info', `Arquivo .env atualizado em ${projectPath.hostPath}`);
@@ -1635,6 +1702,11 @@ router.post('/services/:id/project-upload', upload.single('archive'), async (req
         });
       }
     }
+    let env = buildContainerEnv({
+      templateEnv: template.env,
+      explicitEnvVars: resolvedEnvVars,
+      projectPath
+    });
 
     const isNodeService =
       service.templateId === 'node-app' ||
