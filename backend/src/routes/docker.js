@@ -401,6 +401,48 @@ const flattenSingleRootDir = (targetDir, maxPasses = 5) => {
   }
 };
 
+const findIndexDir = (rootDir, maxDepth = 4) => {
+  const walk = (dir, depth) => {
+    if (fs.existsSync(path.join(dir, 'index.html'))) return dir;
+    if (depth <= 0) return null;
+    let entries = [];
+    try {
+      entries = fs.readdirSync(dir, { withFileTypes: true });
+    } catch (err) {
+      return null;
+    }
+    for (const entry of entries) {
+      if (!entry.isDirectory()) continue;
+      if (entry.name === '__MACOSX' || entry.name === 'node_modules') continue;
+      const found = walk(path.join(dir, entry.name), depth - 1);
+      if (found) return found;
+    }
+    return null;
+  };
+  return walk(rootDir, maxDepth);
+};
+
+const normalizeStaticSiteRoot = (projectDir) => {
+  if (fs.existsSync(path.join(projectDir, 'index.html'))) {
+    return true;
+  }
+
+  const indexDir = findIndexDir(projectDir, 5);
+  if (!indexDir) return false;
+  if (path.resolve(indexDir) === path.resolve(projectDir)) return true;
+
+  const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), 'provir-static-'));
+  fs.readdirSync(indexDir).forEach((entry) => {
+    fs.renameSync(path.join(indexDir, entry), path.join(tempDir, entry));
+  });
+  cleanDirectory(projectDir);
+  fs.readdirSync(tempDir).forEach((entry) => {
+    fs.renameSync(path.join(tempDir, entry), path.join(projectDir, entry));
+  });
+  fs.rmdirSync(tempDir);
+  return fs.existsSync(path.join(projectDir, 'index.html'));
+};
+
 const extractArchiveTo = async (archivePath, targetDir, archiveName) => {
   const lower = (archiveName || archivePath).toLowerCase();
   if (lower.endsWith('.zip')) {
@@ -1679,6 +1721,19 @@ router.post('/services/:id/project-upload', upload.single('archive'), async (req
       fs.unlink(archivePath, () => {});
     }
 
+    const isNginxStaticService =
+      service.templateId === 'nginx-static' ||
+      String(service.image || '').startsWith('nginx');
+    if (isNginxStaticService) {
+      const normalized = normalizeStaticSiteRoot(projectDir);
+      if (!normalized) {
+        appendServiceLog('error', `Upload sem index.html para serviço estático ${service.name}`);
+        return res.status(400).json({
+          message: 'Arquivo inválido para site estático: index.html não encontrado no .zip/.tar.'
+        });
+      }
+    }
+
     const template =
       SERVICE_TEMPLATES.find((t) => t.id === service.templateId) ||
       { env: [], workdir: null, command: null };
@@ -1908,6 +1963,11 @@ const SERVICE_TEMPLATES = [
       { hostPath: '', containerPath: '/usr/share/nginx/html' }
     ],
     env: [],
+    command: [
+      'sh',
+      '-c',
+      'printf "server { listen 80; server_name _; root /usr/share/nginx/html; index index.html; location / { try_files $uri $uri/ /index.html; } }" > /etc/nginx/conf.d/default.conf && nginx -g "daemon off;"'
+    ],
     description: 'Serve arquivos estáticos rapidamente'
   },
   {
