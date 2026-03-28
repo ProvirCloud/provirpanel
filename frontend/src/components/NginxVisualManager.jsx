@@ -260,6 +260,10 @@ const PathRuleModal = ({ initialRule, onSave, onCancel }) => {
     modifier: '',
     proxy_host: 'localhost',
     proxy_port: 3000,
+    proxy_pass_path: '',
+    helper_subpath_app: false,
+    forward_prefix_enabled: false,
+    fix_root_redirect_enabled: false,
     rewrite_enabled: false,
     rewrite_from: '',
     rewrite_to: '',
@@ -275,6 +279,22 @@ const PathRuleModal = ({ initialRule, onSave, onCancel }) => {
   const isProxy = !rule.type || rule.type === 'proxy'
   const isStatic = rule.type === 'static'
   const isRedirect = rule.type === 'redirect'
+  const normalizePath = (value) => (value && value.startsWith('/') ? value : `/${value || ''}`)
+
+  const handleSave = () => {
+    const nextRule = { ...rule }
+    if (isProxy && nextRule.helper_subpath_app) {
+      const normalized = normalizePath(nextRule.path || '/app')
+      nextRule.path = normalized.endsWith('/') ? normalized : `${normalized}/`
+      nextRule.proxy_pass_path = nextRule.proxy_pass_path || '/'
+      nextRule.forward_prefix_enabled = true
+      nextRule.fix_root_redirect_enabled = true
+    }
+    if (!nextRule.proxy_pass_path) {
+      delete nextRule.proxy_pass_path
+    }
+    onSave(nextRule)
+  }
 
   return (
     <div className="fixed inset-0 z-40 flex items-center justify-center bg-black/60 p-4">
@@ -335,6 +355,40 @@ const PathRuleModal = ({ initialRule, onSave, onCancel }) => {
                   value={rule.proxy_port}
                   onChange={(e) => setRule({ ...rule, proxy_port: parseInt(e.target.value, 10) || 3000 })}
                   placeholder="3000"
+                />
+              </div>
+              <div className="col-span-2 rounded-xl border border-blue-800/70 bg-blue-950/30 p-3">
+                <label className="flex items-center gap-2 text-sm font-medium text-blue-100">
+                  <input
+                    type="checkbox"
+                    checked={Boolean(rule.helper_subpath_app)}
+                    onChange={(e) => {
+                      const enabled = e.target.checked
+                      const normalized = normalizePath(rule.path || '/app')
+                      setRule({
+                        ...rule,
+                        path: enabled && !normalized.endsWith('/') ? `${normalized}/` : normalized,
+                        helper_subpath_app: enabled,
+                        proxy_pass_path: enabled ? (rule.proxy_pass_path || '/') : rule.proxy_pass_path,
+                        forward_prefix_enabled: enabled || Boolean(rule.forward_prefix_enabled),
+                        fix_root_redirect_enabled: enabled || Boolean(rule.fix_root_redirect_enabled)
+                      })
+                    }}
+                  />
+                  Aplicativo em subpasta (recomendado para Angular/React)
+                </label>
+                <p className="mt-2 text-xs text-blue-200/90">
+                  Ativa ajustes automáticos para rotas como <span className="font-mono">/legacy-admin/</span>:
+                  envia prefixo para o app e corrige redirecionamentos para a mesma subpasta.
+                </p>
+              </div>
+              <div className="col-span-2">
+                <label className="text-xs text-slate-400">Destino interno no app (opcional)</label>
+                <input
+                  className="mt-1 w-full rounded-xl border border-slate-800 bg-slate-950 px-3 py-2 text-sm"
+                  value={rule.proxy_pass_path || ''}
+                  onChange={(e) => setRule({ ...rule, proxy_pass_path: e.target.value })}
+                  placeholder="/ (recomendado para app em subpasta)"
                 />
               </div>
               <div className="col-span-2 flex items-center gap-2">
@@ -437,7 +491,7 @@ const PathRuleModal = ({ initialRule, onSave, onCancel }) => {
         </div>
         <div className="mt-5 flex gap-2 justify-end">
           <button
-            onClick={() => onSave(rule)}
+            onClick={handleSave}
             className="rounded-xl bg-blue-500 px-4 py-2 text-xs font-semibold text-slate-950"
           >
             Salvar
@@ -1405,7 +1459,8 @@ const ServerForm = ({ server, onSave, onApply, onCancel, dockerContainers, docke
     }
     const dockerLabel = rule.docker_container ? ` (${rule.docker_container})` : ''
     const rewriteLabel = rule.rewrite_enabled ? ' rewrite' : ''
-    return `${rule.path} -> ${rule.proxy_host || 'localhost'}:${rule.proxy_port || 3000}${dockerLabel}${rewriteLabel}`
+    const helperLabel = rule.helper_subpath_app ? ' subpasta' : ''
+    return `${rule.path} -> ${rule.proxy_host || 'localhost'}:${rule.proxy_port || 3000}${dockerLabel}${rewriteLabel}${helperLabel}`
   }
 
   const validateConfigText = (text) => {
