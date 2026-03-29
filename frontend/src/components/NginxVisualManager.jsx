@@ -262,6 +262,8 @@ const PathRuleModal = ({ initialRule, onSave, onCancel }) => {
     proxy_port: 3000,
     proxy_pass_path: '',
     helper_subpath_app: false,
+    subpath_proxy_mode: initialRule?.subpath_proxy_mode
+      || ((initialRule?.proxy_pass_path || '') === '/' ? 'strip_prefix' : 'keep_prefix'),
     forward_prefix_enabled: false,
     fix_root_redirect_enabled: false,
     rewrite_enabled: false,
@@ -286,7 +288,11 @@ const PathRuleModal = ({ initialRule, onSave, onCancel }) => {
     if (isProxy && nextRule.helper_subpath_app) {
       const normalized = normalizePath(nextRule.path || '/app')
       nextRule.path = normalized.endsWith('/') ? normalized : `${normalized}/`
-      nextRule.proxy_pass_path = nextRule.proxy_pass_path || '/'
+      if (nextRule.subpath_proxy_mode === 'strip_prefix') {
+        nextRule.proxy_pass_path = '/'
+      } else {
+        delete nextRule.proxy_pass_path
+      }
       nextRule.forward_prefix_enabled = true
       nextRule.fix_root_redirect_enabled = true
     }
@@ -369,7 +375,7 @@ const PathRuleModal = ({ initialRule, onSave, onCancel }) => {
                         ...rule,
                         path: enabled && !normalized.endsWith('/') ? `${normalized}/` : normalized,
                         helper_subpath_app: enabled,
-                        proxy_pass_path: enabled ? (rule.proxy_pass_path || '/') : rule.proxy_pass_path,
+                        subpath_proxy_mode: rule.subpath_proxy_mode || 'keep_prefix',
                         forward_prefix_enabled: enabled || Boolean(rule.forward_prefix_enabled),
                         fix_root_redirect_enabled: enabled || Boolean(rule.fix_root_redirect_enabled)
                       })
@@ -381,6 +387,22 @@ const PathRuleModal = ({ initialRule, onSave, onCancel }) => {
                   Ativa ajustes automáticos para rotas como <span className="font-mono">/legacy-admin/</span>:
                   envia prefixo para o app e corrige redirecionamentos para a mesma subpasta.
                 </p>
+                {rule.helper_subpath_app && (
+                  <div className="mt-2">
+                    <label className="text-[11px] text-blue-200">Como enviar a URL para o app</label>
+                    <select
+                      className="mt-1 w-full rounded-xl border border-blue-700 bg-slate-950 px-3 py-2 text-xs"
+                      value={rule.subpath_proxy_mode || 'keep_prefix'}
+                      onChange={(e) => setRule({ ...rule, subpath_proxy_mode: e.target.value })}
+                    >
+                      <option value="keep_prefix">Manter prefixo (/legacy-admin/...)</option>
+                      <option value="strip_prefix">Remover prefixo (enviar /...)</option>
+                    </select>
+                    <p className="mt-1 text-[11px] text-blue-200/90">
+                      Se houver loop de redirecionamento, use "Manter prefixo".
+                    </p>
+                  </div>
+                )}
               </div>
               <div className="col-span-2">
                 <label className="text-xs text-slate-400">Destino interno no app (opcional)</label>
@@ -388,8 +410,12 @@ const PathRuleModal = ({ initialRule, onSave, onCancel }) => {
                   className="mt-1 w-full rounded-xl border border-slate-800 bg-slate-950 px-3 py-2 text-sm"
                   value={rule.proxy_pass_path || ''}
                   onChange={(e) => setRule({ ...rule, proxy_pass_path: e.target.value })}
+                  disabled={Boolean(rule.helper_subpath_app && rule.subpath_proxy_mode === 'keep_prefix')}
                   placeholder="/ (recomendado para app em subpasta)"
                 />
+                <p className="mt-1 text-[11px] text-slate-500">
+                  Deixe vazio para manter o prefixo. Use "/" para remover o prefixo.
+                </p>
               </div>
               <div className="col-span-2 flex items-center gap-2">
                 <input
@@ -1205,6 +1231,7 @@ const ServerForm = ({ server, onSave, onApply, onCancel, dockerContainers, docke
         rewrite_to: '',
         rewrite_flag: 'break',
         helper_subpath_app: false,
+        subpath_proxy_mode: 'keep_prefix',
         forward_prefix_enabled: false,
         fix_root_redirect_enabled: false
       }
@@ -1307,6 +1334,7 @@ const ServerForm = ({ server, onSave, onApply, onCancel, dockerContainers, docke
         type: 'proxy',
         proxy_host: '127.0.0.1',
         proxy_port: targetPort,
+        subpath_proxy_mode: 'strip_prefix',
         docker: true,
         docker_container: container.name
       }
