@@ -5,6 +5,23 @@ import react from '@vitejs/plugin-react'
 export default defineConfig(({ command }) => ({
   plugins: [react()],
   base: command === 'build' ? '/admin/' : '/',
+  server: {
+    proxy: {
+      '/api': {
+        target: 'http://localhost:3000',
+        changeOrigin: true
+      },
+      '/auth': {
+        target: 'http://localhost:3000',
+        changeOrigin: true
+      },
+      '/socket.io': {
+        target: 'http://localhost:3000',
+        changeOrigin: true,
+        ws: true
+      }
+    }
+  },
   build: {
     outDir: 'dist',
     assetsDir: 'assets'

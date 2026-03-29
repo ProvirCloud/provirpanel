@@ -19,7 +19,14 @@ class DockerManager {
   constructor(options = {}) {
     this.docker = options.docker || new Docker();
     this.registryPath =
-      options.registryPath || path.join(__dirname, '../../data/docker-services.json');
+      options.registryPath ||
+      process.env.DOCKER_SERVICES_REGISTRY ||
+      path.join(__dirname, '../../data/docker-services.json');
+    this.registryFallbackPaths = [
+      path.join(process.cwd(), 'backend/data/docker-services.json'),
+      path.join(process.cwd(), 'data/docker-services.json'),
+      path.join(__dirname, '../../../data/docker-services.json')
+    ].filter((candidate, index, list) => candidate !== this.registryPath && list.indexOf(candidate) === index);
     this.templateManager = new ProjectTemplateManager();
     fs.mkdirSync(path.dirname(this.registryPath), { recursive: true });
     if (!fs.existsSync(this.registryPath)) {
@@ -180,14 +187,31 @@ class DockerManager {
   }
 
    // ---- Service registry helpers --------------------------------------------------
-  readRegistry() {
+  readRegistryFile(filePath) {
+    if (!filePath || !fs.existsSync(filePath)) return [];
     try {
-      const raw = fs.readFileSync(this.registryPath, 'utf-8');
+      const raw = fs.readFileSync(filePath, 'utf-8');
       const parsed = JSON.parse(raw);
       return Array.isArray(parsed) ? parsed : [];
     } catch (err) {
       return [];
     }
+  }
+
+  readRegistry() {
+    const primary = this.readRegistryFile(this.registryPath);
+    if (primary.length) {
+      return primary;
+    }
+
+    for (const fallbackPath of this.registryFallbackPaths) {
+      const fallback = this.readRegistryFile(fallbackPath);
+      if (fallback.length) {
+        return fallback;
+      }
+    }
+
+    return primary;
   }
 
   writeRegistry(services) {
@@ -196,6 +220,120 @@ class DockerManager {
 
   listServices() {
     return this.readRegistry();
+  }
+
+  isManagedContainer(containerInfo = {}) {
+    const labels = containerInfo.Config?.Labels || containerInfo.Labels || {};
+    if (labels['provirpanel.managed'] === 'true') {
+      return true;
+    }
+
+    const mounts = containerInfo.Mounts || [];
+    return mounts.some((mount) => {
+      const source = String(mount.Source || mount.hostPath || '');
+      return source.includes('/projects/docker/') || source.includes('/data/projects/docker/');
+    });
+  }
+
+  inferServiceFromContainer(containerInfo = {}) {
+    if (!containerInfo || !this.isManagedContainer(containerInfo)) {
+      return null;
+    }
+
+    const labels = containerInfo.Config?.Labels || {};
+    const ports = containerInfo.NetworkSettings?.Ports || {};
+    const firstPortEntry = Object.entries(ports).find(([, bindings]) => Array.isArray(bindings) && bindings.length > 0);
+    const [containerPortKey, bindings] = firstPortEntry || [];
+    const firstBinding = bindings?.[0] || null;
+    const containerPort = containerPortKey ? Number(String(containerPortKey).split('/')[0]) : null;
+    const hostPort = firstBinding?.HostPort ? Number(firstBinding.HostPort) : null;
+    const bindLocalOnly = firstBinding?.HostIp === '127.0.0.1';
+    const networkName =
+      Object.keys(containerInfo.NetworkSettings?.Networks || {})[0] ||
+      containerInfo.HostConfig?.NetworkMode ||
+      'bridge';
+    const name = labels['provirpanel.service.name'] || String(containerInfo.Name || '').replace(/^\//, '');
+    const image = containerInfo.Config?.Image || '';
+
+    return {
+      id: labels['provirpanel.service.id'] || containerInfo.Id,
+      name,
+      templateId: labels['provirpanel.template.id'] || null,
+      image,
+      containerId: containerInfo.Id,
+      hostPort,
+      containerPort,
+      volumes: (containerInfo.Mounts || []).map((mount) => ({
+        hostPath: mount.Source || '',
+        containerPath: mount.Destination || ''
+      })),
+      networkName,
+      bindLocalOnly,
+      url: hostPort ? `http://localhost:${hostPort}` : null,
+      externalUrl: hostPort && !bindLocalOnly ? `http://localhost:${hostPort}` : null,
+      createdAt: containerInfo.Created || new Date().toISOString(),
+      hasProject: Boolean(labels['provirpanel.has_project'] === 'true'),
+      parentService: labels['provirpanel.parent.id'] || null,
+      envVars: []
+    };
+  }
+
+  async listManagedServices() {
+    const registryServices = this.readRegistry();
+    let containers = [];
+
+    try {
+      containers = await this.listContainers();
+    } catch (err) {
+      return registryServices;
+    }
+
+    const byContainerId = new Map(containers.map((container) => [container.Id, container]));
+    const byName = new Map(
+      containers.flatMap((container) =>
+        (container.Names || []).map((name) => [String(name).replace(/^\//, ''), container])
+      )
+    );
+
+    const mergedServices = registryServices.map((service) => {
+      const matchedContainer = byContainerId.get(service.containerId) || byName.get(service.name);
+      if (!matchedContainer) {
+        return service;
+      }
+
+      const publishedPort = (matchedContainer.Ports || []).find((port) => port.PublicPort);
+      const hostPort = publishedPort?.PublicPort ?? service.hostPort ?? null;
+      const containerPort = publishedPort?.PrivatePort ?? service.containerPort ?? null;
+      const bindLocalOnly = publishedPort?.IP === '127.0.0.1' || service.bindLocalOnly || false;
+
+      return {
+        ...service,
+        containerId: matchedContainer.Id,
+        hostPort,
+        containerPort,
+        bindLocalOnly,
+        url: hostPort ? `http://localhost:${hostPort}` : service.url,
+        externalUrl: hostPort && !bindLocalOnly ? `http://localhost:${hostPort}` : service.externalUrl
+      };
+    });
+
+    const knownContainerIds = new Set(mergedServices.map((service) => service.containerId).filter(Boolean));
+
+    for (const container of containers) {
+      if (knownContainerIds.has(container.Id)) continue;
+
+      try {
+        const details = await this.docker.getContainer(container.Id).inspect();
+        const inferred = this.inferServiceFromContainer(details);
+        if (inferred) {
+          mergedServices.push(inferred);
+        }
+      } catch (err) {
+        // Ignore containers that disappear during listing.
+      }
+    }
+
+    return mergedServices;
   }
 
   saveService(service) {

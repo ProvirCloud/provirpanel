@@ -256,11 +256,35 @@ const buildContainerEnv = ({ templateEnv = [], explicitEnvVars = [], projectPath
   return merged.map((entry) => `${entry.key}=${resolveEnvValue(entry.key, entry.value, rawLookup)}`);
 };
 
+const buildServiceLabels = ({
+  serviceId,
+  name,
+  templateId,
+  parentService = null,
+  hasProject = false
+}) => ({
+  'provirpanel.managed': 'true',
+  'provirpanel.service.id': String(serviceId || ''),
+  'provirpanel.service.name': String(name || ''),
+  'provirpanel.template.id': String(templateId || ''),
+  'provirpanel.has_project': hasProject ? 'true' : 'false',
+  ...(parentService ? { 'provirpanel.parent.id': String(parentService) } : {})
+});
+
 const sanitizeServiceForClient = (service) => ({
   ...service,
   networkName: service.networkName || 'bridge',
   envVars: maskEnvVars(service.envVars || [])
 });
+
+const sendServicesResponse = async (res, next) => {
+  try {
+    const services = await dockerManager.listManagedServices();
+    res.json({ services: services.map(sanitizeServiceForClient) });
+  } catch (err) {
+    next(err);
+  }
+};
 
 const resolveProjectPathFromVolume = (volumes = []) => {
   const volume = volumes.find((m) => m.hostPath && m.containerPath);
@@ -690,12 +714,7 @@ const ensureNpmDevDependencies = (command) => {
 
 // List saved services (containers + metadata)
 router.get('/services', async (req, res, next) => {
-  try {
-    const services = dockerManager.listServices();
-    res.json({ services: services.map(sanitizeServiceForClient) });
-  } catch (err) {
-    next(err);
-  }
+  await sendServicesResponse(res, next);
 });
 
 router.get('/images', async (req, res, next) => {
@@ -1018,12 +1037,7 @@ router.post('/images/build', upload.single('contextArchive'), async (req, res, n
 });
 
 router.get('/services', async (req, res, next) => {
-  try {
-    const services = dockerManager.listServices();
-    res.json({ services: services.map(sanitizeServiceForClient) });
-  } catch (err) {
-    next(err);
-  }
+  await sendServicesResponse(res, next);
 });
 
 router.post('/containers/run', async (req, res, next) => {
@@ -1275,6 +1289,12 @@ router.post('/services', async (req, res, next) => {
 
     const containerConfig = {
       name,
+      Labels: buildServiceLabels({
+        serviceId,
+        name,
+        templateId,
+        hasProject: createProject && finalizedVolumes.length > 0 && templateId !== 'postgres-db'
+      }),
       HostConfig: {
         ...hostConfig,
         NetworkMode: networkName,
@@ -1353,6 +1373,12 @@ router.post('/services', async (req, res, next) => {
           : { HostPort: String(pgAdminPort) };
         const pgAdminConfig = {
           name: `${name}-pgadmin`,
+          Labels: buildServiceLabels({
+            serviceId: crypto.randomUUID(),
+            name: `${name}-pgadmin`,
+            templateId: 'pgadmin',
+            parentService: serviceId
+          }),
           User: 'root',
           HostConfig: {
             NetworkMode: networkName,
@@ -1631,6 +1657,13 @@ router.put('/services/:id', async (req, res, next) => {
 
     const containerConfig = {
       name: service.name,
+      Labels: buildServiceLabels({
+        serviceId: service.id,
+        name: service.name,
+        templateId: service.templateId,
+        parentService: service.parentService,
+        hasProject: service.hasProject
+      }),
       HostConfig: {
         NetworkMode: targetNetwork,
         PortBindings: {
@@ -1823,6 +1856,13 @@ router.post('/services/:id/project-upload', upload.single('archive'), async (req
 
     const containerConfig = {
       name: service.name,
+      Labels: buildServiceLabels({
+        serviceId: service.id,
+        name: service.name,
+        templateId: service.templateId,
+        parentService: service.parentService,
+        hasProject: service.hasProject
+      }),
       HostConfig: {
         NetworkMode: service.networkName || 'bridge',
         PortBindings: {
