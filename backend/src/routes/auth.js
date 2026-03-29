@@ -16,6 +16,15 @@ const jwtExpiresIn = process.env.JWT_EXPIRES_IN || '1d';
 const cookieName = process.env.AUTH_COOKIE_NAME || 'provirpanel_token';
 const cookieSecureMode = (process.env.AUTH_COOKIE_SECURE || 'auto').toLowerCase();
 
+const normalizeRole = (role) => {
+  const value = String(role || '').trim().toLowerCase();
+  if (value === 'admin') return 'admin';
+  if (value === 'dev') return 'dev';
+  if (value === 'viewer') return 'viewer';
+  if (value === 'customer') return 'viewer';
+  return value;
+};
+
 const isSecureRequest = (req) => {
   const forwardedProto = (req.headers['x-forwarded-proto'] || '').toString().split(',')[0].trim();
   return req.secure || forwardedProto === 'https';
@@ -120,6 +129,7 @@ router.post('/login', async (req, res, next) => {
     }
 
     if (user.mfa_enabled && user.mfa_secret) {
+      user.role = normalizeRole(user.role);
       const mfaToken = jwt.sign(
         { sub: user.id, role: user.role, username: user.username, mfa: true },
         jwtSecret,
@@ -133,6 +143,7 @@ router.post('/login', async (req, res, next) => {
     }
 
     if (user.mfa_required) {
+      user.role = normalizeRole(user.role);
       const mfaSetupToken = jwt.sign(
         { sub: user.id, role: user.role, username: user.username, mfaSetup: true },
         jwtSecret,
@@ -145,6 +156,7 @@ router.post('/login', async (req, res, next) => {
       });
     }
 
+    user.role = normalizeRole(user.role);
     const token = jwt.sign(
       { sub: user.id, role: user.role, username: user.username },
       jwtSecret,
@@ -186,6 +198,7 @@ router.post('/mfa/confirm', async (req, res, next) => {
     if (!user || !user.mfa_enabled || !user.mfa_secret) {
       return res.status(401).json({ message: 'MFA not enabled' });
     }
+    user.role = normalizeRole(user.role);
 
     const verified = speakeasy.totp.verify({
       secret: user.mfa_secret,
@@ -283,6 +296,7 @@ router.get('/me', authMiddleware, async (req, res, next) => {
     if (!user) {
       return res.status(404).json({ message: 'User not found' });
     }
+    user.role = normalizeRole(user.role);
     return res.json({ user });
   } catch (err) {
     return next(err);

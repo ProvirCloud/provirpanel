@@ -32,7 +32,9 @@ const LoginPage = () => {
         if (enableResponse.data?.token) {
           localStorage.setItem('provirpanel-token', enableResponse.data.token)
         }
-        window.dispatchEvent(new Event('provirpanel-auth'))
+        window.dispatchEvent(new CustomEvent('provirpanel-auth', {
+          detail: { authenticated: true }
+        }))
         navigate('/')
         return
       }
@@ -45,7 +47,9 @@ const LoginPage = () => {
         if (response.data?.token) {
           localStorage.setItem('provirpanel-token', response.data.token)
         }
-        window.dispatchEvent(new Event('provirpanel-auth'))
+        window.dispatchEvent(new CustomEvent('provirpanel-auth', {
+          detail: { authenticated: true }
+        }))
         navigate('/')
         return
       }
@@ -64,7 +68,9 @@ const LoginPage = () => {
       if (response.data?.token) {
         localStorage.setItem('provirpanel-token', response.data.token)
       }
-      window.dispatchEvent(new Event('provirpanel-auth'))
+      window.dispatchEvent(new CustomEvent('provirpanel-auth', {
+        detail: { authenticated: true }
+      }))
       navigate('/')
     } catch (err) {
       if (mfaSetupRequired) {

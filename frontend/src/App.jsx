@@ -37,7 +37,14 @@ const App = () => {
 
   useEffect(() => {
     let cleanup = null
-    const handleAuthChange = () => {
+    const handleAuthChange = (event) => {
+      if (event?.detail?.authenticated === false) {
+        setAuthState({ loading: false, authenticated: false })
+        return
+      }
+      if (event?.detail?.authenticated === true) {
+        setAuthState((prev) => ({ ...prev, loading: true }))
+      }
       cleanup = refreshAuth()
     }
     handleAuthChange()

@@ -53,7 +53,9 @@ const MainLayout = () => {
     } catch (err) {
       // ignore cache cleanup failures
     }
-    window.dispatchEvent(new Event('provirpanel-auth'))
+    window.dispatchEvent(new CustomEvent('provirpanel-auth', {
+      detail: { authenticated: false }
+    }))
     navigate('/login', { replace: true })
   }
 

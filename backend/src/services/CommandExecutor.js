@@ -60,6 +60,15 @@ const COMMAND_HINTS = new Set([
   'clear'
 ]);
 
+const normalizeRole = (role) => {
+  const value = String(role || '').trim().toLowerCase();
+  if (value === 'admin') return 'admin';
+  if (value === 'dev') return 'dev';
+  if (value === 'viewer') return 'viewer';
+  if (value === 'customer') return 'viewer';
+  return value;
+};
+
 class CommandExecutor {
   constructor(options = {}) {
     const logDir = options.logDir || path.join(__dirname, '../../logs');
@@ -91,28 +100,30 @@ class CommandExecutor {
   }
 
   isAllowedForRole(command, role) {
+    const normalizedRole = normalizeRole(role);
     const token = command.trim().split(/\s+/)[0];
     if (!token) {
       return false;
     }
 
-    if (role === 'admin') {
+    if (normalizedRole === 'admin') {
       return true;
     }
-    if (role === 'dev') {
+    if (normalizedRole === 'dev') {
       return DEV_ALLOWED.has(token);
     }
-    if (role === 'viewer') {
+    if (normalizedRole === 'viewer') {
       return VIEWER_ALLOWED.has(token);
     }
     return false;
   }
 
   logCommand({ userId, role, command }) {
+    const normalizedRole = normalizeRole(role);
     const entry = {
       timestamp: new Date().toISOString(),
       userId,
-      role,
+      role: normalizedRole,
       osUser: this.execUser?.username || process.env.USER || 'unknown',
       command
     };
@@ -121,6 +132,7 @@ class CommandExecutor {
 
   executeCommand(command, userId, role, onData, options = {}) {
     return new Promise((resolve, reject) => {
+      const normalizedRole = normalizeRole(role);
       if (!command || typeof command !== 'string') {
         return reject(new Error('Invalid command'));
       }
@@ -129,14 +141,14 @@ class CommandExecutor {
         return reject(new Error('Command blocked'));
       }
 
-      if (!this.isAllowedForRole(command, role)) {
+      if (!this.isAllowedForRole(command, normalizedRole)) {
         return reject(new Error('Command not allowed'));
       }
 
-      this.logCommand({ userId, role, command });
+      this.logCommand({ userId, role: normalizedRole, command });
 
       const spawnOptions = { env: process.env, cwd: options.cwd };
-      if (role === 'admin' && this.execUser?.uid != null && process.getuid) {
+      if (normalizedRole === 'admin' && this.execUser?.uid != null && process.getuid) {
         if (process.getuid() === this.execUser.uid) {
           spawnOptions.uid = this.execUser.uid;
           spawnOptions.gid = this.execUser.gid;
@@ -185,6 +197,7 @@ class CommandExecutor {
   }
 
   spawnInteractive(command, userId, role, onData, onExit, options = {}) {
+    const normalizedRole = normalizeRole(role);
     if (!command || typeof command !== 'string') {
       throw new Error('Invalid command');
     }
@@ -193,15 +206,15 @@ class CommandExecutor {
       throw new Error('Command blocked');
     }
 
-    if (!this.isAllowedForRole(command, role)) {
+    if (!this.isAllowedForRole(command, normalizedRole)) {
       throw new Error('Command not allowed');
     }
 
-    this.logCommand({ userId, role, command });
+    this.logCommand({ userId, role: normalizedRole, command });
 
     // Clone env to allow safe mutation for sudo handling.
     const spawnOptions = { env: { ...process.env }, cwd: options.cwd };
-    if (role === 'admin' && this.execUser?.uid != null && process.getuid) {
+    if (normalizedRole === 'admin' && this.execUser?.uid != null && process.getuid) {
       if (process.getuid() === this.execUser.uid) {
         spawnOptions.uid = this.execUser.uid;
         spawnOptions.gid = this.execUser.gid;
