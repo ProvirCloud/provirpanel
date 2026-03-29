@@ -185,8 +185,18 @@ class NginxServerManager {
             return rule;
           }
           const mergedRule = { ...rule };
-          if (mergedRule.proxy_pass_path === undefined && match.proxy_pass_path !== undefined) {
+          if (mergedRule.subpath_proxy_mode === undefined && match.subpath_proxy_mode !== undefined) {
+            mergedRule.subpath_proxy_mode = match.subpath_proxy_mode;
+          }
+          if (
+            mergedRule.subpath_proxy_mode !== 'keep_prefix'
+            && mergedRule.proxy_pass_path === undefined
+            && match.proxy_pass_path !== undefined
+          ) {
             mergedRule.proxy_pass_path = match.proxy_pass_path;
+          }
+          if (mergedRule.subpath_proxy_mode === 'keep_prefix') {
+            delete mergedRule.proxy_pass_path;
           }
           if (mergedRule.proxy_redirect_off === undefined && match.proxy_redirect_off !== undefined) {
             mergedRule.proxy_redirect_off = match.proxy_redirect_off;
@@ -577,6 +587,7 @@ class NginxServerManager {
           proxy_host: rule.proxy_host || rule.host || server.proxy_host || 'localhost',
           proxy_port: rule.proxy_port || rule.port || server.proxy_port || 3000,
           proxy_pass_path: rule.proxy_pass_path,
+          subpath_proxy_mode: rule.subpath_proxy_mode,
           proxy_redirect_off: Boolean(rule.proxy_redirect_off),
           rewrite_enabled: rule.rewrite_enabled,
           rewrite_from: rule.rewrite_from,
@@ -657,7 +668,9 @@ class NginxServerManager {
           let pathSuffix = '';
           if (rule.proxy_pass_path) {
             pathSuffix = rule.proxy_pass_path.startsWith('/') ? rule.proxy_pass_path : `/${rule.proxy_pass_path}`;
-          } else if (rule.path !== '/' && rule.path.endsWith('/')) {
+          } else if (rule.subpath_proxy_mode === 'strip_prefix') {
+            pathSuffix = '/';
+          } else if (!rule.subpath_proxy_mode && rule.path !== '/' && rule.path.endsWith('/')) {
             // For prefix routes like /legacy-admin/, default to stripping the prefix upstream.
             pathSuffix = '/';
           }
@@ -1581,6 +1594,7 @@ ${buildProxyBlock(proxyTarget)}    }
             proxy_host: host,
             proxy_port: port,
             proxy_pass_path: pathSuffix,
+            subpath_proxy_mode: pathSuffix === '/' ? 'strip_prefix' : 'keep_prefix',
             proxy_redirect_off: proxyRedirectOff,
             rewrite_enabled: Boolean(rewriteFrom && rewriteTo),
             rewrite_from: rewriteFrom,
