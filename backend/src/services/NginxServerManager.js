@@ -596,6 +596,12 @@ class NginxServerManager {
         seenPaths.add(key);
         dedupedPaths.push(rule);
       }
+      const explicitExactPaths = new Set(
+        dedupedPaths
+          .filter((rule) => (rule.modifier || '') === '=')
+          .map((rule) => rule.path)
+      );
+      const emittedCanonicalPaths = new Set();
 
       const rootRule = dedupedPaths.find((rule) => rule.path === '/');
       const nonRootRules = dedupedPaths.filter((rule) => rule.path !== '/');
@@ -606,7 +612,12 @@ class NginxServerManager {
           const canonicalPath = !rule.modifier && rule.path.endsWith('/') && rule.path !== '/'
             ? rule.path.slice(0, -1)
             : '';
-          if (canonicalPath) {
+          if (
+            canonicalPath
+            && !explicitExactPaths.has(canonicalPath)
+            && !emittedCanonicalPaths.has(canonicalPath)
+          ) {
+            emittedCanonicalPaths.add(canonicalPath);
             config += `
     location = ${canonicalPath} {
         return 301 ${rule.path};
