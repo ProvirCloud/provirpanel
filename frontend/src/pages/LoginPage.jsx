@@ -103,6 +103,7 @@ const LoginPage = () => {
             placeholder="Usuario"
             value={username}
             onChange={(event) => setUsername(event.target.value)}
+            autoComplete="username"
             disabled={mfaRequired || mfaSetupRequired}
           />
           <input
@@ -111,6 +112,7 @@ const LoginPage = () => {
             placeholder="Senha"
             value={password}
             onChange={(event) => setPassword(event.target.value)}
+            autoComplete="current-password"
             disabled={mfaRequired || mfaSetupRequired}
           />
           {mfaSetupRequired && (
@@ -137,6 +139,7 @@ const LoginPage = () => {
               placeholder="Codigo MFA (6 digitos)"
               value={mfaCode}
               onChange={(event) => setMfaCode(event.target.value)}
+              autoComplete="one-time-code"
             />
           )}
           {error && <p className="text-xs text-rose-300">{error}</p>}
