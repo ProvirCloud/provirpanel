@@ -1081,6 +1081,13 @@ const ServerForm = ({ server, onSave, onApply, onCancel, dockerContainers, docke
         },
         onCancel: () => {
           setApplyConfirm(null)
+          if (editorTouched) {
+            onNotify?.(
+              'Edicao avancada pendente',
+              'Para salvar o arquivo avancado com simbolos especiais, use Aplicar configuracoes.'
+            )
+            return
+          }
           performSave({ ...form }, false)
         }
       })
@@ -1098,10 +1105,40 @@ const ServerForm = ({ server, onSave, onApply, onCancel, dockerContainers, docke
         setApplyConfirm(null)
         let payload = { ...form }
         if (editorTouched) {
-          const serverBlocks = (editorContent.match(/server\s*\{/g) || []).length
-          if (serverBlocks > 1) {
-            onNotify?.('Editor invalido', 'Ha mais de um bloco server. Gere o preview novamente.')
-            return
+          if (server?.id) {
+            setApplyLoading(true)
+            try {
+              await api.post(`/nginx/servers/${server.id}/apply-raw-config`, {
+                content: editorContent
+              })
+              setCurrentConfig(editorContent)
+              setEditorTouched(false)
+              setShowAdvanced(false)
+              onNotify?.('Configuracao aplicada', 'Arquivo avancado validado e aplicado com sucesso')
+              try {
+                const parsedRes = await api.post('/nginx/parse-config', {
+                  content: editorContent,
+                  filename: `${form.primary_domain || 'server'}.conf`
+                })
+                if (parsedRes.data?.parsed) {
+                  const parsed = parsedRes.data.parsed
+                  setForm((prev) => ({
+                    ...prev,
+                    ...parsed,
+                    upstream_servers: parsed.upstream_servers || prev.upstream_servers,
+                    path_rules: parsed.path_rules || prev.path_rules
+                  }))
+                }
+              } catch {
+                // keep current form if parser cannot map all custom directives
+              }
+              return
+            } catch (err) {
+              onNotify?.('Erro ao aplicar arquivo avancado', err.response?.data?.error || err.message)
+              return
+            } finally {
+              setApplyLoading(false)
+            }
           }
           try {
             const res = await api.post('/nginx/parse-config', {

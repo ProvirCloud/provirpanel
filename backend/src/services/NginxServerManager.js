@@ -776,6 +776,91 @@ ${buildProxyBlock(proxyTarget)}    }
     return { success: true, config, ssl: sslResult };
   }
 
+  async applyRawConfig(serverId, content) {
+    const server = await this.getServerById(serverId);
+    if (!server) {
+      throw new Error('Server not found');
+    }
+    if (!content || !String(content).trim()) {
+      throw new Error('Config content is required');
+    }
+
+    const configFilePath = server.config_file_path;
+    const configFileName = path.basename(configFilePath);
+    const nextContent = content.endsWith('\n') ? content : `${content}\n`;
+
+    const backupPath = this.createBackup(configFilePath);
+    fs.writeFileSync(configFilePath, nextContent);
+
+    const testResult = this.testConfig();
+    if (!testResult.valid) {
+      if (backupPath) {
+        fs.copyFileSync(backupPath, configFilePath);
+      }
+      throw new Error(`Invalid Nginx configuration: ${testResult.error}`);
+    }
+
+    if (fs.existsSync(this.sitesAvailable)) {
+      if (path.resolve(configFilePath).startsWith(path.resolve(this.sitesAvailable))) {
+        this.enableConfigFile(configFileName);
+      }
+    }
+
+    const existing = await prisma.nginxServer.findUnique({ where: { id: serverId } });
+    try {
+      const parsed = this.parseNginxConfigContent(nextContent, configFileName, configFilePath);
+      if (parsed) {
+        const normalized = this.normalizeServerPayload(parsed);
+        await prisma.nginxServer.update({
+          where: { id: serverId },
+          data: {
+            name: normalized.name || existing?.name || server.name,
+            primaryDomain: normalized.primary_domain || existing?.primaryDomain || server.primary_domain,
+            additionalDomains: normalized.additional_domains || [],
+            upstreamServers: normalized.upstream_servers || [],
+            pathRules: normalized.path_rules || [],
+            serverType: normalized.server_type || 'proxy',
+            listenPort: normalized.listen_port || 80,
+            sslType: normalized.ssl_type || 'none',
+            sslCertPath: normalized.ssl_cert_path,
+            sslKeyPath: normalized.ssl_key_path,
+            proxyHost: normalized.proxy_host || 'localhost',
+            proxyPort: normalized.proxy_port || 3000,
+            rootPath: normalized.root_path || '/var/www/html',
+            websocketEnabled: normalized.websocket_enabled ?? true,
+            forwardHeaders: normalized.forward_headers ?? true,
+            clientMaxBodySize: normalized.client_max_body_size || '50m',
+            proxyConnectTimeout: normalized.proxy_connect_timeout || '5s',
+            proxyReadTimeout: normalized.proxy_read_timeout || '60s',
+            proxySendTimeout: normalized.proxy_send_timeout || '60s',
+            securityHeadersEnabled: normalized.security_headers_enabled ?? false,
+            serverTokensOff: normalized.server_tokens_off ?? true,
+            tlsMinVersionEnforced: normalized.tls_min_version_enforced ?? true,
+            isActive: true,
+            dockerMeta: this.buildDockerMeta(
+              normalized.path_rules || [],
+              normalized.upstream_servers || [],
+              existing?.dockerMeta || null
+            )
+          }
+        });
+      } else {
+        await prisma.nginxServer.update({
+          where: { id: serverId },
+          data: { isActive: true }
+        });
+      }
+    } catch {
+      await prisma.nginxServer.update({
+        where: { id: serverId },
+        data: { isActive: true }
+      });
+    }
+
+    this.reload();
+    return { success: true, config: nextContent };
+  }
+
   ensureLetsEncryptCertificate(domain) {
     try {
       const certPath = `/etc/letsencrypt/live/${domain}/fullchain.pem`;

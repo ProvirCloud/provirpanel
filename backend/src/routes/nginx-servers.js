@@ -161,6 +161,20 @@ router.post('/servers/:id/apply-config', async (req, res, next) => {
   }
 });
 
+// Apply raw config from advanced editor (preserves special symbols)
+router.post('/servers/:id/apply-raw-config', async (req, res, next) => {
+  try {
+    const { content } = req.body || {};
+    if (!content || !String(content).trim()) {
+      return res.status(400).json({ error: 'content is required' });
+    }
+    const result = await nginxManager.applyRawConfig(parseInt(req.params.id, 10), content);
+    res.json(result);
+  } catch (err) {
+    next(err);
+  }
+});
+
 // Get current config from file
 router.get('/servers/:id/current-config', async (req, res, next) => {
   try {
