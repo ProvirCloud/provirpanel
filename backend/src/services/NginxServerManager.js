@@ -609,7 +609,9 @@ class NginxServerManager {
       if (nonRootRules.length > 0) {
         nonRootRules.forEach((rule) => {
           const modifierPart = rule.modifier ? `${rule.modifier} ` : '';
-          const canonicalPath = !rule.modifier && rule.path.endsWith('/') && rule.path !== '/'
+          const shouldEmitCanonicalRedirect = rule.type === 'proxy'
+            && Boolean(rule.helper_subpath_app || rule.fix_root_redirect_enabled);
+          const canonicalPath = shouldEmitCanonicalRedirect && !rule.modifier && rule.path.endsWith('/') && rule.path !== '/'
             ? rule.path.slice(0, -1)
             : '';
           if (
