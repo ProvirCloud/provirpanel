@@ -264,6 +264,9 @@ const PathRuleModal = ({ initialRule, onSave, onCancel }) => {
     helper_subpath_app: false,
     subpath_proxy_mode: initialRule?.subpath_proxy_mode
       || ((initialRule?.proxy_pass_path || '') === '/' ? 'strip_prefix' : 'keep_prefix'),
+    proxy_redirect_mode: initialRule?.proxy_redirect_mode
+      || (initialRule?.proxy_redirect_off ? 'off' : 'auto'),
+    proxy_redirect_off: Boolean(initialRule?.proxy_redirect_off),
     forward_prefix_enabled: false,
     fix_root_redirect_enabled: false,
     rewrite_enabled: false,
@@ -295,6 +298,15 @@ const PathRuleModal = ({ initialRule, onSave, onCancel }) => {
       }
       nextRule.forward_prefix_enabled = true
       nextRule.fix_root_redirect_enabled = true
+    }
+    if (isProxy) {
+      if (nextRule.proxy_redirect_mode === 'off') {
+        nextRule.proxy_redirect_off = true
+        nextRule.fix_root_redirect_enabled = false
+      } else {
+        delete nextRule.proxy_redirect_off
+      }
+      delete nextRule.proxy_redirect_mode
     }
     if (!nextRule.proxy_pass_path) {
       delete nextRule.proxy_pass_path
@@ -387,6 +399,17 @@ const PathRuleModal = ({ initialRule, onSave, onCancel }) => {
                   Ativa ajustes automáticos para rotas como <span className="font-mono">/legacy-admin/</span>:
                   envia prefixo para o app e corrige redirecionamentos para a mesma subpasta.
                 </p>
+                <div className="mt-2">
+                  <label className="text-[11px] text-blue-200">proxy_redirect</label>
+                  <select
+                    className="mt-1 w-full rounded-xl border border-blue-700 bg-slate-950 px-3 py-2 text-xs"
+                    value={rule.proxy_redirect_mode || 'auto'}
+                    onChange={(e) => setRule({ ...rule, proxy_redirect_mode: e.target.value })}
+                  >
+                    <option value="auto">Auto (gerenciado pelo painel)</option>
+                    <option value="off">off (desativado)</option>
+                  </select>
+                </div>
                 {rule.helper_subpath_app && (
                   <div className="mt-2">
                     <label className="text-[11px] text-blue-200">Como enviar a URL para o app</label>
@@ -1269,6 +1292,8 @@ const ServerForm = ({ server, onSave, onApply, onCancel, dockerContainers, docke
         rewrite_flag: 'break',
         helper_subpath_app: false,
         subpath_proxy_mode: 'keep_prefix',
+        proxy_redirect_mode: 'auto',
+        proxy_redirect_off: false,
         forward_prefix_enabled: false,
         fix_root_redirect_enabled: false
       }
@@ -1372,6 +1397,8 @@ const ServerForm = ({ server, onSave, onApply, onCancel, dockerContainers, docke
         proxy_host: '127.0.0.1',
         proxy_port: targetPort,
         subpath_proxy_mode: 'strip_prefix',
+        proxy_redirect_mode: 'auto',
+        proxy_redirect_off: false,
         docker: true,
         docker_container: container.name
       }
@@ -1531,7 +1558,8 @@ const ServerForm = ({ server, onSave, onApply, onCancel, dockerContainers, docke
     const dockerLabel = rule.docker_container ? ` (${rule.docker_container})` : ''
     const rewriteLabel = rule.rewrite_enabled ? ' rewrite' : ''
     const helperLabel = rule.helper_subpath_app ? ' subpasta' : ''
-    return `${rule.path} -> ${rule.proxy_host || 'localhost'}:${rule.proxy_port || 3000}${dockerLabel}${rewriteLabel}${helperLabel}`
+    const redirectLabel = rule.proxy_redirect_off ? ' proxy_redirect=off' : ''
+    return `${rule.path} -> ${rule.proxy_host || 'localhost'}:${rule.proxy_port || 3000}${dockerLabel}${rewriteLabel}${helperLabel}${redirectLabel}`
   }
 
   const validateConfigText = (text) => {
