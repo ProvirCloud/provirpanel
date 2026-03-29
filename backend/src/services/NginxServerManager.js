@@ -173,7 +173,7 @@ class NginxServerManager {
         }
       } else if (currentFileRules.length > 0) {
         incoming = incoming.map((rule) => {
-          if (rule?.type !== 'proxy' || rule?.proxy_pass_path !== undefined) {
+          if (rule?.type !== 'proxy') {
             return rule;
           }
           const match = currentFileRules.find((current) =>
@@ -181,10 +181,23 @@ class NginxServerManager {
             && (current.path || '') === (rule.path || '')
             && (current.modifier || '') === (rule.modifier || '')
           );
-          if (match?.proxy_pass_path !== undefined) {
-            return { ...rule, proxy_pass_path: match.proxy_pass_path };
+          if (!match) {
+            return rule;
           }
-          return rule;
+          const mergedRule = { ...rule };
+          if (mergedRule.proxy_pass_path === undefined && match.proxy_pass_path !== undefined) {
+            mergedRule.proxy_pass_path = match.proxy_pass_path;
+          }
+          if (mergedRule.forward_prefix_enabled === undefined && match.forward_prefix_enabled !== undefined) {
+            mergedRule.forward_prefix_enabled = match.forward_prefix_enabled;
+          }
+          if (mergedRule.fix_root_redirect_enabled === undefined && match.fix_root_redirect_enabled !== undefined) {
+            mergedRule.fix_root_redirect_enabled = match.fix_root_redirect_enabled;
+          }
+          if (mergedRule.helper_subpath_app === undefined && match.helper_subpath_app !== undefined) {
+            mergedRule.helper_subpath_app = match.helper_subpath_app;
+          }
+          return mergedRule;
         });
       }
       updateData.pathRules = incoming;
@@ -550,6 +563,7 @@ class NginxServerManager {
 `;
         return block;
       };
+      const escapeRegex = (value) => String(value).replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
 
       const normalizedPaths = pathRules
         .filter((rule) => rule && rule.path)
@@ -564,6 +578,9 @@ class NginxServerManager {
           rewrite_from: rule.rewrite_from,
           rewrite_to: rule.rewrite_to,
           rewrite_flag: rule.rewrite_flag,
+          helper_subpath_app: Boolean(rule.helper_subpath_app),
+          forward_prefix_enabled: Boolean(rule.forward_prefix_enabled),
+          fix_root_redirect_enabled: Boolean(rule.fix_root_redirect_enabled),
           alias_path: rule.alias_path,
           root_path: rule.root_path,
           try_files: rule.try_files,
@@ -586,6 +603,16 @@ class NginxServerManager {
       if (nonRootRules.length > 0) {
         nonRootRules.forEach((rule) => {
           const modifierPart = rule.modifier ? `${rule.modifier} ` : '';
+          const canonicalPath = !rule.modifier && rule.path.endsWith('/') && rule.path !== '/'
+            ? rule.path.slice(0, -1)
+            : '';
+          if (canonicalPath) {
+            config += `
+    location = ${canonicalPath} {
+        return 301 ${rule.path};
+    }
+`;
+          }
           if (rule.type === 'redirect' && rule.return_code && rule.return_location) {
             config += `
     location ${modifierPart}${rule.path} {
@@ -621,9 +648,28 @@ class NginxServerManager {
           const rewriteLine = rule.rewrite_enabled && rule.rewrite_from && rule.rewrite_to
             ? `        rewrite ${rule.rewrite_from} ${rule.rewrite_to} ${rewriteFlag};\n`
             : '';
+          const forwardPrefixEnabled = Boolean(rule.helper_subpath_app || rule.forward_prefix_enabled);
+          const fixRootRedirectEnabled = Boolean(rule.helper_subpath_app || rule.fix_root_redirect_enabled);
+          const normalizedPrefix = rule.path === '/' ? '/' : rule.path.replace(/\/+$/, '');
+          const normalizedRedirectTarget = rule.path === '/'
+            ? '/'
+            : (rule.path.endsWith('/') ? rule.path : `${rule.path}/`);
+          const extraProxyLines = [];
+          if (forwardPrefixEnabled && normalizedPrefix) {
+            extraProxyLines.push(`        proxy_set_header X-Forwarded-Prefix ${normalizedPrefix};`);
+          }
+          if (fixRootRedirectEnabled && rule.path !== '/') {
+            const prefixSegment = normalizedRedirectTarget.replace(/^\/|\/$/g, '');
+            const escapedPrefix = escapeRegex(prefixSegment);
+            extraProxyLines.push(`        proxy_redirect ~^https?://[^/]+/?$ ${normalizedRedirectTarget};`);
+            extraProxyLines.push(`        proxy_redirect ~^https?://[^/]+/(?!${escapedPrefix}(?:/|$))(.*)$ ${normalizedRedirectTarget}$1;`);
+            extraProxyLines.push(`        proxy_redirect ~^/$ ${normalizedRedirectTarget};`);
+            extraProxyLines.push(`        proxy_redirect ~^/(?!${escapedPrefix}(?:/|$))(.*)$ ${normalizedRedirectTarget}$1;`);
+          }
+          const extraProxyDirectives = extraProxyLines.length ? `${extraProxyLines.join('\n')}\n` : '';
           config += `
     location ${modifierPart}${rule.path} {
-${rewriteLine}${buildProxyBlock(target)}    }
+${rewriteLine}${buildProxyBlock(target)}${extraProxyDirectives}    }
 `;
         });
       }
@@ -1411,6 +1457,10 @@ ${buildProxyBlock(proxyTarget)}    }
           rewriteTo = parts[1];
           rewriteFlag = parts[2];
         }
+        const forwardPrefixEnabled = /proxy_set_header\s+X-Forwarded-Prefix\s+[^;]+;/i.test(block);
+        const fixRootRedirectEnabled = /proxy_redirect\s+~\^https\?:\/\/\[\^\/\]\+/i.test(block)
+          || /proxy_redirect\s+~\^\//i.test(block);
+        const helperSubpathApp = forwardPrefixEnabled && fixRootRedirectEnabled;
 
         const proxyPassInBlock = block.match(/proxy_pass\s+http:\/\/([^:\/\s]+):?(\d+)?([^;\s]*)?/);
         if (proxyPassInBlock && locPath !== '/') {
@@ -1427,7 +1477,10 @@ ${buildProxyBlock(proxyTarget)}    }
             rewrite_enabled: Boolean(rewriteFrom && rewriteTo),
             rewrite_from: rewriteFrom,
             rewrite_to: rewriteTo,
-            rewrite_flag: rewriteFlag
+            rewrite_flag: rewriteFlag,
+            helper_subpath_app: helperSubpathApp,
+            forward_prefix_enabled: forwardPrefixEnabled,
+            fix_root_redirect_enabled: fixRootRedirectEnabled
           });
         }
       }

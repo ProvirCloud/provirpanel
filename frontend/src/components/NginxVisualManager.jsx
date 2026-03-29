@@ -1199,16 +1199,21 @@ const ServerForm = ({ server, onSave, onApply, onCancel, dockerContainers, docke
         type: 'proxy',
         proxy_host: 'localhost',
         proxy_port: 3000,
+        proxy_pass_path: '',
         rewrite_enabled: false,
         rewrite_from: '',
         rewrite_to: '',
-        rewrite_flag: 'break'
+        rewrite_flag: 'break',
+        helper_subpath_app: false,
+        forward_prefix_enabled: false,
+        fix_root_redirect_enabled: false
       }
     })
   }
 
   const removePathRule = (index) => {
     setForm({ ...form, path_rules: form.path_rules.filter((_, i) => i !== index) })
+    setEditorTouched(false)
   }
 
   const savePathRule = (rule) => {
@@ -1219,6 +1224,7 @@ const ServerForm = ({ server, onSave, onApply, onCancel, dockerContainers, docke
     } else {
       setForm({ ...form, path_rules: [...form.path_rules, rule] })
     }
+    setEditorTouched(false)
     setPathRuleModal(null)
     if (rule?.docker_container) {
       const scriptName = normalizeScriptName(rule.path || '/')
