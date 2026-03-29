@@ -388,6 +388,9 @@ const PathRuleModal = ({ initialRule, onSave, onCancel }) => {
                         path: enabled && !normalized.endsWith('/') ? `${normalized}/` : normalized,
                         helper_subpath_app: enabled,
                         subpath_proxy_mode: rule.subpath_proxy_mode || 'keep_prefix',
+                        proxy_redirect_mode: enabled && rule.proxy_redirect_mode === 'off'
+                          ? 'auto'
+                          : rule.proxy_redirect_mode,
                         forward_prefix_enabled: enabled || Boolean(rule.forward_prefix_enabled),
                         fix_root_redirect_enabled: enabled || Boolean(rule.fix_root_redirect_enabled)
                       })

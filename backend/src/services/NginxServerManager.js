@@ -1607,6 +1607,27 @@ ${buildProxyBlock(proxyTarget)}    }
         }
       }
 
+      // Ignore auto-generated canonical redirects from subpath helper/fix-root mode
+      // to avoid showing duplicate rules in the visual manager.
+      const proxyRulesByPath = new Map();
+      pathRules.forEach((rule) => {
+        if (!rule || rule.type !== 'proxy') return;
+        const candidatePath = String(rule.path || '').trim();
+        if (!candidatePath.endsWith('/')) return;
+        proxyRulesByPath.set(candidatePath, rule);
+      });
+      const filteredPathRules = pathRules.filter((rule) => {
+        if (!rule || rule.type !== 'redirect' || rule.modifier !== '=') return true;
+        const fromPath = String(rule.path || '').trim();
+        const targetPath = String(rule.return_location || '').trim();
+        if (!fromPath || fromPath === '/' || !targetPath.startsWith('/')) return true;
+        const expectedTarget = fromPath.endsWith('/') ? fromPath : `${fromPath}/`;
+        if (targetPath !== expectedTarget) return true;
+        const pairedProxyRule = proxyRulesByPath.get(expectedTarget);
+        if (!pairedProxyRule) return true;
+        return !(pairedProxyRule.helper_subpath_app || pairedProxyRule.fix_root_redirect_enabled);
+      });
+
       // Extract timeouts
       const connectTimeoutMatch = content.match(/proxy_connect_timeout\s+([^;]+);/);
       const readTimeoutMatch = content.match(/proxy_read_timeout\s+([^;]+);/);
@@ -1640,7 +1661,7 @@ ${buildProxyBlock(proxyTarget)}    }
         proxy_port: proxyPort,
         root_path: rootPath,
         upstream_servers: upstreamServers,
-        path_rules: pathRules,
+        path_rules: filteredPathRules,
         websocket_enabled: websocketEnabled,
         forward_headers: forwardHeaders,
         client_max_body_size: clientMaxBodyMatch ? clientMaxBodyMatch[1].trim() : '50m',
