@@ -416,7 +416,7 @@ const PathRuleModal = ({ initialRule, onSave, onCancel }) => {
 
   return (
     <div className="fixed inset-0 z-40 flex items-center justify-center bg-black/60 p-4">
-      <div className="w-full max-w-xl rounded-2xl border border-slate-800 bg-slate-900/90 p-6 text-slate-100">
+      <div className="max-h-[90vh] w-full max-w-xl overflow-y-auto rounded-2xl border border-slate-800 bg-slate-900/90 p-6 text-slate-100">
         <h3 className="text-lg font-semibold">Editar path</h3>
         <div className="mt-4 grid grid-cols-2 gap-3">
           <div className="col-span-2">
@@ -433,7 +433,11 @@ const PathRuleModal = ({ initialRule, onSave, onCancel }) => {
             <select
               className="mt-1 w-full rounded-xl border border-slate-800 bg-slate-950 px-3 py-2 text-sm"
               value={rule.type}
-              onChange={(e) => setRule({ ...rule, type: e.target.value })}
+              onChange={(e) => setRule({
+                ...rule,
+                type: e.target.value,
+                modifier: e.target.value === 'static' && rule.modifier === '=' ? '' : rule.modifier
+              })}
             >
               <option value="proxy">Proxy</option>
               <option value="static">Static</option>
@@ -588,6 +592,9 @@ const PathRuleModal = ({ initialRule, onSave, onCancel }) => {
           )}
           {isStatic && (
             <>
+              <div className="col-span-2 rounded-xl border border-emerald-900/60 bg-emerald-950/10 px-3 py-2 text-xs text-emerald-200">
+                Para site estático em subpasta, escolha a pasta em Arquivos/Storage logo abaixo.
+              </div>
               <div className="col-span-2 rounded-xl border border-emerald-800/70 bg-emerald-950/20 p-3">
                 <label className="text-xs font-medium text-emerald-200">Pasta do site em Arquivos</label>
                 <div className="mt-2 flex gap-2">
