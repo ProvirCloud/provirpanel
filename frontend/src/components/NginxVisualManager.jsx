@@ -216,6 +216,101 @@ const DiffModal = ({ title, diffLines, onApply, onClose }) => (
   </div>
 )
 
+const normalizeStoragePath = (value) => {
+  if (!value || value === '/') return '/'
+  const withLeadingSlash = value.startsWith('/') ? value : `/${value}`
+  return withLeadingSlash.replace(/\/+/g, '/')
+}
+
+const FolderPickerModal = ({ title = 'Selecionar pasta', initialPath = '/', onSelect, onClose }) => {
+  const [currentPath, setCurrentPath] = useState(normalizeStoragePath(initialPath))
+  const [items, setItems] = useState([])
+  const [loading, setLoading] = useState(false)
+  const [error, setError] = useState('')
+
+  const loadPath = useCallback(async (targetPath) => {
+    const normalized = normalizeStoragePath(targetPath)
+    setLoading(true)
+    setError('')
+    try {
+      const response = await api.get('/storage', { params: { path: normalized } })
+      setItems((response.data?.items || []).filter((item) => item.isDir))
+      setCurrentPath(normalized)
+    } catch (err) {
+      setError(err.response?.data?.message || err.message)
+    } finally {
+      setLoading(false)
+    }
+  }, [])
+
+  useEffect(() => {
+    loadPath(initialPath || '/')
+  }, [initialPath, loadPath])
+
+  const parentPath = currentPath === '/'
+    ? '/'
+    : normalizeStoragePath(currentPath.split('/').slice(0, -1).join('/') || '/')
+
+  return (
+    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 p-4">
+      <div className="w-full max-w-2xl rounded-2xl border border-slate-800 bg-slate-900/95 p-6 text-slate-100">
+        <div className="flex items-start justify-between gap-3">
+          <div>
+            <h3 className="text-lg font-semibold">{title}</h3>
+            <p className="mt-1 text-xs text-slate-400">
+              Escolha uma pasta já enviada em Arquivos/Storage. O Nginx vai servir o `index.html` dessa pasta.
+            </p>
+          </div>
+          <button
+            onClick={onClose}
+            className="rounded-lg border border-slate-800 bg-slate-950 p-2 text-slate-300"
+          >
+            <X className="h-4 w-4" />
+          </button>
+        </div>
+
+        <div className="mt-4 rounded-xl border border-slate-800 bg-slate-950 px-3 py-2 text-xs text-slate-300">
+          Pasta atual: <span className="font-mono text-white">{currentPath}</span>
+        </div>
+
+        <div className="mt-3 flex gap-2">
+          <button
+            onClick={() => loadPath(parentPath)}
+            disabled={loading || currentPath === '/'}
+            className="rounded-lg border border-slate-800 bg-slate-950 px-3 py-2 text-xs text-slate-200 disabled:opacity-50"
+          >
+            Voltar
+          </button>
+          <button
+            onClick={() => onSelect(currentPath)}
+            className="rounded-lg bg-emerald-500 px-3 py-2 text-xs font-semibold text-slate-950"
+          >
+            Usar esta pasta
+          </button>
+        </div>
+
+        <div className="mt-4 max-h-[45vh] overflow-y-auto rounded-xl border border-slate-800 bg-slate-950/70">
+          {loading && <p className="p-4 text-sm text-slate-400">Carregando pastas...</p>}
+          {!loading && error && <p className="p-4 text-sm text-rose-300">{error}</p>}
+          {!loading && !error && items.length === 0 && (
+            <p className="p-4 text-sm text-slate-400">Nenhuma subpasta encontrada.</p>
+          )}
+          {!loading && !error && items.map((item) => (
+            <button
+              key={item.path}
+              onClick={() => loadPath(item.path)}
+              className="flex w-full items-center justify-between border-b border-slate-800 px-4 py-3 text-left text-sm text-slate-200 transition hover:bg-slate-900"
+            >
+              <span>{item.name}</span>
+              <span className="text-xs text-slate-500">{item.path}</span>
+            </button>
+          ))}
+        </div>
+      </div>
+    </div>
+  )
+}
+
 const buildDiffLines = (oldText, newText) => {
   const oldLines = (oldText || '').split('\n')
   const newLines = (newText || '').split('\n')
@@ -273,13 +368,17 @@ const PathRuleModal = ({ initialRule, onSave, onCancel }) => {
     rewrite_from: '',
     rewrite_to: '',
     rewrite_flag: 'break',
+    storage_path: '',
     alias_path: '',
     root_path: '',
     try_files: '',
+    index_fallback_enabled: true,
+    index_fallback_file: 'index.html',
     return_code: 301,
     return_location: '/admin/',
     ...initialRule
   })
+  const [showFolderPicker, setShowFolderPicker] = useState(false)
 
   const isProxy = !rule.type || rule.type === 'proxy'
   const isStatic = rule.type === 'static'
@@ -488,6 +587,27 @@ const PathRuleModal = ({ initialRule, onSave, onCancel }) => {
           )}
           {isStatic && (
             <>
+              <div className="col-span-2 rounded-xl border border-emerald-800/70 bg-emerald-950/20 p-3">
+                <label className="text-xs font-medium text-emerald-200">Pasta do site em Arquivos</label>
+                <div className="mt-2 flex gap-2">
+                  <input
+                    className="w-full rounded-xl border border-slate-800 bg-slate-950 px-3 py-2 text-sm"
+                    value={rule.storage_path || ''}
+                    onChange={(e) => setRule({ ...rule, storage_path: normalizeStoragePath(e.target.value) })}
+                    placeholder="/docker/meu-site"
+                  />
+                  <button
+                    type="button"
+                    onClick={() => setShowFolderPicker(true)}
+                    className="rounded-xl bg-emerald-500 px-3 py-2 text-xs font-semibold text-slate-950"
+                  >
+                    Escolher
+                  </button>
+                </div>
+                <p className="mt-2 text-[11px] text-emerald-200/90">
+                  Se preencher aqui, o painel resolve a pasta real no servidor e gera o fallback para `index.html`.
+                </p>
+              </div>
               <div className="col-span-2">
                 <label className="text-xs text-slate-400">Alias</label>
                 <input
@@ -504,6 +624,25 @@ const PathRuleModal = ({ initialRule, onSave, onCancel }) => {
                   value={rule.root_path}
                   onChange={(e) => setRule({ ...rule, root_path: e.target.value })}
                   placeholder="/var/www/panel"
+                />
+              </div>
+              <div className="col-span-2">
+                <label className="flex items-center gap-2 text-xs text-slate-300">
+                  <input
+                    type="checkbox"
+                    checked={Boolean(rule.index_fallback_enabled)}
+                    onChange={(e) => setRule({ ...rule, index_fallback_enabled: e.target.checked })}
+                  />
+                  Fallback de SPA para index.html
+                </label>
+              </div>
+              <div className="col-span-2">
+                <label className="text-xs text-slate-400">Arquivo de fallback</label>
+                <input
+                  className="mt-1 w-full rounded-xl border border-slate-800 bg-slate-950 px-3 py-2 text-sm"
+                  value={rule.index_fallback_file || 'index.html'}
+                  onChange={(e) => setRule({ ...rule, index_fallback_file: e.target.value || 'index.html' })}
+                  placeholder="index.html"
                 />
               </div>
               <div className="col-span-2">
@@ -556,6 +695,17 @@ const PathRuleModal = ({ initialRule, onSave, onCancel }) => {
           </button>
         </div>
       </div>
+      {showFolderPicker && (
+        <FolderPickerModal
+          title="Selecionar pasta do path estático"
+          initialPath={rule.storage_path || '/'}
+          onSelect={(selectedPath) => {
+            setRule({ ...rule, storage_path: selectedPath })
+            setShowFolderPicker(false)
+          }}
+          onClose={() => setShowFolderPicker(false)}
+        />
+      )}
     </div>
   )
 }
@@ -579,6 +729,11 @@ const NewServerWizard = ({ servers, onCancel, onComplete }) => {
     proxy_host: 'localhost',
     proxy_port: 3000,
     root_path: '/var/www/html',
+    static_site: {
+      storage_path: '',
+      index_fallback_enabled: true,
+      index_fallback_file: 'index.html'
+    },
     websocket_enabled: true,
     forward_headers: true,
     client_max_body_size: '50m',
@@ -760,7 +915,10 @@ const NewServerWizard = ({ servers, onCancel, onComplete }) => {
                 <p><span className="text-slate-400">Destino:</span> {draft.proxy_host}:{draft.proxy_port}</p>
               )}
               {draft.server_type === 'static' && (
-                <p><span className="text-slate-400">Pasta:</span> {draft.root_path}</p>
+                <>
+                  <p><span className="text-slate-400">Pasta:</span> {draft.static_site?.storage_path || draft.root_path}</p>
+                  <p><span className="text-slate-400">Fallback:</span> {draft.static_site?.index_fallback_enabled ? (draft.static_site?.index_fallback_file || 'index.html') : 'desativado'}</p>
+                </>
               )}
               <p className="text-xs text-amber-300 mt-2">
                 Essa configuracao sera criada ativa e sem conflito com a existente.
@@ -913,6 +1071,11 @@ const ServerForm = ({ server, onSave, onApply, onCancel, dockerContainers, docke
     proxy_host: 'localhost',
     proxy_port: 3000,
     root_path: '/var/www/html',
+    static_site: {
+      storage_path: '',
+      index_fallback_enabled: true,
+      index_fallback_file: 'index.html'
+    },
     websocket_enabled: true,
     forward_headers: true,
     client_max_body_size: '50m',
@@ -955,6 +1118,7 @@ const ServerForm = ({ server, onSave, onApply, onCancel, dockerContainers, docke
   const [previewLoading, setPreviewLoading] = useState(false)
   const [previewWarnings, setPreviewWarnings] = useState([])
   const [routeWarnings, setRouteWarnings] = useState([])
+  const [showStaticFolderPicker, setShowStaticFolderPicker] = useState(false)
 
   useEffect(() => {
     if (server) {
@@ -962,7 +1126,13 @@ const ServerForm = ({ server, onSave, onApply, onCancel, dockerContainers, docke
         ...form,
         ...server,
         upstream_servers: server.upstream_servers || [{ ip: '127.0.0.1', port: '3000', weight: '1', backup: false }],
-        path_rules: server.path_rules || []
+        path_rules: server.path_rules || [],
+        static_site: {
+          storage_path: '',
+          index_fallback_enabled: true,
+          index_fallback_file: 'index.html',
+          ...(server.static_site || {})
+        }
       })
     }
   }, [server])
@@ -1853,13 +2023,76 @@ const ServerForm = ({ server, onSave, onApply, onCancel, dockerContainers, docke
               <Globe className="h-4 w-4" />
               Pasta do Site
             </h3>
-            <input
-              type="text"
-              value={form.root_path}
-              onChange={(e) => setForm({ ...form, root_path: e.target.value })}
-              className="w-full rounded-xl border border-slate-700 bg-slate-950 px-3 py-2 text-sm text-white"
-              placeholder="/var/www/html"
-            />
+            <div className="space-y-3">
+              <div>
+                <label className="text-xs text-slate-400">Pasta em Arquivos / Storage</label>
+                <div className="mt-1 flex gap-2">
+                  <input
+                    type="text"
+                    value={form.static_site?.storage_path || ''}
+                    onChange={(e) => setForm({
+                      ...form,
+                      static_site: {
+                        ...(form.static_site || {}),
+                        storage_path: normalizeStoragePath(e.target.value)
+                      }
+                    })}
+                    className="w-full rounded-xl border border-slate-700 bg-slate-950 px-3 py-2 text-sm text-white"
+                    placeholder="/docker/meu-site"
+                  />
+                  <button
+                    type="button"
+                    onClick={() => setShowStaticFolderPicker(true)}
+                    className="rounded-xl bg-emerald-500 px-3 py-2 text-xs font-semibold text-slate-950"
+                  >
+                    Escolher
+                  </button>
+                </div>
+                <p className="mt-1 text-[11px] text-slate-500">
+                  O painel resolve essa pasta no servidor e serve o `index.html` automaticamente.
+                </p>
+              </div>
+              <div>
+                <label className="text-xs text-slate-400">Caminho manual no servidor</label>
+                <input
+                  type="text"
+                  value={form.root_path}
+                  onChange={(e) => setForm({ ...form, root_path: e.target.value })}
+                  className="mt-1 w-full rounded-xl border border-slate-700 bg-slate-950 px-3 py-2 text-sm text-white"
+                  placeholder="/var/www/html"
+                />
+              </div>
+              <label className="flex items-center gap-2 text-xs text-slate-300">
+                <input
+                  type="checkbox"
+                  checked={form.static_site?.index_fallback_enabled ?? true}
+                  onChange={(e) => setForm({
+                    ...form,
+                    static_site: {
+                      ...(form.static_site || {}),
+                      index_fallback_enabled: e.target.checked
+                    }
+                  })}
+                />
+                Fallback de SPA para `index.html`
+              </label>
+              <div>
+                <label className="text-xs text-slate-400">Arquivo inicial / fallback</label>
+                <input
+                  type="text"
+                  value={form.static_site?.index_fallback_file || 'index.html'}
+                  onChange={(e) => setForm({
+                    ...form,
+                    static_site: {
+                      ...(form.static_site || {}),
+                      index_fallback_file: e.target.value || 'index.html'
+                    }
+                  })}
+                  className="mt-1 w-full rounded-xl border border-slate-700 bg-slate-950 px-3 py-2 text-sm text-white"
+                  placeholder="index.html"
+                />
+              </div>
+            </div>
           </div>
         )}
 
@@ -2285,6 +2518,23 @@ const ServerForm = ({ server, onSave, onApply, onCancel, dockerContainers, docke
           initialRule={pathRuleModal.rule}
           onSave={savePathRule}
           onCancel={() => setPathRuleModal(null)}
+        />
+      )}
+      {showStaticFolderPicker && (
+        <FolderPickerModal
+          title="Selecionar pasta do site"
+          initialPath={form.static_site?.storage_path || '/'}
+          onSelect={(selectedPath) => {
+            setForm((prev) => ({
+              ...prev,
+              static_site: {
+                ...(prev.static_site || {}),
+                storage_path: selectedPath
+              }
+            }))
+            setShowStaticFolderPicker(false)
+          }}
+          onClose={() => setShowStaticFolderPicker(false)}
         />
       )}
     </>

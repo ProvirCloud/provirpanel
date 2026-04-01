@@ -4,6 +4,7 @@ const fs = require('fs');
 const path = require('path');
 const { execSync } = require('child_process');
 const prisma = require('../config/prisma');
+const StorageManager = require('./StorageManager');
 
 class NginxServerManager {
   constructor() {
@@ -13,6 +14,7 @@ class NginxServerManager {
     this.confD = process.env.NGINX_CONF_D || path.join(this.configPath, 'conf.d');
     this.accessLogPath = process.env.NGINX_ACCESS_LOG || '/var/log/nginx/access.log';
     this.errorLogPath = process.env.NGINX_ERROR_LOG || '/var/log/nginx/error.log';
+    this.storageManager = new StorageManager();
   }
 
   // ==================== DATABASE OPERATIONS ====================
@@ -88,7 +90,8 @@ class NginxServerManager {
     const dockerMeta = this.buildDockerMeta(
       data.path_rules || [],
       data.upstream_servers || [],
-      null
+      null,
+      data.static_site || data.staticSite
     );
 
     const server = await prisma.nginxServer.create({
@@ -215,12 +218,13 @@ class NginxServerManager {
       }
       updateData.pathRules = incoming;
     }
-    if (updateData.pathRules || data.upstream_servers !== undefined) {
+    if (updateData.pathRules || data.upstream_servers !== undefined || data.static_site !== undefined || data.staticSite !== undefined) {
       const currentMeta = existing?.dockerMeta || null;
       updateData.dockerMeta = this.buildDockerMeta(
         updateData.pathRules || existingPathRules,
         data.upstream_servers ?? existing?.upstreamServers ?? [],
-        currentMeta
+        currentMeta,
+        data.static_site ?? data.staticSite
       );
     }
 
@@ -317,6 +321,7 @@ class NginxServerManager {
       is_active: server.isActive,
       config_file_path: server.configFilePath,
       docker_meta: server.dockerMeta || {},
+      static_site: withDockerMeta.staticSite,
       notes: server.notes,
       created_at: server.createdAt,
       updated_at: server.updatedAt,
@@ -324,7 +329,17 @@ class NginxServerManager {
     };
   }
 
-  buildDockerMeta(pathRules, upstreamServers, existingMeta) {
+  normalizeStaticSiteConfig(siteConfig = {}) {
+    const storagePath = siteConfig.storage_path || siteConfig.storagePath || '';
+    const indexFallbackFile = siteConfig.index_fallback_file || siteConfig.indexFallbackFile || 'index.html';
+    return {
+      storage_path: storagePath,
+      index_fallback_enabled: siteConfig.index_fallback_enabled ?? siteConfig.indexFallbackEnabled ?? true,
+      index_fallback_file: indexFallbackFile || 'index.html'
+    };
+  }
+
+  buildDockerMeta(pathRules, upstreamServers, existingMeta, staticSiteConfig) {
     const meta = {
       paths: {},
       upstreams: {},
@@ -353,6 +368,11 @@ class NginxServerManager {
         };
       }
     });
+    if (staticSiteConfig !== undefined) {
+      meta.site = this.normalizeStaticSiteConfig(staticSiteConfig);
+    } else if (meta.site) {
+      meta.site = this.normalizeStaticSiteConfig(meta.site);
+    }
     return meta;
   }
 
@@ -378,7 +398,50 @@ class NginxServerManager {
         srv.docker_container = match.container || srv.docker_container;
       }
     });
-    return { pathRules: rules, upstreamServers: upstreams };
+    return {
+      pathRules: rules,
+      upstreamServers: upstreams,
+      staticSite: meta?.site ? this.normalizeStaticSiteConfig(meta.site) : this.normalizeStaticSiteConfig()
+    };
+  }
+
+  resolveStoragePath(storagePath) {
+    if (!storagePath) return '';
+    try {
+      return this.storageManager.safeResolve(storagePath);
+    } catch {
+      return '';
+    }
+  }
+
+  buildStaticTryFiles(rulePath, fallbackFile = 'index.html', fallbackEnabled = true) {
+    if (!fallbackEnabled) {
+      return '$uri $uri/ =404';
+    }
+    const normalizedFile = String(fallbackFile || 'index.html').replace(/^\/+/, '');
+    if (!rulePath || rulePath === '/') {
+      return `$uri $uri/ /${normalizedFile}`;
+    }
+    const normalizedPath = String(rulePath).endsWith('/') ? String(rulePath) : `${rulePath}/`;
+    return `$uri $uri/ ${normalizedPath}${normalizedFile}`;
+  }
+
+  resolveStaticRuleConfig(rule = {}) {
+    const storagePath = rule.storage_path || rule.storagePath || '';
+    const resolvedStoragePath = this.resolveStoragePath(storagePath);
+    const aliasPath = resolvedStoragePath || rule.alias_path || '';
+    const rootPath = resolvedStoragePath || rule.root_path || '';
+    const indexFallbackEnabled = rule.index_fallback_enabled ?? rule.indexFallbackEnabled ?? true;
+    const indexFallbackFile = rule.index_fallback_file || rule.indexFallbackFile || 'index.html';
+    const tryFiles = rule.try_files || this.buildStaticTryFiles(rule.path, indexFallbackFile, indexFallbackEnabled);
+    return {
+      storagePath,
+      aliasPath,
+      rootPath: rootPath || '/var/www/html',
+      indexFallbackEnabled,
+      indexFallbackFile,
+      tryFiles
+    };
   }
 
   formatCertForApi(cert) {
@@ -434,6 +497,7 @@ class NginxServerManager {
   generateNginxConfig(server) {
     const domains = [server.primary_domain, ...(server.additional_domains || [])].filter(Boolean).join(' ');
     const pathRules = Array.isArray(server.path_rules) ? server.path_rules : [];
+    const staticSite = this.normalizeStaticSiteConfig(server.static_site || server.staticSite || server.docker_meta?.site || {});
     const securityHeadersEnabled = !!server.security_headers_enabled;
     const serverTokensOff = server.server_tokens_off ?? true;
     const tlsMinVersionEnforced = server.tls_min_version_enforced ?? true;
@@ -527,12 +591,14 @@ class NginxServerManager {
     }
 
     if (server.server_type === 'static') {
+      const resolvedStaticRoot = this.resolveStoragePath(staticSite.storage_path) || server.root_path || '/var/www/html';
+      const staticTryFiles = this.buildStaticTryFiles('/', staticSite.index_fallback_file, staticSite.index_fallback_enabled);
       config += `
-    root ${server.root_path || '/var/www/html'};
+    root ${resolvedStaticRoot};
     index index.html index.htm;
 
     location / {
-        try_files $uri $uri/ =404;
+        try_files ${staticTryFiles};
     }
 
     location ~* \\.(js|css|png|jpg|jpeg|gif|ico|svg|woff|woff2|ttf|eot)$ {
@@ -651,11 +717,12 @@ class NginxServerManager {
             return;
           }
 
-          if (rule.type === 'static' && (rule.alias_path || rule.root_path)) {
-            const tryFiles = rule.try_files || '$uri $uri/ =404';
-            const staticDirective = rule.alias_path
-              ? `alias ${rule.alias_path};`
-              : `root ${rule.root_path};`;
+          if (rule.type === 'static' && (rule.alias_path || rule.root_path || rule.storage_path || rule.storagePath)) {
+            const staticRule = this.resolveStaticRuleConfig(rule);
+            const tryFiles = staticRule.tryFiles;
+            const staticDirective = staticRule.aliasPath
+              ? `alias ${staticRule.aliasPath.endsWith('/') ? staticRule.aliasPath : `${staticRule.aliasPath}/`};`
+              : `root ${staticRule.rootPath};`;
             config += `
     location ${modifierPart}${rule.path} {
         ${staticDirective}
@@ -715,12 +782,13 @@ ${rewriteLine}${buildProxyBlock(target)}${extraProxyDirectives}    }
         return ${rootRule.return_code} ${rootRule.return_location};
     }
 `;
-      } else if (rootRule && rootRule.type === 'static' && (rootRule.alias_path || rootRule.root_path)) {
+      } else if (rootRule && rootRule.type === 'static' && (rootRule.alias_path || rootRule.root_path || rootRule.storage_path || rootRule.storagePath)) {
         const modifierPart = rootRule.modifier ? `${rootRule.modifier} ` : '';
-        const tryFiles = rootRule.try_files || '$uri $uri/ =404';
-        const staticDirective = rootRule.alias_path
-          ? `alias ${rootRule.alias_path};`
-          : `root ${rootRule.root_path};`;
+        const staticRule = this.resolveStaticRuleConfig(rootRule);
+        const tryFiles = staticRule.tryFiles;
+        const staticDirective = staticRule.aliasPath
+          ? `alias ${staticRule.aliasPath.endsWith('/') ? staticRule.aliasPath : `${staticRule.aliasPath}/`};`
+          : `root ${staticRule.rootPath};`;
         config += `
     location ${modifierPart}${rootRule.path} {
         ${staticDirective}
@@ -1501,6 +1569,14 @@ ${buildProxyBlock(proxyTarget)}    }
       // Extract root path for static sites
       const rootMatch = content.match(/root\s+([^;]+);/);
       const rootPath = rootMatch ? rootMatch[1].trim() : '/var/www/html';
+      const rootTryFilesMatch = content.match(/location\s+\/\s*\{[^}]*try_files\s+([^;]+);/s);
+      const rootTryFiles = rootTryFilesMatch ? rootTryFilesMatch[1].trim() : '';
+      const rootIndexFallbackMatch = rootTryFiles.match(/\/([^/\s;]+)\s*$/);
+      const staticSite = this.normalizeStaticSiteConfig({
+        storage_path: '',
+        index_fallback_enabled: /index\.html\b/.test(rootTryFiles),
+        index_fallback_file: rootIndexFallbackMatch ? rootIndexFallbackMatch[1] : 'index.html'
+      });
 
       // Extract upstream servers for balancer
       const upstreamServers = [];
@@ -1555,13 +1631,16 @@ ${buildProxyBlock(proxyTarget)}    }
         const rootMatchInline = block.match(/root\s+([^;]+);/);
         const tryFilesMatch = block.match(/try_files\s+([^;]+);/);
         if (aliasMatch || rootMatchInline) {
+          const indexFallbackMatch = (tryFilesMatch ? tryFilesMatch[1].trim() : '').match(/\/([^/\s;]+)\s*$/);
           pathRules.push({
             path: locPath,
             modifier,
             type: 'static',
             alias_path: aliasMatch ? aliasMatch[1].trim() : undefined,
             root_path: rootMatchInline ? rootMatchInline[1].trim() : undefined,
-            try_files: tryFilesMatch ? tryFilesMatch[1].trim() : undefined
+            try_files: tryFilesMatch ? tryFilesMatch[1].trim() : undefined,
+            index_fallback_enabled: tryFilesMatch ? /index\.html\b/.test(tryFilesMatch[1]) : false,
+            index_fallback_file: indexFallbackMatch ? indexFallbackMatch[1] : 'index.html'
           });
           continue;
         }
@@ -1660,6 +1739,7 @@ ${buildProxyBlock(proxyTarget)}    }
         proxy_host: proxyHost,
         proxy_port: proxyPort,
         root_path: rootPath,
+        static_site: staticSite,
         upstream_servers: upstreamServers,
         path_rules: filteredPathRules,
         websocket_enabled: websocketEnabled,
@@ -1705,6 +1785,7 @@ ${buildProxyBlock(proxyTarget)}    }
       proxy_host: data.proxy_host || data.proxyHost || 'localhost',
       proxy_port: data.proxy_port || data.proxyPort || 3000,
       root_path: data.root_path || data.rootPath || '/var/www/html',
+      static_site: this.normalizeStaticSiteConfig(data.static_site || data.staticSite || {}),
       websocket_enabled: data.websocket_enabled ?? data.websocketEnabled ?? true,
       forward_headers: data.forward_headers ?? data.forwardHeaders ?? true,
       client_max_body_size: data.client_max_body_size || data.clientMaxBodySize || '50m',
@@ -1756,9 +1837,12 @@ ${buildProxyBlock(proxyTarget)}    }
       notes: `Imported from ${configData.filename}`
     };
 
-    if (existing?.dockerMeta) {
-      data.dockerMeta = existing.dockerMeta;
-    }
+    data.dockerMeta = this.buildDockerMeta(
+      configData.path_rules || [],
+      configData.upstream_servers || [],
+      existing?.dockerMeta || null,
+      configData.static_site || configData.staticSite
+    );
 
     const server = existing
       ? await prisma.nginxServer.update({
