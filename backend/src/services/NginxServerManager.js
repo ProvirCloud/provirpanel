@@ -730,12 +730,16 @@ class NginxServerManager {
 
           if (rule.type === 'static' && (rule.alias_path || rule.root_path || rule.storage_path || rule.storagePath)) {
             const staticRule = this.resolveStaticRuleConfig(rule);
-            const tryFiles = staticRule.tryFiles;
-            const staticDirective = staticRule.aliasPath
-              ? `alias ${staticRule.aliasPath.endsWith('/') ? staticRule.aliasPath : `${staticRule.aliasPath}/`};`
-              : `root ${staticRule.rootPath};`;
+            const staticBasePath = staticRule.aliasPath || staticRule.rootPath;
+            const staticTryFiles = rule.path !== '/'
+              ? this.buildStaticTryFiles('/', staticRule.indexFallbackFile, staticRule.indexFallbackEnabled)
+              : staticRule.tryFiles;
             const staticNormalizedPath = rule.path.endsWith('/') ? rule.path : `${rule.path}/`;
             const escapedStaticPath = staticNormalizedPath.replace(/'/g, "\\'");
+            const escapedStaticRegex = escapeRegex(staticNormalizedPath);
+            const staticPrefixRewrite = rule.path !== '/'
+              ? `        rewrite ^${escapedStaticRegex}(.*)$ /$1 break;\n`
+              : '';
             const staticRewriteBlock =
               staticRule.subpathRewriteEnabled && rule.path !== '/'
                 ? `        sub_filter_once off;
@@ -749,9 +753,9 @@ class NginxServerManager {
                 : '';
             config += `
     location ${modifierPart}${rule.path} {
-        ${staticDirective}
-${staticRewriteBlock}        absolute_redirect off;
-        try_files ${tryFiles};
+        root ${staticBasePath};
+${staticPrefixRewrite}${staticRewriteBlock}        absolute_redirect off;
+        try_files ${staticTryFiles};
     }
 `;
             return;
