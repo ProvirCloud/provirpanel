@@ -729,6 +729,7 @@ const NewServerWizard = ({ servers, onCancel, onComplete }) => {
   const [step, setStep] = useState(1)
   const [mode, setMode] = useState(baseServer ? 'clone' : 'new')
   const [baseId, setBaseId] = useState(baseServer?.id || '')
+  const [showStaticFolderPicker, setShowStaticFolderPicker] = useState(false)
   const defaultDraft = {
     name: '',
     primary_domain: '',
@@ -746,7 +747,8 @@ const NewServerWizard = ({ servers, onCancel, onComplete }) => {
     static_site: {
       storage_path: '',
       index_fallback_enabled: true,
-      index_fallback_file: 'index.html'
+      index_fallback_file: 'index.html',
+      subpath_rewrite_enabled: true
     },
     websocket_enabled: true,
     forward_headers: true,
@@ -905,14 +907,40 @@ const NewServerWizard = ({ servers, onCancel, onComplete }) => {
               </div>
             )}
             {draft.server_type === 'static' && (
-              <div>
-                <label className="text-xs text-slate-400">Pasta do site</label>
-                <input
-                  className="mt-1 w-full rounded-xl border border-slate-800 bg-slate-950 px-3 py-2 text-sm"
-                  value={draft.root_path}
-                  onChange={(e) => setDraft({ ...draft, root_path: e.target.value })}
-                  placeholder="/var/www/html"
-                />
+              <div className="space-y-3">
+                <div>
+                  <label className="text-xs text-slate-400">Pasta em Arquivos / Storage</label>
+                  <div className="mt-1 flex gap-2">
+                    <input
+                      className="w-full rounded-xl border border-slate-800 bg-slate-950 px-3 py-2 text-sm"
+                      value={draft.static_site?.storage_path || ''}
+                      onChange={(e) => setDraft({
+                        ...draft,
+                        static_site: {
+                          ...(draft.static_site || {}),
+                          storage_path: normalizeStoragePath(e.target.value)
+                        }
+                      })}
+                      placeholder="/docker/meu-site"
+                    />
+                    <button
+                      type="button"
+                      onClick={() => setShowStaticFolderPicker(true)}
+                      className="rounded-xl bg-emerald-500 px-3 py-2 text-xs font-semibold text-slate-950"
+                    >
+                      Escolher
+                    </button>
+                  </div>
+                </div>
+                <div>
+                  <label className="text-xs text-slate-400">Caminho manual no servidor</label>
+                  <input
+                    className="mt-1 w-full rounded-xl border border-slate-800 bg-slate-950 px-3 py-2 text-sm"
+                    value={draft.root_path}
+                    onChange={(e) => setDraft({ ...draft, root_path: e.target.value })}
+                    placeholder="/var/www/html"
+                  />
+                </div>
               </div>
             )}
           </div>
@@ -976,6 +1004,23 @@ const NewServerWizard = ({ servers, onCancel, onComplete }) => {
           </div>
         </div>
       </div>
+      {showStaticFolderPicker && (
+        <FolderPickerModal
+          title="Selecionar pasta do site"
+          initialPath={draft.static_site?.storage_path || '/'}
+          onSelect={(selectedPath) => {
+            setDraft((prev) => ({
+              ...prev,
+              static_site: {
+                ...(prev.static_site || {}),
+                storage_path: selectedPath
+              }
+            }))
+            setShowStaticFolderPicker(false)
+          }}
+          onClose={() => setShowStaticFolderPicker(false)}
+        />
+      )}
     </div>
   )
 }
