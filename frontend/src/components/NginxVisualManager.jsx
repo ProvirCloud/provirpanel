@@ -1119,6 +1119,11 @@ const ServerForm = ({ server, onSave, onApply, onCancel, dockerContainers, docke
   const [previewWarnings, setPreviewWarnings] = useState([])
   const [routeWarnings, setRouteWarnings] = useState([])
   const [showStaticFolderPicker, setShowStaticFolderPicker] = useState(false)
+  const formRef = useRef(form)
+
+  useEffect(() => {
+    formRef.current = form
+  }, [form])
 
   useEffect(() => {
     if (server) {
@@ -1173,7 +1178,7 @@ const ServerForm = ({ server, onSave, onApply, onCancel, dockerContainers, docke
   const generatePreviewFromForm = async () => {
     setPreviewLoading(true)
     try {
-      const res = await api.post('/nginx/preview-config', form)
+      const res = await api.post('/nginx/preview-config', formRef.current)
       const content = res.data?.config || ''
       setEditorContent(content)
       setEditorTouched(false)
@@ -1182,6 +1187,20 @@ const ServerForm = ({ server, onSave, onApply, onCancel, dockerContainers, docke
       onNotify?.('Erro ao gerar preview', err.response?.data?.error || err.message)
     } finally {
       setPreviewLoading(false)
+    }
+  }
+
+  const syncPreviewForForm = async (nextForm) => {
+    formRef.current = nextForm
+    setForm(nextForm)
+    setEditorTouched(false)
+    try {
+      const res = await api.post('/nginx/preview-config', nextForm)
+      const content = res.data?.config || ''
+      setEditorContent(content)
+      setPreviewWarnings(validateConfigText(content))
+    } catch {
+      // Mantem o form salvo mesmo se o preview falhar.
     }
   }
 
@@ -1279,7 +1298,8 @@ const ServerForm = ({ server, onSave, onApply, onCancel, dockerContainers, docke
   }
 
   const handleSave = async () => {
-    if (!form.name || !form.primary_domain) {
+    const activeForm = formRef.current
+    if (!activeForm.name || !activeForm.primary_domain) {
       onNotify?.('Campos obrigatorios', 'Nome e dominio sao obrigatorios')
       return
     }
@@ -1290,7 +1310,7 @@ const ServerForm = ({ server, onSave, onApply, onCancel, dockerContainers, docke
     let previewContent = editorContent
     if (!editorTouched) {
       try {
-        const res = await api.post('/nginx/preview-config', form)
+        const res = await api.post('/nginx/preview-config', activeForm)
         previewContent = res.data?.config || ''
         setEditorContent(previewContent)
         setEditorTouched(false)
@@ -1321,7 +1341,7 @@ const ServerForm = ({ server, onSave, onApply, onCancel, dockerContainers, docke
             )
             return
           }
-          performSave({ ...form }, true)
+          performSave({ ...activeForm }, true)
         }
       })
     }
@@ -1336,7 +1356,7 @@ const ServerForm = ({ server, onSave, onApply, onCancel, dockerContainers, docke
       confirmText: 'Aplicar',
       onConfirm: async () => {
         setApplyConfirm(null)
-        let payload = { ...form }
+        let payload = { ...formRef.current }
         if (editorTouched) {
           if (server?.id) {
             setApplyLoading(true)
@@ -1510,19 +1530,20 @@ const ServerForm = ({ server, onSave, onApply, onCancel, dockerContainers, docke
   }
 
   const removePathRule = (index) => {
-    setForm({ ...form, path_rules: form.path_rules.filter((_, i) => i !== index) })
-    setEditorTouched(false)
+    const nextForm = { ...formRef.current, path_rules: formRef.current.path_rules.filter((_, i) => i !== index) }
+    syncPreviewForForm(nextForm)
   }
 
   const savePathRule = (rule) => {
+    let nextForm
     if (pathRuleModal?.mode === 'edit') {
-      const newRules = [...form.path_rules]
+      const newRules = [...formRef.current.path_rules]
       newRules[pathRuleModal.index] = rule
-      setForm({ ...form, path_rules: newRules })
+      nextForm = { ...formRef.current, path_rules: newRules }
     } else {
-      setForm({ ...form, path_rules: [...form.path_rules, rule] })
+      nextForm = { ...formRef.current, path_rules: [...formRef.current.path_rules, rule] }
     }
-    setEditorTouched(false)
+    syncPreviewForForm(nextForm)
     setPathRuleModal(null)
     if (rule?.docker_container) {
       const scriptName = normalizeScriptName(rule.path || '/')
