@@ -1211,6 +1211,39 @@ const ServerForm = ({ server, onSave, onApply, onCancel, dockerContainers, docke
     }
   }
 
+  const reloadSavedServer = async (serverId) => {
+    if (!serverId) return null
+    try {
+      const [serverRes, configRes] = await Promise.all([
+        api.get(`/nginx/servers/${serverId}`),
+        api.get(`/nginx/servers/${serverId}/current-config`)
+      ])
+      const savedServer = serverRes.data
+      const configContent = configRes.data?.content || ''
+
+      setForm((prev) => ({
+        ...prev,
+        ...savedServer,
+        upstream_servers: savedServer.upstream_servers || prev.upstream_servers,
+        path_rules: savedServer.path_rules || prev.path_rules,
+        static_site: {
+          storage_path: '',
+          index_fallback_enabled: true,
+          index_fallback_file: 'index.html',
+          ...(savedServer.static_site || prev.static_site || {})
+        }
+      }))
+      setEditorContent(configContent)
+      setCurrentConfig(configContent)
+      setEditorTouched(false)
+      setPreviewWarnings(validateConfigText(configContent))
+      return savedServer
+    } catch (err) {
+      onNotify?.('Erro ao recarregar configuracao', err.response?.data?.error || err.message)
+      return null
+    }
+  }
+
   const performSave = async (payload, applyConfig) => {
     if (Array.isArray(payload.path_rules) && payload.path_rules.length === 0) {
       payload.clear_path_rules = true
@@ -1226,16 +1259,20 @@ const ServerForm = ({ server, onSave, onApply, onCancel, dockerContainers, docke
           setApplyLoading(false)
         }
       }
-      setForm((prev) => ({ ...prev, ...payload }))
-      setCurrentConfig(editorContent)
-      setEditorTouched(false)
+      const reloadedServer = saved?.id ? await reloadSavedServer(saved.id) : null
+      if (!reloadedServer) {
+        setForm((prev) => ({ ...prev, ...payload }))
+        setCurrentConfig(editorContent)
+        setEditorTouched(false)
+      }
       if (applyConfig) {
         setShowAdvanced(false)
+        onNotify?.('Configuracao aplicada', 'Arquivo salvo, recarregado e Nginx reiniciado')
       }
       if (!applyConfig) {
         onNotify?.('Configuracao salva', 'Alteracoes salvas sem aplicar no Nginx')
       }
-      return saved
+      return reloadedServer || saved
     } finally {
       setSaving(false)
     }
@@ -1284,7 +1321,7 @@ const ServerForm = ({ server, onSave, onApply, onCancel, dockerContainers, docke
             )
             return
           }
-          performSave({ ...form }, false)
+          performSave({ ...form }, true)
         }
       })
     }
@@ -1356,7 +1393,6 @@ const ServerForm = ({ server, onSave, onApply, onCancel, dockerContainers, docke
       },
       onCancel: () => {
         setApplyConfirm(null)
-        performSave({ ...form }, false)
       }
     })
   }
@@ -2482,7 +2518,6 @@ const ServerForm = ({ server, onSave, onApply, onCancel, dockerContainers, docke
             onApply={handleApplyFromDiff}
             onClose={() => {
               setDiffModal(null)
-              performSave({ ...form }, false)
             }}
           />
         )}
@@ -3197,6 +3232,7 @@ const NginxVisualManager = () => {
       if (selectedServer?.id) {
         const res = await api.put(`/nginx/servers/${selectedServer.id}`, form)
         savedServer = res.data
+        setSelectedServer(res.data)
       } else {
         const res = await api.post('/nginx/servers', form)
         savedServer = res.data
@@ -3204,7 +3240,7 @@ const NginxVisualManager = () => {
       }
       setShowNewServer(false)
       setNewServerDraft(null)
-      loadData({ importConfigs: false })
+      await loadData({ importConfigs: false })
       return savedServer
     } catch (err) {
       showAlert('Erro ao salvar servidor', err.response?.data?.error || err.message)
