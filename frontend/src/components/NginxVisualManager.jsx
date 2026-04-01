@@ -374,6 +374,7 @@ const PathRuleModal = ({ initialRule, onSave, onCancel }) => {
     try_files: '',
     index_fallback_enabled: true,
     index_fallback_file: 'index.html',
+    subpath_rewrite_enabled: true,
     return_code: 301,
     return_location: '/admin/',
     ...initialRule
@@ -635,6 +636,19 @@ const PathRuleModal = ({ initialRule, onSave, onCancel }) => {
                   />
                   Fallback de SPA para index.html
                 </label>
+              </div>
+              <div className="col-span-2">
+                <label className="flex items-center gap-2 text-xs text-slate-300">
+                  <input
+                    type="checkbox"
+                    checked={Boolean(rule.subpath_rewrite_enabled)}
+                    onChange={(e) => setRule({ ...rule, subpath_rewrite_enabled: e.target.checked })}
+                  />
+                  Corrigir app publicado na raiz para funcionar nesta subpasta
+                </label>
+                <p className="mt-1 text-[11px] text-slate-500">
+                  Reescreve `base href`, `src="/..."` e `href="/..."` para o prefixo da rota.
+                </p>
               </div>
               <div className="col-span-2">
                 <label className="text-xs text-slate-400">Arquivo de fallback</label>
@@ -1783,7 +1797,9 @@ const ServerForm = ({ server, onSave, onApply, onCancel, dockerContainers, docke
       return `${rule.path} -> ${rule.return_code || 301} ${rule.return_location || ''}`.trim()
     }
     if (type === 'static') {
-      return `${rule.path} -> ${rule.alias_path || rule.root_path || ''}`.trim()
+      const target = rule.storage_path || rule.alias_path || rule.root_path || ''
+      const rewriteLabel = rule.subpath_rewrite_enabled ? ' compat-subpasta' : ''
+      return `${rule.path} -> ${target}${rewriteLabel}`.trim()
     }
     const dockerLabel = rule.docker_container ? ` (${rule.docker_container})` : ''
     const rewriteLabel = rule.rewrite_enabled ? ' rewrite' : ''

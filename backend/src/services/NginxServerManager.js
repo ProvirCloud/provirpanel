@@ -335,7 +335,8 @@ class NginxServerManager {
     return {
       storage_path: storagePath,
       index_fallback_enabled: siteConfig.index_fallback_enabled ?? siteConfig.indexFallbackEnabled ?? true,
-      index_fallback_file: indexFallbackFile || 'index.html'
+      index_fallback_file: indexFallbackFile || 'index.html',
+      subpath_rewrite_enabled: siteConfig.subpath_rewrite_enabled ?? siteConfig.subpathRewriteEnabled ?? true
     };
   }
 
@@ -433,6 +434,7 @@ class NginxServerManager {
     const rootPath = resolvedStoragePath || rule.root_path || '';
     const indexFallbackEnabled = rule.index_fallback_enabled ?? rule.indexFallbackEnabled ?? true;
     const indexFallbackFile = rule.index_fallback_file || rule.indexFallbackFile || 'index.html';
+    const subpathRewriteEnabled = rule.subpath_rewrite_enabled ?? rule.subpathRewriteEnabled ?? true;
     const tryFiles = rule.try_files || this.buildStaticTryFiles(rule.path, indexFallbackFile, indexFallbackEnabled);
     return {
       storagePath,
@@ -440,6 +442,7 @@ class NginxServerManager {
       rootPath: rootPath || '/var/www/html',
       indexFallbackEnabled,
       indexFallbackFile,
+      subpathRewriteEnabled,
       tryFiles
     };
   }
@@ -668,6 +671,7 @@ class NginxServerManager {
           try_files: rule.try_files,
           index_fallback_enabled: rule.index_fallback_enabled ?? rule.indexFallbackEnabled,
           index_fallback_file: rule.index_fallback_file || rule.indexFallbackFile,
+          subpath_rewrite_enabled: rule.subpath_rewrite_enabled ?? rule.subpathRewriteEnabled,
           return_code: rule.return_code,
           return_location: rule.return_location
         }));
@@ -730,9 +734,23 @@ class NginxServerManager {
             const staticDirective = staticRule.aliasPath
               ? `alias ${staticRule.aliasPath.endsWith('/') ? staticRule.aliasPath : `${staticRule.aliasPath}/`};`
               : `root ${staticRule.rootPath};`;
+            const staticNormalizedPath = rule.path.endsWith('/') ? rule.path : `${rule.path}/`;
+            const escapedStaticPath = staticNormalizedPath.replace(/'/g, "\\'");
+            const staticRewriteBlock =
+              staticRule.subpathRewriteEnabled && rule.path !== '/'
+                ? `        sub_filter_once off;
+        sub_filter_types text/html text/css application/javascript;
+        sub_filter '<base href=\"/\">' '<base href=\"${escapedStaticPath}\">';
+        sub_filter '<base href=\"./\">' '<base href=\"${escapedStaticPath}\">';
+        sub_filter 'href=\"/' 'href=\"${escapedStaticPath}';
+        sub_filter 'src=\"/' 'src=\"${escapedStaticPath}';
+        sub_filter 'action=\"/' 'action=\"${escapedStaticPath}';
+`
+                : '';
             config += `
     location ${modifierPart}${rule.path} {
         ${staticDirective}
+${staticRewriteBlock}        absolute_redirect off;
         try_files ${tryFiles};
     }
 `;
@@ -799,6 +817,7 @@ ${rewriteLine}${buildProxyBlock(target)}${extraProxyDirectives}    }
         config += `
     location ${modifierPart}${rootRule.path} {
         ${staticDirective}
+        absolute_redirect off;
         try_files ${tryFiles};
     }
 `;
@@ -1647,7 +1666,8 @@ ${buildProxyBlock(proxyTarget)}    }
             root_path: rootMatchInline ? rootMatchInline[1].trim() : undefined,
             try_files: tryFilesMatch ? tryFilesMatch[1].trim() : undefined,
             index_fallback_enabled: tryFilesMatch ? /index\.html\b/.test(tryFilesMatch[1]) : false,
-            index_fallback_file: indexFallbackMatch ? indexFallbackMatch[1] : 'index.html'
+            index_fallback_file: indexFallbackMatch ? indexFallbackMatch[1] : 'index.html',
+            subpath_rewrite_enabled: /sub_filter\s+/i.test(block)
           });
           continue;
         }
