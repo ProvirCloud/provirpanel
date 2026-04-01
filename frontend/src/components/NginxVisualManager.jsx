@@ -3170,7 +3170,7 @@ const NginxVisualManager = () => {
     setConfirmDialog({ title, message, onConfirm: wrappedConfirm, confirmText })
   }
 
-  const loadData = async ({ importConfigs = true } = {}) => {
+  const loadData = async ({ importConfigs = false } = {}) => {
     setLoading(true)
     setError('')
     try {
@@ -3230,7 +3230,7 @@ const NginxVisualManager = () => {
   }
 
   useEffect(() => {
-    loadData()
+    loadData({ importConfigs: false })
   }, [])
 
   useEffect(() => {
