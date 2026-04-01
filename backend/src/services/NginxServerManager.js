@@ -662,9 +662,12 @@ class NginxServerManager {
           helper_subpath_app: Boolean(rule.helper_subpath_app),
           forward_prefix_enabled: Boolean(rule.forward_prefix_enabled),
           fix_root_redirect_enabled: Boolean(rule.fix_root_redirect_enabled),
+          storage_path: rule.storage_path || rule.storagePath,
           alias_path: rule.alias_path,
           root_path: rule.root_path,
           try_files: rule.try_files,
+          index_fallback_enabled: rule.index_fallback_enabled ?? rule.indexFallbackEnabled,
+          index_fallback_file: rule.index_fallback_file || rule.indexFallbackFile,
           return_code: rule.return_code,
           return_location: rule.return_location
         }));
