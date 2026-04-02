@@ -507,6 +507,27 @@ class NginxServerManager {
     };
   }
 
+  buildRuleMetaComment(rule = {}) {
+    try {
+      const normalized = Object.fromEntries(
+        Object.entries(rule).filter(([, value]) => value !== undefined && value !== null && value !== '')
+      );
+      return `        # provirpanel-meta: ${JSON.stringify(normalized)}\n`;
+    } catch {
+      return '';
+    }
+  }
+
+  parseRuleMeta(block = '') {
+    const metaMatch = block.match(/#\s*provirpanel-meta:\s*(\{.*\})/);
+    if (!metaMatch) return {};
+    try {
+      return JSON.parse(metaMatch[1]);
+    } catch {
+      return {};
+    }
+  }
+
   formatCertForApi(cert) {
     if (!cert) return null;
     return {
@@ -780,9 +801,16 @@ class NginxServerManager {
 `;
           }
           if (rule.type === 'redirect' && rule.return_code && rule.return_location) {
+            const ruleMeta = this.buildRuleMetaComment({
+              path: rule.path,
+              modifier: normalizedModifier,
+              type: 'redirect',
+              return_code: rule.return_code,
+              return_location: rule.return_location
+            });
             config += `
     location ${modifierPart}${rule.path} {
-        return ${rule.return_code} ${rule.return_location};
+${ruleMeta}        return ${rule.return_code} ${rule.return_location};
     }
 `;
             return;
@@ -811,9 +839,21 @@ class NginxServerManager {
         sub_filter 'action=\"/' 'action=\"${escapedStaticPath}';
 `
                 : '';
+            const ruleMeta = this.buildRuleMetaComment({
+              path: rule.path,
+              modifier: normalizedModifier,
+              type: 'static',
+              storage_path: staticRule.storagePath,
+              alias_path: rule.alias_path,
+              root_path: rule.root_path,
+              index_fallback_enabled: staticRule.indexFallbackEnabled,
+              index_fallback_file: staticRule.indexFallbackFile,
+              subpath_rewrite_enabled: staticRule.subpathRewriteEnabled,
+              try_files: rule.try_files
+            });
             config += `
     location ${modifierPart}${rule.path} {
-        root ${staticBasePath};
+${ruleMeta}        root ${staticBasePath};
 ${staticPrefixRewrite}${staticRewriteBlock}        absolute_redirect off;
         try_files ${staticTryFiles};
     }
@@ -857,18 +897,42 @@ ${staticPrefixRewrite}${staticRewriteBlock}        absolute_redirect off;
             extraProxyLines.push(`        proxy_redirect ~^/(?!${escapedPrefix}(?:/|$))(.*)$ ${normalizedRedirectTarget}$1;`);
           }
           const extraProxyDirectives = extraProxyLines.length ? `${extraProxyLines.join('\n')}\n` : '';
+          const ruleMeta = this.buildRuleMetaComment({
+            path: rule.path,
+            modifier: normalizedModifier,
+            type: 'proxy',
+            proxy_host: rule.proxy_host,
+            proxy_port: rule.proxy_port,
+            proxy_pass_path: pathSuffix || undefined,
+            subpath_proxy_mode: rule.subpath_proxy_mode,
+            proxy_redirect_off: Boolean(rule.proxy_redirect_off),
+            rewrite_enabled: Boolean(rule.rewrite_enabled),
+            rewrite_from: rule.rewrite_from,
+            rewrite_to: rule.rewrite_to,
+            rewrite_flag: rule.rewrite_flag,
+            helper_subpath_app: Boolean(rule.helper_subpath_app),
+            forward_prefix_enabled: forwardPrefixEnabled,
+            fix_root_redirect_enabled: fixRootRedirectEnabled
+          });
           config += `
     location ${modifierPart}${rule.path} {
-${rewriteLine}${buildProxyBlock(target)}${extraProxyDirectives}    }
+${ruleMeta}${rewriteLine}${buildProxyBlock(target)}${extraProxyDirectives}    }
 `;
         });
       }
 
       if (rootRule && rootRule.type === 'redirect' && rootRule.return_code && rootRule.return_location) {
         const modifierPart = rootRule.modifier ? `${rootRule.modifier} ` : '';
+        const ruleMeta = this.buildRuleMetaComment({
+          path: rootRule.path,
+          modifier: rootRule.modifier || '',
+          type: 'redirect',
+          return_code: rootRule.return_code,
+          return_location: rootRule.return_location
+        });
         config += `
     location ${modifierPart}${rootRule.path} {
-        return ${rootRule.return_code} ${rootRule.return_location};
+${ruleMeta}        return ${rootRule.return_code} ${rootRule.return_location};
     }
 `;
       } else if (rootRule && rootRule.type === 'static' && (rootRule.alias_path || rootRule.root_path || rootRule.storage_path || rootRule.storagePath)) {
@@ -878,9 +942,21 @@ ${rewriteLine}${buildProxyBlock(target)}${extraProxyDirectives}    }
         const staticDirective = staticRule.aliasPath
           ? `alias ${staticRule.aliasPath.endsWith('/') ? staticRule.aliasPath : `${staticRule.aliasPath}/`};`
           : `root ${staticRule.rootPath};`;
+        const ruleMeta = this.buildRuleMetaComment({
+          path: rootRule.path,
+          modifier: rootRule.modifier || '',
+          type: 'static',
+          storage_path: staticRule.storagePath,
+          alias_path: rootRule.alias_path,
+          root_path: rootRule.root_path,
+          index_fallback_enabled: staticRule.indexFallbackEnabled,
+          index_fallback_file: staticRule.indexFallbackFile,
+          subpath_rewrite_enabled: staticRule.subpathRewriteEnabled,
+          try_files: rootRule.try_files
+        });
         config += `
     location ${modifierPart}${rootRule.path} {
-        ${staticDirective}
+${ruleMeta}        ${staticDirective}
         absolute_redirect off;
         try_files ${tryFiles};
     }
@@ -1704,6 +1780,7 @@ ${buildProxyBlock(proxyTarget)}    }
         if (!locPath) continue;
         const normalizedLocPath = (locPath.startsWith('/') ? locPath : `/${locPath}`).replace(/\/+/g, '/');
         if (normalizedLocPath === verificationPath) continue;
+        const meta = this.parseRuleMeta(block);
 
         const returnMatch = block.match(/return\s+(\d+)\s+([^;]+);/);
         if (returnMatch) {
@@ -1712,7 +1789,8 @@ ${buildProxyBlock(proxyTarget)}    }
             modifier,
             type: 'redirect',
             return_code: parseInt(returnMatch[1], 10),
-            return_location: returnMatch[2].trim()
+            return_location: returnMatch[2].trim(),
+            ...meta
           });
           continue;
         }
@@ -1731,7 +1809,8 @@ ${buildProxyBlock(proxyTarget)}    }
             try_files: tryFilesMatch ? tryFilesMatch[1].trim() : undefined,
             index_fallback_enabled: tryFilesMatch ? /index\.html\b/.test(tryFilesMatch[1]) : false,
             index_fallback_file: indexFallbackMatch ? indexFallbackMatch[1] : 'index.html',
-            subpath_rewrite_enabled: /sub_filter\s+/i.test(block)
+            subpath_rewrite_enabled: /sub_filter\s+/i.test(block),
+            ...meta
           });
           continue;
         }
@@ -1772,7 +1851,8 @@ ${buildProxyBlock(proxyTarget)}    }
             rewrite_flag: rewriteFlag,
             helper_subpath_app: helperSubpathApp,
             forward_prefix_enabled: forwardPrefixEnabled,
-            fix_root_redirect_enabled: fixRootRedirectEnabled
+            fix_root_redirect_enabled: fixRootRedirectEnabled,
+            ...meta
           });
         }
       }
