@@ -1682,12 +1682,20 @@ const ServerForm = ({ server, onSave, onApply, onCancel, dockerContainers, docke
   const removePathRule = async (index) => {
     const ruleToRemove = formRef.current.path_rules[index]
     if (ruleToRemove?.type === 'static' && ruleToRemove?.path) {
-      const targetPath = ruleToRemove.published_www_path || buildPublishedWwwPath(ruleToRemove.path)
+      const targetPath = ruleToRemove.published_www_path || (
+        (ruleToRemove.storage_source || 'storage') === 'www'
+          ? buildAbsoluteWwwPathFromSelection(ruleToRemove.storage_path || ruleToRemove.path)
+          : buildPublishedWwwPath(ruleToRemove.path)
+      )
       const removePublishedFolder = window.confirm(`Remover também a pasta publicada em ${targetPath}?`)
       if (removePublishedFolder) {
         try {
           await api.delete('/nginx/static-sites/published', {
-            data: { requestPath: ruleToRemove.path }
+            data: {
+              requestPath: (ruleToRemove.storage_source || 'storage') === 'www'
+                ? (ruleToRemove.storage_path || ruleToRemove.path)
+                : ruleToRemove.path
+            }
           })
           onNotify?.('Pasta publicada removida', targetPath)
         } catch (err) {
@@ -1746,6 +1754,12 @@ const ServerForm = ({ server, onSave, onApply, onCancel, dockerContainers, docke
     return `/var/www/${normalized}`
   }
 
+  const buildAbsoluteWwwPathFromSelection = (value) => {
+    const normalized = normalizeStoragePath(value).replace(/^\/+|\/+$/g, '')
+    if (!normalized) return '/var/www'
+    return `/var/www/${normalized}`
+  }
+
   const pollPublishJob = async (jobId) => {
     while (true) {
       const response = await api.get(`/nginx/static-sites/publish-jobs/${jobId}`)
@@ -1762,6 +1776,15 @@ const ServerForm = ({ server, onSave, onApply, onCancel, dockerContainers, docke
   const publishStaticPathRule = async (rule) => {
     if (rule.type !== 'static' || !rule.storage_path) {
       return rule
+    }
+    if ((rule.storage_source || 'storage') === 'www') {
+      return {
+        ...rule,
+        alias_path: '',
+        root_path: '/var/www',
+        try_files: '',
+        published_www_path: buildAbsoluteWwwPathFromSelection(rule.storage_path)
+      }
     }
     setPublishProgress({
       status: 'pending',
