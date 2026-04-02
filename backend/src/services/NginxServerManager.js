@@ -19,19 +19,25 @@ class NginxServerManager {
 
   // ==================== DATABASE OPERATIONS ====================
 
+  async syncDatabaseFromFilesystem() {
+    try {
+      await this.importAllConfigs();
+    } catch (err) {
+      if (err.code === 'P2021' || err.message?.includes('does not exist')) {
+        console.warn('[NginxServerManager] Tables not created yet - run prisma db push');
+        return;
+      }
+      throw err;
+    }
+  }
+
   async getAllServers() {
     try {
-      let servers = await prisma.nginxServer.findMany({
+      await this.syncDatabaseFromFilesystem();
+      const servers = await prisma.nginxServer.findMany({
         include: { sslCerts: true },
         orderBy: { createdAt: 'desc' }
       });
-      if (servers.length === 0) {
-        await this.importAllConfigs();
-        servers = await prisma.nginxServer.findMany({
-          include: { sslCerts: true },
-          orderBy: { createdAt: 'desc' }
-        });
-      }
       const updated = [];
       for (const server of servers) {
         const actualActive = this.resolveActiveFromFs(server);
@@ -50,7 +56,7 @@ class NginxServerManager {
         }
         updated.push(server);
       }
-      return updated.map(s => this.formatServerForApi(s));
+      return updated.map((server) => this.formatServerForApi(server));
     } catch (err) {
       if (err.code === 'P2021' || err.message?.includes('does not exist')) {
         console.warn('[NginxServerManager] Tables not created yet - run prisma db push');
@@ -62,6 +68,7 @@ class NginxServerManager {
 
   async getServerById(id) {
     try {
+      await this.syncDatabaseFromFilesystem();
       const server = await prisma.nginxServer.findUnique({
         where: { id },
         include: { sslCerts: true }
@@ -83,10 +90,56 @@ class NginxServerManager {
     }
   }
 
+  buildConfigFileName(primaryDomain, fallback = 'server') {
+    const baseName = String(primaryDomain || fallback).replace(/[^a-zA-Z0-9.-]/g, '_') || fallback;
+    return `${baseName}.conf`;
+  }
+
+  buildConfigFilePath(primaryDomain, fallback = 'server') {
+    return path.join(this.getTargetDir(), this.buildConfigFileName(primaryDomain, fallback));
+  }
+
+  async persistServerFile(serverRecord, previousConfigFilePath = null) {
+    const server = this.formatServerForApi(serverRecord);
+    if (!server?.config_file_path) {
+      throw new Error('Config file path not defined');
+    }
+
+    fs.mkdirSync(path.dirname(server.config_file_path), { recursive: true });
+    const config = this.generateNginxConfig(server);
+    fs.writeFileSync(server.config_file_path, config);
+
+    if (
+      previousConfigFilePath
+      && previousConfigFilePath !== server.config_file_path
+      && fs.existsSync(previousConfigFilePath)
+    ) {
+      try {
+        this.disableConfigFile(path.basename(previousConfigFilePath));
+      } catch {
+        // ignore stale symlink cleanup errors
+      }
+      fs.unlinkSync(previousConfigFilePath);
+    }
+
+    if (
+      fs.existsSync(this.sitesAvailable)
+      && path.resolve(server.config_file_path).startsWith(path.resolve(this.sitesAvailable))
+    ) {
+      const filename = path.basename(server.config_file_path);
+      if (server.is_active) {
+        this.enableConfigFile(filename);
+      } else {
+        this.disableConfigFile(filename);
+      }
+    }
+
+    return { ...server, raw_config: config };
+  }
+
   async createServer(data) {
     const primaryDomain = data.primary_domain;
-    const configFileName = `${primaryDomain.replace(/[^a-zA-Z0-9.-]/g, '_')}.conf`;
-    const configFilePath = path.join(this.getTargetDir(), configFileName);
+    const configFilePath = this.buildConfigFilePath(primaryDomain, `server-${Date.now()}`);
     const dockerMeta = this.buildDockerMeta(
       data.path_rules || [],
       data.upstream_servers || [],
@@ -125,12 +178,15 @@ class NginxServerManager {
       }
     });
 
-    return this.formatServerForApi(server);
+    return this.persistServerFile(server);
   }
 
   async updateServer(id, data) {
     const updateData = {};
     const existing = await prisma.nginxServer.findUnique({ where: { id } });
+    if (!existing) {
+      throw new Error('Server not found');
+    }
     const existingPathRules = Array.isArray(existing?.pathRules) ? existing.pathRules : [];
     let currentFileRules = [];
     if (existing?.configFilePath && fs.existsSync(existing.configFilePath)) {
@@ -234,13 +290,17 @@ class NginxServerManager {
       }
     }
 
+    if (data.primary_domain !== undefined) {
+      updateData.configFilePath = this.buildConfigFilePath(data.primary_domain, `server-${id}`);
+    }
+
     const server = await prisma.nginxServer.update({
       where: { id },
       data: updateData,
       include: { sslCerts: true }
     });
 
-    return this.formatServerForApi(server);
+    return this.persistServerFile(server, existing.configFilePath);
   }
 
   async setServerActive(id, isActive) {
