@@ -510,6 +510,40 @@ class NginxServerManager {
     };
   }
 
+  getPathSegments(rulePath = '') {
+    return String(rulePath)
+      .replace(/^\/+|\/+$/g, '')
+      .split('/')
+      .filter(Boolean);
+  }
+
+  getStaticLocationDirective(rulePath, physicalPath) {
+    const normalizedPhysical = String(physicalPath || '').replace(/\/+$/, '');
+    if (!normalizedPhysical) {
+      return { directive: 'root', value: '/var/www/html' };
+    }
+
+    const urlSegments = this.getPathSegments(rulePath);
+    if (!urlSegments.length) {
+      return { directive: 'root', value: normalizedPhysical };
+    }
+
+    const physicalSegments = normalizedPhysical.split('/').filter(Boolean);
+    const physicalSuffix = physicalSegments.slice(-urlSegments.length);
+    if (physicalSuffix.join('/') === urlSegments.join('/')) {
+      let rootPath = normalizedPhysical;
+      for (let index = 0; index < urlSegments.length; index += 1) {
+        rootPath = path.dirname(rootPath);
+      }
+      return { directive: 'root', value: rootPath || '/' };
+    }
+
+    return {
+      directive: 'alias',
+      value: normalizedPhysical.endsWith('/') ? normalizedPhysical : `${normalizedPhysical}/`
+    };
+  }
+
   formatCertForApi(cert) {
     if (!cert) return null;
     return {
@@ -795,6 +829,7 @@ class NginxServerManager {
           if (rule.type === 'static' && (rule.alias_path || rule.root_path || rule.storage_path || rule.storagePath)) {
             const staticRule = this.resolveStaticRuleConfig(rule);
             const staticBasePath = staticRule.aliasPath || staticRule.rootPath;
+            const staticLocation = this.getStaticLocationDirective(rule.path, staticBasePath);
             const staticTryFiles = rule.path !== '/'
               ? this.buildStaticTryFiles(rule.path, staticRule.indexFallbackFile, staticRule.indexFallbackEnabled)
               : staticRule.tryFiles;
@@ -813,7 +848,7 @@ class NginxServerManager {
                 : '';
             config += `
     location ${modifierPart}${rule.path} {
-        root ${staticBasePath};
+        ${staticLocation.directive} ${staticLocation.value};
 ${staticRewriteBlock}        absolute_redirect off;
         try_files ${staticTryFiles};
     }
