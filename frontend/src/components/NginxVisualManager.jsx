@@ -87,6 +87,33 @@ const LoadingDialog = ({ title, message }) => (
   </div>
 )
 
+const ProgressDialog = ({ title, progress = 0, status, currentFile, messages = [] }) => (
+  <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 p-4">
+    <div className="w-full max-w-xl rounded-2xl border border-slate-800 bg-slate-900/95 p-6 text-slate-100">
+      <h3 className="text-lg font-semibold">{title}</h3>
+      <p className="mt-2 text-sm text-slate-300">
+        {status === 'error' ? 'Falha ao copiar arquivos.' : 'Copiando arquivos para a pasta publicada do Nginx.'}
+      </p>
+      <div className="mt-4 h-3 overflow-hidden rounded-full bg-slate-800">
+        <div
+          className={`h-full transition-all ${status === 'error' ? 'bg-rose-500' : 'bg-emerald-500'}`}
+          style={{ width: `${Math.max(0, Math.min(progress, 100))}%` }}
+        />
+      </div>
+      <div className="mt-2 flex items-center justify-between text-xs text-slate-400">
+        <span>{progress}%</span>
+        {currentFile ? <span className="truncate pl-3 text-right">{currentFile}</span> : <span />}
+      </div>
+      <div className="mt-4 max-h-52 overflow-y-auto rounded-xl border border-slate-800 bg-slate-950 p-3 text-xs text-slate-300">
+        {messages.length === 0 && <p>Aguardando início da cópia...</p>}
+        {messages.map((message, index) => (
+          <p key={`${index}-${message}`} className="break-all">{message}</p>
+        ))}
+      </div>
+    </div>
+  </div>
+)
+
 const DockerCreateModal = ({ templates, form, onChange, onCreate, onCancel, loading }) => (
   <div className="fixed inset-0 z-40 flex items-center justify-center bg-black/60 p-4">
     <div className="w-full max-w-lg rounded-2xl border border-slate-800 bg-slate-900/95 p-6 text-slate-100">
@@ -222,30 +249,45 @@ const normalizeStoragePath = (value) => {
   return withLeadingSlash.replace(/\/+/g, '/')
 }
 
-const FolderPickerModal = ({ title = 'Selecionar pasta', initialPath = '/', onSelect, onClose }) => {
+const FolderPickerModal = ({
+  title = 'Selecionar pasta',
+  initialPath = '/',
+  initialSource = 'storage',
+  onSelect,
+  onClose
+}) => {
   const [currentPath, setCurrentPath] = useState(normalizeStoragePath(initialPath))
+  const [source, setSource] = useState(initialSource === 'www' ? 'www' : 'storage')
   const [items, setItems] = useState([])
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState('')
+  const [roots, setRoots] = useState([
+    { key: 'storage', label: 'Arquivos' },
+    { key: 'www', label: 'WWW' }
+  ])
 
-  const loadPath = useCallback(async (targetPath) => {
+  const loadPath = useCallback(async (targetPath, sourceKey = source) => {
     const normalized = normalizeStoragePath(targetPath)
     setLoading(true)
     setError('')
     try {
-      const response = await api.get('/storage', { params: { path: normalized } })
+      const response = await api.get('/nginx/static-sites/browse', {
+        params: { path: normalized, source: sourceKey }
+      })
       setItems((response.data?.items || []).filter((item) => item.isDir))
+      setRoots(response.data?.roots || roots)
       setCurrentPath(normalized)
+      setSource(sourceKey)
     } catch (err) {
       setError(err.response?.data?.message || err.message)
     } finally {
       setLoading(false)
     }
-  }, [])
+  }, [roots, source])
 
   useEffect(() => {
-    loadPath(initialPath || '/')
-  }, [initialPath, loadPath])
+    loadPath(initialPath || '/', initialSource || 'storage')
+  }, [initialPath, initialSource, loadPath])
 
   const parentPath = currentPath === '/'
     ? '/'
@@ -258,7 +300,7 @@ const FolderPickerModal = ({ title = 'Selecionar pasta', initialPath = '/', onSe
           <div>
             <h3 className="text-lg font-semibold">{title}</h3>
             <p className="mt-1 text-xs text-slate-400">
-              Escolha uma pasta já enviada em Arquivos/Storage. O Nginx vai servir o `index.html` dessa pasta.
+              Escolha uma pasta de Arquivos ou da WWW. Ao publicar um path estático, o conteúdo será copiado para a pasta publicada do Nginx.
             </p>
           </div>
           <button
@@ -270,19 +312,34 @@ const FolderPickerModal = ({ title = 'Selecionar pasta', initialPath = '/', onSe
         </div>
 
         <div className="mt-4 rounded-xl border border-slate-800 bg-slate-950 px-3 py-2 text-xs text-slate-300">
+          Origem: <span className="font-semibold text-white">{source === 'www' ? 'WWW' : 'Arquivos'}</span>
+          <span className="mx-2 text-slate-600">•</span>
           Pasta atual: <span className="font-mono text-white">{currentPath}</span>
         </div>
 
-        <div className="mt-3 flex gap-2">
+        <div className="mt-3 flex flex-wrap gap-2">
+          {roots.map((rootOption) => (
+            <button
+              key={rootOption.key}
+              onClick={() => loadPath('/', rootOption.key)}
+              className={`rounded-lg px-3 py-2 text-xs ${
+                source === rootOption.key
+                  ? 'bg-blue-500 text-white'
+                  : 'border border-slate-800 bg-slate-950 text-slate-200'
+              }`}
+            >
+              {rootOption.label}
+            </button>
+          ))}
           <button
-            onClick={() => loadPath(parentPath)}
+            onClick={() => loadPath(parentPath, source)}
             disabled={loading || currentPath === '/'}
             className="rounded-lg border border-slate-800 bg-slate-950 px-3 py-2 text-xs text-slate-200 disabled:opacity-50"
           >
             Voltar
           </button>
           <button
-            onClick={() => onSelect(currentPath)}
+            onClick={() => onSelect({ path: currentPath, source })}
             className="rounded-lg bg-emerald-500 px-3 py-2 text-xs font-semibold text-slate-950"
           >
             Usar esta pasta
@@ -298,7 +355,7 @@ const FolderPickerModal = ({ title = 'Selecionar pasta', initialPath = '/', onSe
           {!loading && !error && items.map((item) => (
             <button
               key={item.path}
-              onClick={() => loadPath(item.path)}
+              onClick={() => loadPath(item.path, source)}
               className="flex w-full items-center justify-between border-b border-slate-800 px-4 py-3 text-left text-sm text-slate-200 transition hover:bg-slate-900"
             >
               <span>{item.name}</span>
@@ -348,7 +405,7 @@ const buildDiffLines = (oldText, newText) => {
   return diff
 }
 
-const PathRuleModal = ({ initialRule, onSave, onCancel }) => {
+const PathRuleModal = ({ initialRule, onSave, onCancel, saving }) => {
   const [rule, setRule] = useState({
     path: '/api',
     type: 'proxy',
@@ -368,7 +425,9 @@ const PathRuleModal = ({ initialRule, onSave, onCancel }) => {
     rewrite_from: '',
     rewrite_to: '',
     rewrite_flag: 'break',
+    storage_source: 'storage',
     storage_path: '',
+    published_www_path: '',
     alias_path: '',
     root_path: '',
     try_files: '',
@@ -386,7 +445,7 @@ const PathRuleModal = ({ initialRule, onSave, onCancel }) => {
   const isRedirect = rule.type === 'redirect'
   const normalizePath = (value) => (value && value.startsWith('/') ? value : `/${value || ''}`)
 
-  const handleSave = () => {
+  const handleSave = async () => {
     const nextRule = { ...rule }
     if (isProxy && nextRule.helper_subpath_app) {
       const normalized = normalizePath(nextRule.path || '/app')
@@ -411,7 +470,7 @@ const PathRuleModal = ({ initialRule, onSave, onCancel }) => {
     if (!nextRule.proxy_pass_path) {
       delete nextRule.proxy_pass_path
     }
-    onSave(nextRule)
+    await onSave(nextRule)
   }
 
   return (
@@ -615,6 +674,11 @@ const PathRuleModal = ({ initialRule, onSave, onCancel }) => {
                 <p className="mt-2 text-[11px] text-emerald-200/90">
                   Se preencher aqui, o painel resolve a pasta real no servidor e gera o fallback para `index.html`.
                 </p>
+                {rule.published_www_path && (
+                  <p className="mt-2 text-[11px] text-slate-400">
+                    Pasta publicada atual: <span className="font-mono text-slate-200">{rule.published_www_path}</span>
+                  </p>
+                )}
               </div>
               <div className="col-span-2">
                 <label className="text-xs text-slate-400">Alias</label>
@@ -704,12 +768,14 @@ const PathRuleModal = ({ initialRule, onSave, onCancel }) => {
         <div className="mt-5 flex gap-2 justify-end">
           <button
             onClick={handleSave}
+            disabled={saving}
             className="rounded-xl bg-blue-500 px-4 py-2 text-xs font-semibold text-slate-950"
           >
-            Salvar
+            {saving ? 'Copiando...' : 'Salvar'}
           </button>
           <button
             onClick={onCancel}
+            disabled={saving}
             className="rounded-xl border border-slate-800 bg-slate-950 px-4 py-2 text-xs text-slate-200"
           >
             Cancelar
@@ -720,8 +786,9 @@ const PathRuleModal = ({ initialRule, onSave, onCancel }) => {
         <FolderPickerModal
           title="Selecionar pasta do path estático"
           initialPath={rule.storage_path || '/'}
-          onSelect={(selectedPath) => {
-            setRule({ ...rule, storage_path: selectedPath })
+          initialSource={rule.storage_source || 'storage'}
+          onSelect={({ path: selectedPath, source }) => {
+            setRule({ ...rule, storage_path: selectedPath, storage_source: source })
             setShowFolderPicker(false)
           }}
           onClose={() => setShowFolderPicker(false)}
@@ -1185,6 +1252,8 @@ const ServerForm = ({ server, onSave, onApply, onCancel, dockerContainers, docke
   const [previewWarnings, setPreviewWarnings] = useState([])
   const [routeWarnings, setRouteWarnings] = useState([])
   const [showStaticFolderPicker, setShowStaticFolderPicker] = useState(false)
+  const [pathSaving, setPathSaving] = useState(false)
+  const [publishProgress, setPublishProgress] = useState(null)
   const formRef = useRef(form)
 
   useEffect(() => {
@@ -1590,30 +1659,60 @@ const ServerForm = ({ server, onSave, onApply, onCancel, dockerContainers, docke
         proxy_redirect_mode: 'auto',
         proxy_redirect_off: false,
         forward_prefix_enabled: false,
-        fix_root_redirect_enabled: false
+        fix_root_redirect_enabled: false,
+        storage_source: 'storage',
+        published_www_path: ''
       }
     })
   }
 
-  const removePathRule = (index) => {
+  const removePathRule = async (index) => {
+    const ruleToRemove = formRef.current.path_rules[index]
+    if (ruleToRemove?.type === 'static' && ruleToRemove?.path) {
+      const targetPath = ruleToRemove.published_www_path || buildPublishedWwwPath(ruleToRemove.path)
+      const removePublishedFolder = window.confirm(`Remover também a pasta publicada em ${targetPath}?`)
+      if (removePublishedFolder) {
+        try {
+          await api.delete('/nginx/static-sites/published', {
+            data: { requestPath: ruleToRemove.path }
+          })
+          onNotify?.('Pasta publicada removida', targetPath)
+        } catch (err) {
+          onNotify?.('Erro ao remover pasta publicada', err.response?.data?.error || err.message)
+          return
+        }
+      }
+    }
     const nextForm = { ...formRef.current, path_rules: formRef.current.path_rules.filter((_, i) => i !== index) }
     syncPreviewForForm(nextForm)
   }
 
-  const savePathRule = (rule) => {
-    let nextForm
-    if (pathRuleModal?.mode === 'edit') {
-      const newRules = [...formRef.current.path_rules]
-      newRules[pathRuleModal.index] = rule
-      nextForm = { ...formRef.current, path_rules: newRules }
-    } else {
-      nextForm = { ...formRef.current, path_rules: [...formRef.current.path_rules, rule] }
-    }
-    syncPreviewForForm(nextForm)
-    setPathRuleModal(null)
-    if (rule?.docker_container) {
-      const scriptName = normalizeScriptName(rule.path || '/')
-      requestDockerScriptNameUpdate(rule.docker_container, scriptName)
+  const savePathRule = async (rule) => {
+    setPathSaving(true)
+    try {
+      const preparedRule = await publishStaticPathRule(rule)
+      let nextForm
+      if (pathRuleModal?.mode === 'edit') {
+        const newRules = [...formRef.current.path_rules]
+        newRules[pathRuleModal.index] = preparedRule
+        nextForm = { ...formRef.current, path_rules: newRules }
+      } else {
+        nextForm = { ...formRef.current, path_rules: [...formRef.current.path_rules, preparedRule] }
+      }
+      await syncPreviewForForm(nextForm)
+      setPathRuleModal(null)
+      if (preparedRule?.docker_container) {
+        const scriptName = normalizeScriptName(preparedRule.path || '/')
+        requestDockerScriptNameUpdate(preparedRule.docker_container, scriptName)
+      }
+      if (preparedRule?.type === 'static' && preparedRule?.published_www_path) {
+        onNotify?.('Pasta publicada', `Arquivos copiados para ${preparedRule.published_www_path}`)
+      }
+    } catch (err) {
+      onNotify?.('Erro ao preparar path estático', err.response?.data?.error || err.message)
+    } finally {
+      setPathSaving(false)
+      setPublishProgress(null)
     }
   }
 
@@ -1626,6 +1725,50 @@ const ServerForm = ({ server, onSave, onApply, onCancel, dockerContainers, docke
   const normalizePath = (value) => {
     if (!value) return '/'
     return value.startsWith('/') ? value : `/${value}`
+  }
+
+  const buildPublishedWwwPath = (value) => {
+    const normalized = normalizePath(value).replace(/^\/+|\/+$/g, '')
+    if (!normalized) return '/var/www'
+    return `/var/www/${normalized}`
+  }
+
+  const pollPublishJob = async (jobId) => {
+    while (true) {
+      const response = await api.get(`/nginx/static-sites/publish-jobs/${jobId}`)
+      const job = response.data
+      setPublishProgress(job)
+      if (job.status === 'success') return job
+      if (job.status === 'error') {
+        throw new Error(job.error || 'Erro ao copiar arquivos')
+      }
+      await new Promise((resolve) => setTimeout(resolve, 350))
+    }
+  }
+
+  const publishStaticPathRule = async (rule) => {
+    if (rule.type !== 'static' || !rule.storage_path) {
+      return rule
+    }
+    setPublishProgress({
+      status: 'pending',
+      progress: 0,
+      currentFile: '',
+      messages: ['Preparando cópia da pasta para a área publicada do Nginx...']
+    })
+    const publishResponse = await api.post('/nginx/static-sites/publish', {
+      source: rule.storage_source || 'storage',
+      sourcePath: rule.storage_path,
+      requestPath: rule.path
+    })
+    const job = await pollPublishJob(publishResponse.data.jobId)
+    return {
+      ...rule,
+      alias_path: '',
+      root_path: '/var/www',
+      try_files: '',
+      published_www_path: job.targetPath || buildPublishedWwwPath(rule.path)
+    }
   }
 
   const getServiceForContainer = (container) => {
@@ -2585,11 +2728,11 @@ const ServerForm = ({ server, onSave, onApply, onCancel, dockerContainers, docke
         <div className="flex gap-2">
           <button
             onClick={handleSave}
-            disabled={saving}
+            disabled={saving || pathSaving}
             className="flex-1 flex items-center justify-center gap-2 rounded-xl bg-emerald-500 px-4 py-2 text-sm font-semibold text-white hover:bg-emerald-600 disabled:opacity-50"
           >
             <Save className="h-4 w-4" />
-            {saving ? 'Salvando...' : 'Salvar'}
+            {saving ? 'Salvando...' : pathSaving ? 'Publicando arquivos...' : 'Salvar'}
           </button>
           {onCancel && (
             <button
@@ -2642,13 +2785,24 @@ const ServerForm = ({ server, onSave, onApply, onCancel, dockerContainers, docke
           initialRule={pathRuleModal.rule}
           onSave={savePathRule}
           onCancel={() => setPathRuleModal(null)}
+          saving={pathSaving}
+        />
+      )}
+      {publishProgress && (
+        <ProgressDialog
+          title="Publicando site estático"
+          progress={publishProgress.progress || 0}
+          status={publishProgress.status}
+          currentFile={publishProgress.currentFile}
+          messages={publishProgress.messages || []}
         />
       )}
       {showStaticFolderPicker && (
         <FolderPickerModal
           title="Selecionar pasta do site"
           initialPath={form.static_site?.storage_path || '/'}
-          onSelect={(selectedPath) => {
+          initialSource="storage"
+          onSelect={({ path: selectedPath }) => {
             setForm((prev) => ({
               ...prev,
               static_site: {

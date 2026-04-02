@@ -783,7 +783,8 @@ class NginxServerManager {
           const normalizedModifier = rule.type === 'static' && rule.path !== '/' && rule.path.endsWith('/') && rule.modifier === '='
             ? ''
             : rule.modifier;
-          const modifierPart = normalizedModifier ? `${normalizedModifier} ` : '';
+          const locationModifier = rule.type === 'static' && !normalizedModifier ? '^~' : normalizedModifier;
+          const modifierPart = locationModifier ? `${locationModifier} ` : '';
           const shouldEmitCanonicalRedirect = (
             (rule.type === 'proxy' && !rule.proxy_redirect_off && Boolean(rule.helper_subpath_app || rule.fix_root_redirect_enabled))
             || rule.type === 'static'
@@ -823,14 +824,10 @@ ${ruleMeta}        return ${rule.return_code} ${rule.return_location};
             const staticRule = this.resolveStaticRuleConfig(rule);
             const staticBasePath = staticRule.aliasPath || staticRule.rootPath;
             const staticTryFiles = rule.path !== '/'
-              ? this.buildStaticTryFiles('/', staticRule.indexFallbackFile, staticRule.indexFallbackEnabled)
+              ? this.buildStaticTryFiles(rule.path, staticRule.indexFallbackFile, staticRule.indexFallbackEnabled)
               : staticRule.tryFiles;
             const staticNormalizedPath = rule.path.endsWith('/') ? rule.path : `${rule.path}/`;
             const escapedStaticPath = staticNormalizedPath.replace(/'/g, "\\'");
-            const escapedStaticRegex = escapeRegex(staticNormalizedPath);
-            const staticPrefixRewrite = rule.path !== '/'
-              ? `        rewrite ^${escapedStaticRegex}(.*)$ /$1 break;\n`
-              : '';
             const staticRewriteBlock =
               staticRule.subpathRewriteEnabled && rule.path !== '/'
                 ? `        sub_filter_once off;
@@ -846,7 +843,9 @@ ${ruleMeta}        return ${rule.return_code} ${rule.return_location};
               path: rule.path,
               modifier: normalizedModifier,
               type: 'static',
+              storage_source: rule.storage_source,
               storage_path: staticRule.storagePath,
+              published_www_path: rule.published_www_path,
               alias_path: rule.alias_path,
               root_path: rule.root_path,
               index_fallback_enabled: staticRule.indexFallbackEnabled,
@@ -857,7 +856,7 @@ ${ruleMeta}        return ${rule.return_code} ${rule.return_location};
             config += `
     location ${modifierPart}${rule.path} {
 ${ruleMeta}        root ${staticBasePath};
-${staticPrefixRewrite}${staticRewriteBlock}        absolute_redirect off;
+${staticRewriteBlock}        absolute_redirect off;
         try_files ${staticTryFiles};
     }
 `;
@@ -949,7 +948,9 @@ ${ruleMeta}        return ${rootRule.return_code} ${rootRule.return_location};
           path: rootRule.path,
           modifier: rootRule.modifier || '',
           type: 'static',
+          storage_source: rootRule.storage_source,
           storage_path: staticRule.storagePath,
+          published_www_path: rootRule.published_www_path,
           alias_path: rootRule.alias_path,
           root_path: rootRule.root_path,
           index_fallback_enabled: staticRule.indexFallbackEnabled,

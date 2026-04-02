@@ -11,6 +11,8 @@ const NginxServerManager = require('../services/NginxServerManager');
 const router = express.Router();
 const nginxManager = new NginxServerManager();
 const upload = multer({ dest: path.join(os.tmpdir(), 'nginx-ssl') });
+const staticPublishJobs = new Map();
+const STATIC_PUBLISH_ROOT = process.env.NGINX_STATIC_ROOT || '/var/www';
 
 const getSslStorageDir = () => process.env.NGINX_SSL_STORAGE || '/etc/nginx/ssl';
 const sanitizeName = (value) => value.replace(/[^a-zA-Z0-9.-]/g, '_');
@@ -27,6 +29,153 @@ const buildSslPaths = (domain) => {
 
 const ensureStorageDir = (dir) => {
   fs.mkdirSync(dir, { recursive: true });
+};
+
+const normalizeVirtualPath = (value = '/') => {
+  if (!value || value === '/') return '/';
+  const normalized = value.startsWith('/') ? value : `/${value}`;
+  return normalized.replace(/\/+/g, '/');
+};
+
+const buildPublishedFolderPath = (requestPath = '/') => {
+  const normalized = normalizeVirtualPath(requestPath).replace(/^\/+|\/+$/g, '');
+  if (!normalized) {
+    throw new Error('Static path must not be root');
+  }
+  return path.join(STATIC_PUBLISH_ROOT, normalized);
+};
+
+const safeResolveWithin = (baseDir, targetPath = '/') => {
+  const normalized = normalizeVirtualPath(targetPath);
+  const cleaned = normalized === '/' ? '' : normalized.slice(1);
+  const resolved = path.resolve(baseDir, cleaned);
+  const rootResolved = path.resolve(baseDir);
+  if (resolved !== rootResolved && !resolved.startsWith(`${rootResolved}${path.sep}`)) {
+    throw new Error('Invalid path');
+  }
+  return resolved;
+};
+
+const listDirectories = async (baseDir, targetPath = '/') => {
+  const resolved = safeResolveWithin(baseDir, targetPath);
+  const entries = await fs.promises.readdir(resolved, { withFileTypes: true });
+  return entries
+    .filter((entry) => entry.isDirectory())
+    .map((entry) => {
+      const entryPath = path.join(resolved, entry.name);
+      return {
+        name: entry.name,
+        path: normalizeVirtualPath(path.join('/', path.relative(baseDir, entryPath))),
+        isDir: true
+      };
+    })
+    .sort((a, b) => a.name.localeCompare(b.name));
+};
+
+const createPublishJob = () => {
+  const jobId = `${Date.now()}-${Math.random().toString(36).slice(2, 10)}`;
+  const job = {
+    id: jobId,
+    status: 'pending',
+    progress: 0,
+    totalFiles: 0,
+    copiedFiles: 0,
+    currentFile: '',
+    targetPath: '',
+    messages: [],
+    error: null
+  };
+  staticPublishJobs.set(jobId, job);
+  return job;
+};
+
+const pushJobMessage = (job, message) => {
+  job.messages.push(message);
+  if (job.messages.length > 50) {
+    job.messages = job.messages.slice(-50);
+  }
+};
+
+const countFilesRecursive = async (dirPath) => {
+  const entries = await fs.promises.readdir(dirPath, { withFileTypes: true });
+  let total = 0;
+  for (const entry of entries) {
+    const entryPath = path.join(dirPath, entry.name);
+    if (entry.isDirectory()) {
+      total += await countFilesRecursive(entryPath);
+    } else if (entry.isFile()) {
+      total += 1;
+    }
+  }
+  return total;
+};
+
+const copyDirectoryRecursive = async (sourceDir, targetDir, job, relativePrefix = '') => {
+  await fs.promises.mkdir(targetDir, { recursive: true });
+  const entries = await fs.promises.readdir(sourceDir, { withFileTypes: true });
+  for (const entry of entries) {
+    const sourcePath = path.join(sourceDir, entry.name);
+    const relativePath = path.join(relativePrefix, entry.name);
+    const targetPath = path.join(targetDir, entry.name);
+    if (entry.isDirectory()) {
+      await copyDirectoryRecursive(sourcePath, targetPath, job, relativePath);
+      continue;
+    }
+    if (!entry.isFile()) continue;
+    await fs.promises.mkdir(path.dirname(targetPath), { recursive: true });
+    await fs.promises.copyFile(sourcePath, targetPath);
+    job.copiedFiles += 1;
+    job.currentFile = `/${relativePath.replace(/\\/g, '/')}`;
+    job.progress = job.totalFiles > 0
+      ? Math.min(100, Math.round((job.copiedFiles / job.totalFiles) * 100))
+      : 100;
+    pushJobMessage(job, `Copiado ${job.currentFile}`);
+  }
+};
+
+const resolveStaticSourcePath = (source, sourcePath) => {
+  if (source === 'www') {
+    return safeResolveWithin(STATIC_PUBLISH_ROOT, sourcePath || '/');
+  }
+  const storageManager = nginxManager.storageManager;
+  return storageManager.safeResolve(sourcePath || '/');
+};
+
+const runStaticPublishJob = async (job, { source, sourcePath, requestPath }) => {
+  const sourceDir = resolveStaticSourcePath(source, sourcePath);
+  const targetDir = buildPublishedFolderPath(requestPath);
+  job.status = 'running';
+  job.targetPath = targetDir;
+  pushJobMessage(job, `Origem: ${sourcePath}`);
+  pushJobMessage(job, `Destino: ${targetDir}`);
+
+  const sourceStats = await fs.promises.stat(sourceDir);
+  if (!sourceStats.isDirectory()) {
+    throw new Error('A pasta de origem precisa ser um diretório');
+  }
+
+  if (path.resolve(sourceDir) === path.resolve(targetDir)) {
+    job.totalFiles = await countFilesRecursive(sourceDir);
+    job.copiedFiles = job.totalFiles;
+    job.progress = 100;
+    job.status = 'success';
+    pushJobMessage(job, 'Origem e destino já são a mesma pasta publicada');
+    return;
+  }
+
+  if (fs.existsSync(targetDir)) {
+    pushJobMessage(job, 'Limpando pasta publicada existente...');
+    await fs.promises.rm(targetDir, { recursive: true, force: true });
+  }
+
+  await fs.promises.mkdir(path.dirname(targetDir), { recursive: true });
+  job.totalFiles = await countFilesRecursive(sourceDir);
+  pushJobMessage(job, `Arquivos detectados: ${job.totalFiles}`);
+  await copyDirectoryRecursive(sourceDir, targetDir, job);
+  job.progress = 100;
+  job.status = 'success';
+  job.currentFile = '';
+  pushJobMessage(job, 'Publicação concluída');
 };
 
 const removeNonOriginalFiles = (dirPath, keepName) => {
@@ -146,6 +295,77 @@ router.post('/parse-config', async (req, res, next) => {
     }
     const parsed = nginxManager.parseNginxConfigContent(content, filename || 'manual.conf', null);
     res.json({ parsed });
+  } catch (err) {
+    next(err);
+  }
+});
+
+router.get('/static-sites/browse', async (req, res, next) => {
+  try {
+    const source = req.query.source === 'www' ? 'www' : 'storage';
+    const currentPath = req.query.path || '/';
+    const items = source === 'www'
+      ? await listDirectories(STATIC_PUBLISH_ROOT, currentPath)
+      : await listDirectories(nginxManager.storageManager.basePath, currentPath);
+    res.json({
+      source,
+      path: normalizeVirtualPath(currentPath),
+      items,
+      roots: [
+        { key: 'storage', label: 'Arquivos' },
+        { key: 'www', label: 'WWW' }
+      ]
+    });
+  } catch (err) {
+    next(err);
+  }
+});
+
+router.post('/static-sites/publish', async (req, res, next) => {
+  try {
+    const source = req.body?.source === 'www' ? 'www' : 'storage';
+    const sourcePath = req.body?.sourcePath || '/';
+    const requestPath = req.body?.requestPath || '/';
+    const normalizedRequestPath = normalizeVirtualPath(requestPath);
+    if (normalizedRequestPath === '/') {
+      return res.status(400).json({ error: 'Static path root is not allowed for publish' });
+    }
+
+    const job = createPublishJob();
+    runStaticPublishJob(job, { source, sourcePath, requestPath: normalizedRequestPath })
+      .catch((err) => {
+        job.status = 'error';
+        job.error = err.message;
+        pushJobMessage(job, `Erro: ${err.message}`);
+      });
+
+    res.status(202).json({
+      jobId: job.id,
+      targetPath: buildPublishedFolderPath(normalizedRequestPath),
+      publishRoot: STATIC_PUBLISH_ROOT
+    });
+  } catch (err) {
+    next(err);
+  }
+});
+
+router.get('/static-sites/publish-jobs/:jobId', (req, res) => {
+  const job = staticPublishJobs.get(req.params.jobId);
+  if (!job) {
+    return res.status(404).json({ error: 'Job not found' });
+  }
+  return res.json(job);
+});
+
+router.delete('/static-sites/published', async (req, res, next) => {
+  try {
+    const requestPath = normalizeVirtualPath(req.query.requestPath || req.body?.requestPath || '/');
+    if (requestPath === '/') {
+      return res.status(400).json({ error: 'requestPath is required' });
+    }
+    const targetDir = buildPublishedFolderPath(requestPath);
+    await fs.promises.rm(targetDir, { recursive: true, force: true });
+    res.json({ success: true, targetPath: targetDir });
   } catch (err) {
     next(err);
   }
