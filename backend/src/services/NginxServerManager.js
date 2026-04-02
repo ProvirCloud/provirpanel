@@ -290,8 +290,11 @@ class NginxServerManager {
       }
     }
 
-    if (data.primary_domain !== undefined) {
-      updateData.configFilePath = this.buildConfigFilePath(data.primary_domain, `server-${id}`);
+    if (!existing.configFilePath) {
+      updateData.configFilePath = this.buildConfigFilePath(
+        data.primary_domain ?? existing.primaryDomain,
+        `server-${id}`
+      );
     }
 
     const server = await prisma.nginxServer.update({
@@ -300,7 +303,7 @@ class NginxServerManager {
       include: { sslCerts: true }
     });
 
-    return this.persistServerFile(server, existing.configFilePath);
+    return this.persistServerFile(server);
   }
 
   async setServerActive(id, isActive) {
