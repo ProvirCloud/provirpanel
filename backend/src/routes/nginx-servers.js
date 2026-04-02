@@ -13,6 +13,7 @@ const nginxManager = new NginxServerManager();
 const upload = multer({ dest: path.join(os.tmpdir(), 'nginx-ssl') });
 const staticPublishJobs = new Map();
 const STATIC_PUBLISH_ROOT = process.env.NGINX_STATIC_ROOT || '/var/www';
+ensureStorageDir(STATIC_PUBLISH_ROOT);
 
 const getSslStorageDir = () => process.env.NGINX_SSL_STORAGE || '/etc/nginx/ssl';
 const sanitizeName = (value) => value.replace(/[^a-zA-Z0-9.-]/g, '_');

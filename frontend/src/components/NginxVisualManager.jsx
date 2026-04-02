@@ -265,28 +265,41 @@ const FolderPickerModal = ({
     { key: 'storage', label: 'Arquivos' },
     { key: 'www', label: 'WWW' }
   ])
+  const requestIdRef = useRef(0)
 
-  const loadPath = useCallback(async (targetPath, sourceKey = source) => {
+  const loadPath = useCallback(async (targetPath, sourceKey = 'storage') => {
     const normalized = normalizeStoragePath(targetPath)
+    const requestId = requestIdRef.current + 1
+    requestIdRef.current = requestId
     setLoading(true)
     setError('')
     try {
       const response = await api.get('/nginx/static-sites/browse', {
         params: { path: normalized, source: sourceKey }
       })
+      if (requestId !== requestIdRef.current) return
       setItems((response.data?.items || []).filter((item) => item.isDir))
-      setRoots(response.data?.roots || roots)
+      setRoots(response.data?.roots || [
+        { key: 'storage', label: 'Arquivos' },
+        { key: 'www', label: 'WWW' }
+      ])
       setCurrentPath(normalized)
       setSource(sourceKey)
     } catch (err) {
+      if (requestId !== requestIdRef.current) return
       setError(err.response?.data?.message || err.message)
     } finally {
-      setLoading(false)
+      if (requestId === requestIdRef.current) {
+        setLoading(false)
+      }
     }
-  }, [roots, source])
+  }, [])
 
   useEffect(() => {
-    loadPath(initialPath || '/', initialSource || 'storage')
+    const nextSource = initialSource === 'www' ? 'www' : 'storage'
+    setCurrentPath(normalizeStoragePath(initialPath || '/'))
+    setSource(nextSource)
+    loadPath(initialPath || '/', nextSource)
   }, [initialPath, initialSource, loadPath])
 
   const parentPath = currentPath === '/'
