@@ -425,9 +425,9 @@ const flattenSingleRootDir = (targetDir, maxPasses = 5) => {
   }
 };
 
-const findIndexDir = (rootDir, maxDepth = 4) => {
+const findIndexDir = (rootDir, maxDepth = 4, entryFile = 'index.html') => {
   const walk = (dir, depth) => {
-    if (fs.existsSync(path.join(dir, 'index.html'))) return dir;
+    if (fs.existsSync(path.join(dir, entryFile))) return dir;
     if (depth <= 0) return null;
     let entries = [];
     try {
@@ -446,12 +446,12 @@ const findIndexDir = (rootDir, maxDepth = 4) => {
   return walk(rootDir, maxDepth);
 };
 
-const normalizeStaticSiteRoot = (projectDir) => {
-  if (fs.existsSync(path.join(projectDir, 'index.html'))) {
+const normalizeStaticSiteRoot = (projectDir, entryFile = 'index.html') => {
+  if (fs.existsSync(path.join(projectDir, entryFile))) {
     return true;
   }
 
-  const indexDir = findIndexDir(projectDir, 5);
+  const indexDir = findIndexDir(projectDir, 5, entryFile);
   if (!indexDir) return false;
   if (path.resolve(indexDir) === path.resolve(projectDir)) return true;
 
@@ -464,7 +464,7 @@ const normalizeStaticSiteRoot = (projectDir) => {
     fs.renameSync(path.join(tempDir, entry), path.join(projectDir, entry));
   });
   fs.rmdirSync(tempDir);
-  return fs.existsSync(path.join(projectDir, 'index.html'));
+  return fs.existsSync(path.join(projectDir, entryFile));
 };
 
 const extractArchiveTo = async (archivePath, targetDir, archiveName) => {
@@ -525,6 +525,208 @@ const writeEnvFile = (projectPath, envVars = [], templateEnv = []) => {
   if (!merged.length) return;
   const content = merged.map((entry) => `${entry.key}=${entry.value ?? ''}`).join('\n') + '\n';
   fs.writeFileSync(path.join(projectPath.hostPath, '.env'), content, 'utf8');
+};
+
+const DEFAULT_NODE_SITE_MODE = 'service';
+const DEFAULT_NODE_SITE_TYPE = 'common';
+const DEFAULT_NODE_SITE_FOLDER = 'www';
+const DEFAULT_NODE_FALLBACK_FILE = 'index.html';
+const NODE_SITE_FOLDERS = new Set(['www', 'publish']);
+const NODE_SITE_TYPES = new Set(['common', 'spa']);
+
+const resolvePrimaryVolumeProjectPath = (volumes = []) => {
+  const volume = volumes.find((entry) => entry?.hostPath && entry?.containerPath);
+  if (!volume) return null;
+  return {
+    hostPath: volume.hostPath,
+    containerPath: volume.containerPath
+  };
+};
+
+const normalizeNodeSiteMode = (value) => (value === 'sites' ? 'sites' : DEFAULT_NODE_SITE_MODE);
+const normalizeNodeSiteType = (value) => (NODE_SITE_TYPES.has(value) ? value : DEFAULT_NODE_SITE_TYPE);
+const normalizeNodeSiteFolder = (value) => (NODE_SITE_FOLDERS.has(value) ? value : DEFAULT_NODE_SITE_FOLDER);
+
+const normalizeFallbackFile = (value) => {
+  const raw = String(value || DEFAULT_NODE_FALLBACK_FILE).trim().replace(/\\/g, '/');
+  const normalized = path.posix.normalize(`/${raw}`).slice(1);
+  if (!normalized || normalized.startsWith('..')) {
+    return DEFAULT_NODE_FALLBACK_FILE;
+  }
+  return normalized;
+};
+
+const resolveNodeServiceConfig = (payload = {}, existingService = {}) => {
+  const existingConfig = existingService.nodeSiteConfig || {};
+  const incomingConfig = payload.nodeSiteConfig || {};
+  const nodeServiceMode = normalizeNodeSiteMode(
+    payload.nodeServiceMode ?? existingService.nodeServiceMode
+  );
+
+  return {
+    nodeServiceMode,
+    nodeSiteConfig: {
+      siteType: normalizeNodeSiteType(incomingConfig.siteType ?? existingConfig.siteType),
+      siteFolder: normalizeNodeSiteFolder(incomingConfig.siteFolder ?? existingConfig.siteFolder),
+      fallbackFile: normalizeFallbackFile(
+        incomingConfig.fallbackFile ?? existingConfig.fallbackFile
+      )
+    }
+  };
+};
+
+const getNodeServiceProjectPath = (volumes = [], nodeServiceMode = DEFAULT_NODE_SITE_MODE) => {
+  if (nodeServiceMode === 'sites') {
+    return resolvePrimaryVolumeProjectPath(volumes);
+  }
+  return resolveProjectPathFromVolume(volumes);
+};
+
+const getNodeSiteContentDir = (projectPath, nodeSiteConfig = {}) => {
+  if (!projectPath?.hostPath) return null;
+  return path.join(
+    projectPath.hostPath,
+    normalizeNodeSiteFolder(nodeSiteConfig.siteFolder)
+  );
+};
+
+const buildNodeSitePackageJson = (serviceName) =>
+  JSON.stringify(
+    {
+      name: `${String(serviceName || 'node-site')
+        .toLowerCase()
+        .replace(/[^a-z0-9-_]/g, '-')}-site`,
+      private: true,
+      version: '1.0.0',
+      scripts: {
+        start: 'node server.js'
+      },
+      dependencies: {
+        express: '^4.19.2'
+      }
+    },
+    null,
+    2
+  ) + '\n';
+
+const buildNodeSiteServerSource = (nodeSiteConfig = {}) => {
+  const siteFolder = normalizeNodeSiteFolder(nodeSiteConfig.siteFolder);
+  const siteType = normalizeNodeSiteType(nodeSiteConfig.siteType);
+  const fallbackFile = normalizeFallbackFile(nodeSiteConfig.fallbackFile);
+
+  return `'use strict';
+
+const express = require('express');
+const fs = require('fs');
+const path = require('path');
+
+const app = express();
+const port = Number(process.env.PORT || process.env.APP_PORT || 3000);
+const siteDir = path.resolve(__dirname, ${JSON.stringify(siteFolder)});
+const siteType = ${JSON.stringify(siteType)};
+const fallbackFile = ${JSON.stringify(fallbackFile)};
+const fallbackPath = path.join(siteDir, fallbackFile);
+
+const sendSiteFile = (relativePath, res, next, notFoundStatus = 404) => {
+  const targetPath = path.resolve(siteDir, relativePath);
+  if (targetPath !== siteDir && !targetPath.startsWith(siteDir + path.sep)) {
+    return res.status(400).send('Caminho inválido');
+  }
+  if (!fs.existsSync(targetPath) || !fs.statSync(targetPath).isFile()) {
+    if (typeof next === 'function') {
+      return next();
+    }
+    return res.status(notFoundStatus).send('Arquivo não encontrado');
+  }
+  return res.sendFile(targetPath);
+};
+
+app.use((req, _res, next) => {
+  console.log('[site]', req.method, req.url);
+  next();
+});
+
+app.use(express.static(siteDir, { index: false, fallthrough: true }));
+
+app.get('/', (req, res, next) => sendSiteFile(fallbackFile, res, next));
+
+if (siteType === 'spa') {
+  app.get('*', (req, res, next) => sendSiteFile(fallbackFile, res, next, 500));
+} else {
+  app.get('*', (req, res, next) => {
+    const requested = req.path.replace(/^\\/+/, '');
+    if (!requested) {
+      return sendSiteFile(fallbackFile, res, next);
+    }
+    return sendSiteFile(requested, res, next);
+  });
+
+  app.use((_req, res) => {
+    res.status(404).send('Arquivo não encontrado');
+  });
+}
+
+app.listen(port, '0.0.0.0', () => {
+  console.log('Node site serving', siteDir, 'on port', port);
+});
+`;
+};
+
+const ensureNodeSiteScaffold = (projectPath, serviceName, nodeSiteConfig = {}, previousConfig = null) => {
+  if (!projectPath?.hostPath) return;
+
+  fs.mkdirSync(projectPath.hostPath, { recursive: true });
+
+  const normalizedConfig = {
+    siteType: normalizeNodeSiteType(nodeSiteConfig.siteType),
+    siteFolder: normalizeNodeSiteFolder(nodeSiteConfig.siteFolder),
+    fallbackFile: normalizeFallbackFile(nodeSiteConfig.fallbackFile)
+  };
+
+  const siteDir = getNodeSiteContentDir(projectPath, normalizedConfig);
+  fs.mkdirSync(siteDir, { recursive: true });
+
+  const previousFolder = previousConfig?.siteFolder
+    ? normalizeNodeSiteFolder(previousConfig.siteFolder)
+    : null;
+  if (previousFolder && previousFolder !== normalizedConfig.siteFolder) {
+    const previousDir = path.join(projectPath.hostPath, previousFolder);
+    if (fs.existsSync(previousDir) && fs.statSync(previousDir).isDirectory()) {
+      const targetEntries = fs.readdirSync(siteDir);
+      if (!targetEntries.length) {
+        fs.readdirSync(previousDir).forEach((entry) => {
+          fs.renameSync(path.join(previousDir, entry), path.join(siteDir, entry));
+        });
+      }
+    }
+  }
+
+  fs.writeFileSync(
+    path.join(projectPath.hostPath, 'package.json'),
+    buildNodeSitePackageJson(serviceName),
+    'utf8'
+  );
+  fs.writeFileSync(
+    path.join(projectPath.hostPath, 'server.js'),
+    buildNodeSiteServerSource(normalizedConfig),
+    'utf8'
+  );
+
+  const readmePath = path.join(projectPath.hostPath, 'README-provir-sites.txt');
+  if (!fs.existsSync(readmePath)) {
+    fs.writeFileSync(
+      readmePath,
+      [
+        'Servico Node.js configurado para servir site estatico.',
+        `Pasta do site: ${normalizedConfig.siteFolder}`,
+        `Tipo do site: ${normalizedConfig.siteType === 'spa' ? 'Angular/React/Vue (fallback SPA)' : 'Site comum'}`,
+        `Arquivo padrao/fallback: ${normalizedConfig.fallbackFile}`,
+        '',
+        'Envie os arquivos do site para a pasta acima pelo painel.'
+      ].join('\n'),
+      'utf8'
+    );
+  }
 };
 
 const checkProjectFiles = (projectPath, files = []) => {
@@ -1085,7 +1287,9 @@ router.post('/services', async (req, res, next) => {
       configureDb = null,
       networkName = 'provirpanel',
       command,
-      bindLocalOnly = true
+      bindLocalOnly = true,
+      nodeServiceMode: requestedNodeServiceMode,
+      nodeSiteConfig: requestedNodeSiteConfig
     } = req.body || {};
     
     progress.push(`🔍 Validando configuração do serviço ${name}...`);
@@ -1136,6 +1340,13 @@ router.post('/services', async (req, res, next) => {
     progress.push(`📦 Preparando container ${imageName}...`);
     
     const serviceId = crypto.randomUUID();
+    const { nodeServiceMode, nodeSiteConfig } = resolveNodeServiceConfig(
+      {
+        nodeServiceMode: requestedNodeServiceMode,
+        nodeSiteConfig: requestedNodeSiteConfig
+      },
+      {}
+    );
     const usedPorts = await dockerManager.getUsedPorts();
     const desiredPort = hostPort ? Number(hostPort) : null;
     
@@ -1222,8 +1433,21 @@ router.post('/services', async (req, res, next) => {
     }
 
     const normalizedEnvVars = normalizeEnvVars(envVars);
+    const isNodeSitesMode = templateId === 'node-app' && nodeServiceMode === 'sites';
 
-    const projectPath = resolveProjectPathFromVolume(finalizedVolumes);
+    if (isNodeSitesMode) {
+      const projectRoot = resolvePrimaryVolumeProjectPath(finalizedVolumes);
+      if (projectRoot?.hostPath) {
+        ensureNodeSiteScaffold(projectRoot, name, nodeSiteConfig);
+        progress.push(
+          `🌐 Estrutura de site preparada em ${path.join(projectRoot.hostPath, nodeSiteConfig.siteFolder)}`
+        );
+      } else {
+        progress.push('⚠️ Nao foi possivel preparar a estrutura base do site');
+      }
+    }
+
+    const projectPath = getNodeServiceProjectPath(finalizedVolumes, nodeServiceMode);
     if (projectPath?.hostPath) {
       writeEnvFile(projectPath, normalizedEnvVars, template.env);
       progress.push(`📝 .env gerado em ${projectPath.hostPath}`);
@@ -1237,13 +1461,13 @@ router.post('/services', async (req, res, next) => {
     });
 
     let finalImageName = imageName;
-    const normalizedCommand = normalizeCommand(command);
-    const hasUserCommand = !!normalizedCommand;
+    const normalizedCommand = isNodeSitesMode ? null : normalizeCommand(command);
+    const hasUserCommand = isNodeSitesMode ? false : !!normalizedCommand;
     let containerCmd = normalizedCommand || template.command;
     let containerUser = undefined;
 
     // Para projetos exemplo, criar arquivos no volume (exceto PostgreSQL)
-    if (createProject && finalizedVolumes.length > 0 && templateId !== 'postgres-db') {
+    if (createProject && finalizedVolumes.length > 0 && templateId !== 'postgres-db' && !isNodeSitesMode) {
       const projectPath = finalizedVolumes[0].hostPath;
       
       try {
@@ -1263,12 +1487,14 @@ router.post('/services', async (req, res, next) => {
       } catch (err) {
         progress.push(`⚠️ Erro ao criar projeto exemplo: ${err.message}`);
       }
+    } else if (isNodeSitesMode) {
+      containerCmd = ['sh', '-c', 'npm install && npm start'];
     } else if (!createProject && templateId === 'node-app' && !normalizedCommand) {
       containerCmd = resolveNodeCommand(finalizedVolumes) || ['npm', 'start'];
     }
     if (!hasUserCommand) {
       containerCmd = stripNextStartFlags(containerCmd);
-      containerCmd = ensureCommandWorkdir(containerCmd, template.workdir);
+      containerCmd = ensureCommandWorkdir(containerCmd, projectPath?.containerPath || template.workdir);
       const createCmdBefore = stringifyCommand(containerCmd);
       containerCmd = ensureNpmDevDependencies(containerCmd);
       const createAfterDev = stringifyCommand(containerCmd);
@@ -1293,7 +1519,9 @@ router.post('/services', async (req, res, next) => {
         serviceId,
         name,
         templateId,
-        hasProject: createProject && finalizedVolumes.length > 0 && templateId !== 'postgres-db'
+        hasProject:
+          isNodeSitesMode ||
+          (createProject && finalizedVolumes.length > 0 && templateId !== 'postgres-db')
       }),
       HostConfig: {
         ...hostConfig,
@@ -1311,8 +1539,8 @@ router.post('/services', async (req, res, next) => {
       if (containerCmd) {
         containerConfig.Cmd = containerCmd;
       }
-    if (template.workdir) {
-      containerConfig.WorkingDir = template.workdir;
+    if (projectPath?.containerPath || template.workdir) {
+      containerConfig.WorkingDir = projectPath?.containerPath || template.workdir;
     }
     if (containerUser) {
       containerConfig.User = containerUser;
@@ -1342,14 +1570,18 @@ router.post('/services', async (req, res, next) => {
         containerPort: template.containerPort,
         volumes: finalizedVolumes,
         envVars: normalizedEnvVars,
-        command: containerCmd || null,
+        command: isNodeSitesMode ? null : containerCmd || null,
         networkName,
         bindLocalOnly,
         url: `http://localhost:${resolvedPort}`,
         serverIP: getLocalIP(),
         externalUrl: bindLocalOnly ? null : `http://${getLocalIP()}:${resolvedPort}`,
         createdAt: new Date().toISOString(),
-        hasProject: createProject && finalizedVolumes.length > 0 && templateId !== 'postgres-db'
+        hasProject:
+          isNodeSitesMode ||
+          (createProject && finalizedVolumes.length > 0 && templateId !== 'postgres-db'),
+        nodeServiceMode,
+        nodeSiteConfig
       };
 
       progress.push(`💾 Salvando serviço no registro...`);
@@ -1535,12 +1767,28 @@ router.delete('/containers/:id', async (req, res, next) => {
 // Update service
 router.put('/services/:id', async (req, res, next) => {
   try {
-    const { hostPort, envVars = [], networkName, command, bindLocalOnly } = req.body || {};
+    const {
+      hostPort,
+      envVars = [],
+      networkName,
+      command,
+      bindLocalOnly,
+      nodeServiceMode: requestedNodeServiceMode,
+      nodeSiteConfig: requestedNodeSiteConfig
+    } = req.body || {};
     const services = dockerManager.listServices();
     const service = services.find((s) => s.id === req.params.id);
     if (!service) {
       return res.status(404).json({ message: 'Service not found' });
     }
+    const { nodeServiceMode, nodeSiteConfig } = resolveNodeServiceConfig(
+      {
+        nodeServiceMode: requestedNodeServiceMode,
+        nodeSiteConfig: requestedNodeSiteConfig
+      },
+      service
+    );
+    const isNodeSitesMode = service.templateId === 'node-app' && nodeServiceMode === 'sites';
 
     // Verificar se a nova porta está disponível (se foi alterada)
     const newPort = Number(hostPort);
@@ -1571,7 +1819,15 @@ router.put('/services/:id', async (req, res, next) => {
     const template =
       SERVICE_TEMPLATES.find((t) => t.id === service.templateId) ||
       { env: [], workdir: null, command: null };
-    const projectPath = resolveProjectPathFromVolume(service.volumes);
+    const previousNodeSiteConfig = service.nodeSiteConfig || null;
+    const projectPath = getNodeServiceProjectPath(service.volumes, nodeServiceMode);
+    if (isNodeSitesMode && projectPath?.hostPath) {
+      ensureNodeSiteScaffold(projectPath, service.name, nodeSiteConfig, previousNodeSiteConfig);
+      appendServiceLog(
+        'info',
+        `Estrutura de site preparada em ${path.join(projectPath.hostPath, nodeSiteConfig.siteFolder)}`
+      );
+    }
     const workdir = projectPath?.containerPath || template.workdir || null;
     if (projectPath?.hostPath) {
       appendServiceLog('info', `Projeto resolvido em ${projectPath.hostPath}`);
@@ -1589,22 +1845,24 @@ router.put('/services/:id', async (req, res, next) => {
     if (projectPath?.hostPath) {
       writeEnvFile(projectPath, resolvedEnvVars, template.env);
       appendServiceLog('info', `Arquivo .env atualizado em ${projectPath.hostPath}`);
-      const expectedFiles = [
-        'package.json',
-        'tsconfig.json',
-        'app/v1/api/boleto/route.ts',
-        'app/v1/api/pix/route.ts',
-        'lib/db.ts'
-      ];
-      const missing = checkProjectFiles(projectPath, expectedFiles);
-      if (missing.length) {
-        appendServiceLog('warn', `Arquivos ausentes no projeto: ${missing.join(', ')}`);
-        missing.forEach((file) => {
-          const suggestion = findPathCaseInsensitive(projectPath.hostPath, file);
-          if (suggestion) {
-            appendServiceLog('warn', `Possivel diferenca de maiusculas: esperado ${file}, encontrado ${suggestion}`);
-          }
-        });
+      if (!isNodeSitesMode) {
+        const expectedFiles = [
+          'package.json',
+          'tsconfig.json',
+          'app/v1/api/boleto/route.ts',
+          'app/v1/api/pix/route.ts',
+          'lib/db.ts'
+        ];
+        const missing = checkProjectFiles(projectPath, expectedFiles);
+        if (missing.length) {
+          appendServiceLog('warn', `Arquivos ausentes no projeto: ${missing.join(', ')}`);
+          missing.forEach((file) => {
+            const suggestion = findPathCaseInsensitive(projectPath.hostPath, file);
+            if (suggestion) {
+              appendServiceLog('warn', `Possivel diferenca de maiusculas: esperado ${file}, encontrado ${suggestion}`);
+            }
+          });
+        }
       }
     }
     let env = buildContainerEnv({
@@ -1613,13 +1871,14 @@ router.put('/services/:id', async (req, res, next) => {
       projectPath
     });
 
-    const normalizedCommand = normalizeCommand(command);
-    const hasUserCommand = !!normalizedCommand;
+    const normalizedCommand = isNodeSitesMode ? null : normalizeCommand(command);
+    const hasUserCommand = isNodeSitesMode ? false : !!normalizedCommand;
     let containerCmd = normalizedCommand || service.command || template.command;
-    if (service.templateId === 'node-app' && !normalizedCommand && !service.command) {
+    if (isNodeSitesMode) {
+      containerCmd = ['sh', '-c', 'npm install && npm start'];
+    } else if (service.templateId === 'node-app' && !normalizedCommand && !service.command) {
       containerCmd = resolveNodeCommand(service.volumes) || containerCmd;
     }
-    if (!hasUserCommand) {
     if (!hasUserCommand) {
       containerCmd = stripNextStartFlags(containerCmd);
       containerCmd = ensureCommandWorkdir(containerCmd, workdir);
@@ -1635,7 +1894,6 @@ router.put('/services/:id', async (req, res, next) => {
         appendServiceLog('info', 'Ajustando timeout do Next.js para build');
       }
     }
-    }
     appendServiceLog(
       'info',
       `Comando definido para ${service.name}: ${containerCmd ? containerCmd.join(' ') : 'padrao'}`
@@ -1646,13 +1904,11 @@ router.put('/services/:id', async (req, res, next) => {
       appendServiceLog('warn', `WorkingDir nao resolvido para ${service.name}`);
     }
     if (!hasUserCommand) {
-    if (!hasUserCommand) {
       const envBeforeUpdate = env;
       env = ensureNextBuildEnv(env, containerCmd);
       if (env !== envBeforeUpdate) {
         appendServiceLog('info', 'Variavel de ambiente de timeout do Next.js adicionada');
       }
-    }
     }
 
     const containerConfig = {
@@ -1662,7 +1918,7 @@ router.put('/services/:id', async (req, res, next) => {
         name: service.name,
         templateId: service.templateId,
         parentService: service.parentService,
-        hasProject: service.hasProject
+        hasProject: isNodeSitesMode ? true : service.hasProject
       }),
       HostConfig: {
         NetworkMode: targetNetwork,
@@ -1691,7 +1947,7 @@ router.put('/services/:id', async (req, res, next) => {
     }
 
     // For Node.js with project, use npm install and start
-    if (service.hasProject && service.templateId === 'node-app' && !containerCmd) {
+    if ((service.hasProject || isNodeSitesMode) && service.templateId === 'node-app' && !containerCmd) {
       containerConfig.Cmd = ['sh', '-c', 'npm install && npm start'];
     }
 
@@ -1706,9 +1962,12 @@ router.put('/services/:id', async (req, res, next) => {
       containerId: container.Id,
       hostPort: resolvedPort,
       envVars: resolvedEnvVars,
-      command: containerCmd || null,
+      command: isNodeSitesMode ? null : containerCmd || null,
       networkName: targetNetwork,
       bindLocalOnly: resolvedBindLocal,
+      nodeServiceMode,
+      nodeSiteConfig,
+      hasProject: isNodeSitesMode ? true : service.hasProject,
       url: `http://localhost:${resolvedPort}`,
       serverIP: getLocalIP(),
       externalUrl: resolvedBindLocal ? null : `http://${getLocalIP()}:${resolvedPort}`,
@@ -1743,13 +2002,28 @@ router.post('/services/:id/project-upload', upload.single('archive'), async (req
       return res.status(400).json({ message: 'Volume do serviço não encontrado.' });
     }
 
+    const { nodeServiceMode, nodeSiteConfig } = resolveNodeServiceConfig({}, service);
+    const isNodeSitesMode = service.templateId === 'node-app' && nodeServiceMode === 'sites';
+    const uploadTargetDir = isNodeSitesMode
+      ? path.join(projectDir, normalizeNodeSiteFolder(nodeSiteConfig.siteFolder))
+      : projectDir;
+
     fs.mkdirSync(projectDir, { recursive: true });
+    if (isNodeSitesMode) {
+      ensureNodeSiteScaffold(
+        { hostPath: projectDir, containerPath: service.volumes?.[0]?.containerPath || '/usr/src/app' },
+        service.name,
+        nodeSiteConfig,
+        service.nodeSiteConfig
+      );
+      fs.mkdirSync(uploadTargetDir, { recursive: true });
+    }
     // Replace published project content to avoid stale files in static deployments.
-    cleanDirectory(projectDir);
+    cleanDirectory(uploadTargetDir);
     const archivePath = req.file.path;
     try {
-      appendServiceLog('info', `Extraindo arquivo ${req.file.originalname} em ${projectDir}`);
-      await extractArchiveTo(archivePath, projectDir, req.file.originalname);
+      appendServiceLog('info', `Extraindo arquivo ${req.file.originalname} em ${uploadTargetDir}`);
+      await extractArchiveTo(archivePath, uploadTargetDir, req.file.originalname);
     } finally {
       fs.unlink(archivePath, () => {});
     }
@@ -1766,11 +2040,23 @@ router.post('/services/:id/project-upload', upload.single('archive'), async (req
         });
       }
     }
+    if (isNodeSitesMode) {
+      const normalized = normalizeStaticSiteRoot(
+        uploadTargetDir,
+        normalizeFallbackFile(nodeSiteConfig.fallbackFile)
+      );
+      if (!normalized) {
+        appendServiceLog(
+          'warn',
+          `Upload do site ${service.name} sem arquivo fallback ${nodeSiteConfig.fallbackFile} na raiz`
+        );
+      }
+    }
 
     const template =
       SERVICE_TEMPLATES.find((t) => t.id === service.templateId) ||
       { env: [], workdir: null, command: null };
-    const projectPath = resolveProjectPathFromVolume(service.volumes);
+    const projectPath = getNodeServiceProjectPath(service.volumes, nodeServiceMode);
     const workdir = projectPath?.containerPath || template.workdir || null;
     if (projectPath?.hostPath) {
       appendServiceLog('info', `Projeto resolvido em ${projectPath.hostPath}`);
@@ -1782,22 +2068,24 @@ router.post('/services/:id/project-upload', upload.single('archive'), async (req
     if (projectPath?.hostPath) {
       writeEnvFile(projectPath, resolvedEnvVars, template.env);
       appendServiceLog('info', `Arquivo .env atualizado em ${projectPath.hostPath}`);
-      const expectedFiles = [
-        'package.json',
-        'tsconfig.json',
-        'app/v1/api/boleto/route.ts',
-        'app/v1/api/pix/route.ts',
-        'lib/db.ts'
-      ];
-      const missing = checkProjectFiles(projectPath, expectedFiles);
-      if (missing.length) {
-        appendServiceLog('warn', `Arquivos ausentes no projeto: ${missing.join(', ')}`);
-        missing.forEach((file) => {
-          const suggestion = findPathCaseInsensitive(projectPath.hostPath, file);
-          if (suggestion) {
-            appendServiceLog('warn', `Possivel diferenca de maiusculas: esperado ${file}, encontrado ${suggestion}`);
-          }
-        });
+      if (!isNodeSitesMode) {
+        const expectedFiles = [
+          'package.json',
+          'tsconfig.json',
+          'app/v1/api/boleto/route.ts',
+          'app/v1/api/pix/route.ts',
+          'lib/db.ts'
+        ];
+        const missing = checkProjectFiles(projectPath, expectedFiles);
+        if (missing.length) {
+          appendServiceLog('warn', `Arquivos ausentes no projeto: ${missing.join(', ')}`);
+          missing.forEach((file) => {
+            const suggestion = findPathCaseInsensitive(projectPath.hostPath, file);
+            if (suggestion) {
+              appendServiceLog('warn', `Possivel diferenca de maiusculas: esperado ${file}, encontrado ${suggestion}`);
+            }
+          });
+        }
       }
     }
     let env = buildContainerEnv({
@@ -1810,9 +2098,11 @@ router.post('/services/:id/project-upload', upload.single('archive'), async (req
       service.templateId === 'node-app' ||
       service.templateId === 'node' ||
       String(service.image || '').startsWith('node');
-    const hasUserCommand = !!service.command;
+    const hasUserCommand = isNodeSitesMode ? false : !!service.command;
     let containerCmd = service.command || template.command;
-    if (isNodeService && !service.command) {
+    if (isNodeSitesMode) {
+      containerCmd = ['sh', '-c', 'npm install && npm start'];
+    } else if (isNodeService && !service.command) {
       containerCmd = resolveNodeCommand(service.volumes) || containerCmd;
     }
     if (isNodeService && !hasUserCommand) {
@@ -1861,7 +2151,7 @@ router.post('/services/:id/project-upload', upload.single('archive'), async (req
         name: service.name,
         templateId: service.templateId,
         parentService: service.parentService,
-        hasProject: service.hasProject
+        hasProject: isNodeSitesMode ? true : service.hasProject
       }),
       HostConfig: {
         NetworkMode: service.networkName || 'bridge',
@@ -1897,7 +2187,7 @@ router.post('/services/:id/project-upload', upload.single('archive'), async (req
     const updatedService = {
       ...service,
       containerId: container.Id,
-      command: containerCmd || null,
+      command: isNodeSitesMode ? null : containerCmd || null,
       updatedAt: new Date().toISOString()
     };
 

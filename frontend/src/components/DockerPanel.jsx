@@ -210,6 +210,18 @@ const buildEnvMerge = (existing = [], incoming = []) => {
   }
 }
 
+const NODE_SERVICE_MODES = {
+  service: 'service',
+  sites: 'sites'
+}
+
+const NODE_SITE_TYPES = {
+  common: 'common',
+  spa: 'spa'
+}
+
+const NODE_SITE_FOLDERS = ['www', 'publish']
+
 const DockerPanel = () => {
   const [activeTab, setActiveTab] = useState('services')
   const [containers, setContainers] = useState([])
@@ -391,7 +403,13 @@ const DockerPanel = () => {
       createManager: false,
       configureDb: null,
       networkName: 'provirpanel',
-      bindLocalOnly: true
+      bindLocalOnly: true,
+      nodeServiceMode: NODE_SERVICE_MODES.service,
+      nodeSiteConfig: {
+        siteType: NODE_SITE_TYPES.common,
+        siteFolder: NODE_SITE_FOLDERS[0],
+        fallbackFile: 'index.html'
+      }
     })
     
     // Scroll para o wizard quando aberto
@@ -706,7 +724,9 @@ const DockerPanel = () => {
         configureDb: form.configureDb,
         networkName: form.networkName,
         command: form.command,
-        bindLocalOnly: form.bindLocalOnly
+        bindLocalOnly: form.bindLocalOnly,
+        nodeServiceMode: form.nodeServiceMode,
+        nodeSiteConfig: form.nodeSiteConfig
       }, {
         timeout: 120000 // 2 minute timeout
       })
@@ -751,6 +771,9 @@ const DockerPanel = () => {
 
     const template = templates.find((t) => t.id === wizard.id || t.id === wizard.templateId)
     const tpl = template || wizard
+    const isNodeTemplate = tpl?.id === 'node-app'
+    const isNodeSitesMode =
+      isNodeTemplate && serviceForm.nodeServiceMode === NODE_SERVICE_MODES.sites
 
     console.log('ServiceForm:', serviceForm) // Debug
     console.log('Template:', tpl) // Debug
@@ -897,6 +920,130 @@ const DockerPanel = () => {
               📌 Serviços na mesma rede podem se comunicar diretamente pelo nome do container
             </p>
           </div>
+
+          {isNodeTemplate && (
+            <div className="rounded-xl border border-cyan-500/20 bg-cyan-500/5 p-4">
+              <p className="text-sm font-semibold text-cyan-200">Modo do serviço Node.js</p>
+              <div className="mt-3 grid gap-3 md:grid-cols-2">
+                <label className={`rounded-xl border p-3 text-sm ${serviceForm.nodeServiceMode === NODE_SERVICE_MODES.service ? 'border-cyan-400 bg-cyan-500/10 text-white' : 'border-slate-800 bg-slate-950 text-slate-300'}`}>
+                  <input
+                    type="radio"
+                    className="mr-2"
+                    name="node-service-mode"
+                    checked={serviceForm.nodeServiceMode === NODE_SERVICE_MODES.service}
+                    onChange={() =>
+                      setServiceForm((p) => ({
+                        ...p,
+                        nodeServiceMode: NODE_SERVICE_MODES.service
+                      }))
+                    }
+                  />
+                  Serviço
+                  <span className="mt-1 block text-xs text-slate-400">
+                    Configuração atual sem alterações. Usa o comando informado ou detectado pelo projeto.
+                  </span>
+                </label>
+                <label className={`rounded-xl border p-3 text-sm ${serviceForm.nodeServiceMode === NODE_SERVICE_MODES.sites ? 'border-cyan-400 bg-cyan-500/10 text-white' : 'border-slate-800 bg-slate-950 text-slate-300'}`}>
+                  <input
+                    type="radio"
+                    className="mr-2"
+                    name="node-service-mode"
+                    checked={serviceForm.nodeServiceMode === NODE_SERVICE_MODES.sites}
+                    onChange={() =>
+                      setServiceForm((p) => ({
+                        ...p,
+                        nodeServiceMode: NODE_SERVICE_MODES.sites,
+                        createProject: false
+                      }))
+                    }
+                  />
+                  Sites
+                  <span className="mt-1 block text-xs text-slate-400">
+                    Gera um serviço Node para publicar sites estáticos usando a raiz <code>/</code>.
+                  </span>
+                </label>
+              </div>
+
+              {isNodeSitesMode && (
+                <div className="mt-4 grid gap-4 md:grid-cols-2">
+                  <div className="grid gap-2">
+                    <label className="text-xs text-slate-300">Tipo de site</label>
+                    <select
+                      className="rounded-xl border border-slate-800 bg-slate-950 px-3 py-2 text-sm text-white"
+                      value={serviceForm.nodeSiteConfig?.siteType || NODE_SITE_TYPES.common}
+                      onChange={(e) =>
+                        setServiceForm((p) => ({
+                          ...p,
+                          nodeSiteConfig: {
+                            ...p.nodeSiteConfig,
+                            siteType: e.target.value
+                          }
+                        }))
+                      }
+                    >
+                      <option value={NODE_SITE_TYPES.common}>Site Comum</option>
+                      <option value={NODE_SITE_TYPES.spa}>Angular/React/Vue</option>
+                    </select>
+                    <p className="text-xs text-slate-400">
+                      Use Angular/React/Vue para habilitar fallback de SPA para rotas internas.
+                    </p>
+                  </div>
+
+                  <div className="grid gap-2">
+                    <label className="text-xs text-slate-300">Pasta do site</label>
+                    <select
+                      className="rounded-xl border border-slate-800 bg-slate-950 px-3 py-2 text-sm text-white"
+                      value={serviceForm.nodeSiteConfig?.siteFolder || NODE_SITE_FOLDERS[0]}
+                      onChange={(e) =>
+                        setServiceForm((p) => ({
+                          ...p,
+                          nodeSiteConfig: {
+                            ...p.nodeSiteConfig,
+                            siteFolder: e.target.value
+                          }
+                        }))
+                      }
+                    >
+                      {NODE_SITE_FOLDERS.map((folder) => (
+                        <option key={folder} value={folder}>
+                          {folder}
+                        </option>
+                      ))}
+                    </select>
+                    <p className="text-xs text-slate-400">
+                      O painel cria essa pasta no volume e publica o site dentro dela.
+                    </p>
+                  </div>
+
+                  <div className="grid gap-2">
+                    <label className="text-xs text-slate-300">Arquivo padrão / fallback</label>
+                    <input
+                      className="rounded-xl border border-slate-800 bg-slate-950 px-3 py-2 text-sm text-white"
+                      placeholder="index.html"
+                      value={serviceForm.nodeSiteConfig?.fallbackFile || 'index.html'}
+                      onChange={(e) =>
+                        setServiceForm((p) => ({
+                          ...p,
+                          nodeSiteConfig: {
+                            ...p.nodeSiteConfig,
+                            fallbackFile: e.target.value
+                          }
+                        }))
+                      }
+                    />
+                    <p className="text-xs text-slate-400">
+                      Exemplo: <code>index.html</code>, <code>index.htm</code> ou outro arquivo estático. PHP não é executado nesse modo.
+                    </p>
+                  </div>
+
+                  <div className="rounded-xl border border-slate-800 bg-slate-950/70 p-3 text-xs text-slate-300">
+                    <p className="font-semibold text-slate-200">Fluxo automático</p>
+                    <p className="mt-1">Ao criar ou atualizar, o serviço gera a estrutura base, grava o arquivo <code>.env</code>, roda <code>npm install</code> e inicia com <code>npm start</code>.</p>
+                  </div>
+                </div>
+              )}
+            </div>
+          )}
 
           <div className="grid gap-2">
             <div className="flex items-center justify-between">
@@ -1053,18 +1200,20 @@ const DockerPanel = () => {
             </p>
           </div>
 
-          <div className="grid gap-2">
-            <label className="text-xs text-slate-300">Comando de inicializacao</label>
-            <input
-              className="rounded-xl border border-slate-800 bg-slate-950 px-3 py-2 text-sm text-white"
-              placeholder="npm install && npm run start"
-              value={serviceForm.command}
-              onChange={(e) => setServiceForm((p) => ({ ...p, command: e.target.value }))}
-            />
-            <p className="text-xs text-slate-400">
-              Deixe vazio para detectar automaticamente pelo package.json.
-            </p>
-          </div>
+          {!isNodeSitesMode && (
+            <div className="grid gap-2">
+              <label className="text-xs text-slate-300">Comando de inicializacao</label>
+              <input
+                className="rounded-xl border border-slate-800 bg-slate-950 px-3 py-2 text-sm text-white"
+                placeholder="npm install && npm run start"
+                value={serviceForm.command}
+                onChange={(e) => setServiceForm((p) => ({ ...p, command: e.target.value }))}
+              />
+              <p className="text-xs text-slate-400">
+                Deixe vazio para detectar automaticamente pelo package.json.
+              </p>
+            </div>
+          )}
 
           <div className="grid gap-2">
             <label className="text-xs text-slate-300">Projeto compactado (zip/tar)</label>
@@ -1078,7 +1227,9 @@ const DockerPanel = () => {
               }}
             />
             <p className="text-xs text-slate-400">
-              Envie um .zip/.tar para publicar o codigo no volume do servico apos a criacao.
+              {isNodeSitesMode
+                ? `Envie os arquivos do site para a pasta ${serviceForm.nodeSiteConfig?.siteFolder || NODE_SITE_FOLDERS[0]} apos a criacao.`
+                : 'Envie um .zip/.tar para publicar o codigo no volume do servico apos a criacao.'}
             </p>
           </div>
 
@@ -1086,16 +1237,22 @@ const DockerPanel = () => {
             <div className="flex items-center justify-between mb-3">
               <div>
                 <label className="text-sm font-semibold text-blue-200">
-                  {tpl?.hasProjectOption !== false ? '🚀 Criar projeto exemplo' : '🔧 Opções adicionais'}
+                  {isNodeSitesMode
+                    ? '🌐 Publicação de sites'
+                    : tpl?.hasProjectOption !== false
+                      ? '🚀 Criar projeto exemplo'
+                      : '🔧 Opções adicionais'}
                 </label>
                 <p className="text-xs text-blue-300/80 mt-1">
-                  {tpl?.hasProjectOption !== false 
+                  {isNodeSitesMode
+                    ? 'A estrutura base do serviço é criada automaticamente.'
+                    : tpl?.hasProjectOption !== false 
                     ? 'Inclui código inicial pronto para usar'
                     : tpl?.managerLabel || 'Opções especiais para este serviço'
                   }
                 </p>
               </div>
-              {tpl?.hasProjectOption !== false && (
+              {!isNodeSitesMode && tpl?.hasProjectOption !== false && (
                 <label className="relative inline-flex items-center cursor-pointer">
                   <input
                     type="checkbox"
@@ -1108,7 +1265,7 @@ const DockerPanel = () => {
               )}
             </div>
             
-            {tpl?.hasProjectOption !== false && (
+            {!isNodeSitesMode && tpl?.hasProjectOption !== false && (
               <div className={`text-xs transition-colors mb-3 ${
                 serviceForm.createProject 
                   ? 'text-emerald-300'
@@ -1118,6 +1275,11 @@ const DockerPanel = () => {
                   ? '✅ Será criado um projeto exemplo com código inicial, dependências e documentação'
                   : '📦 Apenas o container será criado, sem arquivos de exemplo'
                 }
+              </div>
+            )}
+            {isNodeSitesMode && (
+              <div className="mb-3 text-xs text-emerald-300">
+                ✅ O painel cria a estrutura Node automaticamente e publica o site na pasta escolhida.
               </div>
             )}
             
@@ -1235,7 +1397,7 @@ const DockerPanel = () => {
               </div>
             )}
             
-            {serviceForm.createProject && serviceForm.volumes.length === 0 && tpl?.hasProjectOption !== false && (
+            {!isNodeSitesMode && serviceForm.createProject && serviceForm.volumes.length === 0 && tpl?.hasProjectOption !== false && (
               <div className="mt-3 p-3 rounded-lg border border-amber-500/30 bg-amber-500/10">
                 <p className="text-xs text-amber-300 flex items-center gap-2">
                   <span>⚠️</span>
@@ -1477,7 +1639,13 @@ const DockerPanel = () => {
                               })),
                               newBindLocalOnly: svc.bindLocalOnly ?? false,
                               commandInput: formatCommandForInput(svc.command),
-                              newProjectArchive: null
+                              newProjectArchive: null,
+                              nodeServiceMode: svc.nodeServiceMode || NODE_SERVICE_MODES.service,
+                              nodeSiteConfig: {
+                                siteType: svc.nodeSiteConfig?.siteType || NODE_SITE_TYPES.common,
+                                siteFolder: svc.nodeSiteConfig?.siteFolder || NODE_SITE_FOLDERS[0],
+                                fallbackFile: svc.nodeSiteConfig?.fallbackFile || 'index.html'
+                              }
                             })
                           }}
                         >
@@ -1938,18 +2106,129 @@ const DockerPanel = () => {
                   </p>
                 </div>
               )}
-              <div>
-                <label className="block text-sm text-slate-300 mb-2">Comando de inicializacao</label>
-                <input
-                  className="w-full rounded-xl border border-slate-700 bg-slate-800 px-3 py-2 text-sm text-white"
-                  placeholder="npm install && npm run start"
-                  value={editDialog.commandInput || ''}
-                  onChange={(e) => setEditDialog(prev => ({ ...prev, commandInput: e.target.value }))}
-                />
-                <p className="text-xs text-slate-400 mt-1">
-                  Deixe vazio para detectar automaticamente pelo package.json.
-                </p>
-              </div>
+              {editDialog.templateId === 'node-app' && (
+                <div className="rounded-xl border border-cyan-500/20 bg-cyan-500/5 p-4">
+                  <label className="block text-sm font-semibold text-cyan-200 mb-3">Modo do serviço Node.js</label>
+                  <div className="grid gap-3 md:grid-cols-2">
+                    <label className={`rounded-xl border p-3 text-sm ${editDialog.nodeServiceMode === NODE_SERVICE_MODES.service ? 'border-cyan-400 bg-cyan-500/10 text-white' : 'border-slate-700 bg-slate-800 text-slate-300'}`}>
+                      <input
+                        type="radio"
+                        className="mr-2"
+                        name="edit-node-service-mode"
+                        checked={editDialog.nodeServiceMode === NODE_SERVICE_MODES.service}
+                        onChange={() =>
+                          setEditDialog((prev) => ({
+                            ...prev,
+                            nodeServiceMode: NODE_SERVICE_MODES.service
+                          }))
+                        }
+                      />
+                      Serviço
+                      <span className="mt-1 block text-xs text-slate-400">
+                        Mantém o comportamento atual do serviço Node.
+                      </span>
+                    </label>
+                    <label className={`rounded-xl border p-3 text-sm ${editDialog.nodeServiceMode === NODE_SERVICE_MODES.sites ? 'border-cyan-400 bg-cyan-500/10 text-white' : 'border-slate-700 bg-slate-800 text-slate-300'}`}>
+                      <input
+                        type="radio"
+                        className="mr-2"
+                        name="edit-node-service-mode"
+                        checked={editDialog.nodeServiceMode === NODE_SERVICE_MODES.sites}
+                        onChange={() =>
+                          setEditDialog((prev) => ({
+                            ...prev,
+                            nodeServiceMode: NODE_SERVICE_MODES.sites
+                          }))
+                        }
+                      />
+                      Sites
+                      <span className="mt-1 block text-xs text-slate-400">
+                        Serve o conteúdo do site em <code>/</code> e recria a estrutura automaticamente.
+                      </span>
+                    </label>
+                  </div>
+
+                  {editDialog.nodeServiceMode === NODE_SERVICE_MODES.sites && (
+                    <div className="mt-4 grid gap-4 md:grid-cols-2">
+                      <div>
+                        <label className="block text-sm text-slate-300 mb-2">Tipo de site</label>
+                        <select
+                          className="w-full rounded-xl border border-slate-700 bg-slate-800 px-3 py-2 text-sm text-white"
+                          value={editDialog.nodeSiteConfig?.siteType || NODE_SITE_TYPES.common}
+                          onChange={(e) =>
+                            setEditDialog((prev) => ({
+                              ...prev,
+                              nodeSiteConfig: {
+                                ...prev.nodeSiteConfig,
+                                siteType: e.target.value
+                              }
+                            }))
+                          }
+                        >
+                          <option value={NODE_SITE_TYPES.common}>Site Comum</option>
+                          <option value={NODE_SITE_TYPES.spa}>Angular/React/Vue</option>
+                        </select>
+                      </div>
+                      <div>
+                        <label className="block text-sm text-slate-300 mb-2">Pasta do site</label>
+                        <select
+                          className="w-full rounded-xl border border-slate-700 bg-slate-800 px-3 py-2 text-sm text-white"
+                          value={editDialog.nodeSiteConfig?.siteFolder || NODE_SITE_FOLDERS[0]}
+                          onChange={(e) =>
+                            setEditDialog((prev) => ({
+                              ...prev,
+                              nodeSiteConfig: {
+                                ...prev.nodeSiteConfig,
+                                siteFolder: e.target.value
+                              }
+                            }))
+                          }
+                        >
+                          {NODE_SITE_FOLDERS.map((folder) => (
+                            <option key={folder} value={folder}>
+                              {folder}
+                            </option>
+                          ))}
+                        </select>
+                      </div>
+                      <div className="md:col-span-2">
+                        <label className="block text-sm text-slate-300 mb-2">Arquivo padrão / fallback</label>
+                        <input
+                          className="w-full rounded-xl border border-slate-700 bg-slate-800 px-3 py-2 text-sm text-white"
+                          placeholder="index.html"
+                          value={editDialog.nodeSiteConfig?.fallbackFile || 'index.html'}
+                          onChange={(e) =>
+                            setEditDialog((prev) => ({
+                              ...prev,
+                              nodeSiteConfig: {
+                                ...prev.nodeSiteConfig,
+                                fallbackFile: e.target.value
+                              }
+                            }))
+                          }
+                        />
+                        <p className="text-xs text-slate-400 mt-1">
+                          Em modo Sites o comando é automático: <code>npm install && npm start</code>.
+                        </p>
+                      </div>
+                    </div>
+                  )}
+                </div>
+              )}
+              {!(editDialog.templateId === 'node-app' && editDialog.nodeServiceMode === NODE_SERVICE_MODES.sites) && (
+                <div>
+                  <label className="block text-sm text-slate-300 mb-2">Comando de inicializacao</label>
+                  <input
+                    className="w-full rounded-xl border border-slate-700 bg-slate-800 px-3 py-2 text-sm text-white"
+                    placeholder="npm install && npm run start"
+                    value={editDialog.commandInput || ''}
+                    onChange={(e) => setEditDialog(prev => ({ ...prev, commandInput: e.target.value }))}
+                  />
+                  <p className="text-xs text-slate-400 mt-1">
+                    Deixe vazio para detectar automaticamente pelo package.json.
+                  </p>
+                </div>
+              )}
               <div>
                 <label className="block text-sm text-slate-300 mb-2">Variáveis de Ambiente</label>
                 <div className="space-y-2">
@@ -2105,7 +2384,9 @@ const DockerPanel = () => {
                       </button>
                     </div>
                     <p className="text-xs text-slate-400">
-                      O projeto sera extraido no volume do servico e o container sera reiniciado.
+                      {editDialog.templateId === 'node-app' && editDialog.nodeServiceMode === NODE_SERVICE_MODES.sites
+                        ? `Os arquivos serão extraídos na pasta ${editDialog.nodeSiteConfig?.siteFolder || NODE_SITE_FOLDERS[0]} e o serviço será reiniciado.`
+                        : 'O projeto sera extraido no volume do servico e o container sera reiniciado.'}
                     </p>
                     <div className="rounded-xl border border-slate-700 bg-slate-800/60 p-3 text-xs">
                       <div className="flex items-center justify-between">
@@ -2162,8 +2443,14 @@ const DockerPanel = () => {
                     hostPort: editDialog.newHostPort || editDialog.hostPort,
                     envVars: editDialog.newEnvVars || [],
                     networkName: editDialog.newNetworkName || editDialog.networkName,
-                    command: editDialog.commandInput || '',
-                    bindLocalOnly: editDialog.newBindLocalOnly ?? editDialog.bindLocalOnly ?? false
+                    command:
+                      editDialog.templateId === 'node-app' &&
+                      editDialog.nodeServiceMode === NODE_SERVICE_MODES.sites
+                        ? ''
+                        : editDialog.commandInput || '',
+                    bindLocalOnly: editDialog.newBindLocalOnly ?? editDialog.bindLocalOnly ?? false,
+                    nodeServiceMode: editDialog.nodeServiceMode || NODE_SERVICE_MODES.service,
+                    nodeSiteConfig: editDialog.nodeSiteConfig
                   });
                   setEditDialog(null);
                 }}
