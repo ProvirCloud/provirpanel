@@ -612,11 +612,11 @@ const PathRuleModal = ({ initialRule, onSave, onCancel, saving }) => {
                   className="mt-1 w-full rounded-xl border border-slate-800 bg-slate-950 px-3 py-2 text-sm"
                   value={rule.proxy_pass_path || ''}
                   onChange={(e) => setRule({ ...rule, proxy_pass_path: e.target.value })}
-                  disabled={Boolean(rule.helper_subpath_app && rule.subpath_proxy_mode === 'keep_prefix')}
-                  placeholder="/ (recomendado para app em subpasta)"
+                  placeholder="/api"
                 />
                 <p className="mt-1 text-[11px] text-slate-500">
-                  Deixe vazio para manter o prefixo. Use "/" para remover o prefixo.
+                  Permite complementar o destino com um caminho interno, por exemplo <span className="font-mono">/api</span>.
+                  Deixe vazio para usar apenas host + porta.
                 </p>
               </div>
               <div className="col-span-2 flex items-center gap-2">
