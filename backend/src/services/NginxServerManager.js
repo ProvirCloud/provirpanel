@@ -144,7 +144,8 @@ class NginxServerManager {
       data.path_rules || [],
       data.upstream_servers || [],
       null,
-      data.static_site || data.staticSite
+      data.static_site || data.staticSite,
+      data.http_redirect_target || data.httpRedirectTarget || 'https://$host$request_uri'
     );
 
     const server = await prisma.nginxServer.create({
@@ -279,7 +280,8 @@ class NginxServerManager {
         updateData.pathRules || existingPathRules,
         data.upstream_servers ?? existing?.upstreamServers ?? [],
         currentMeta,
-        data.static_site ?? data.staticSite
+        data.static_site ?? data.staticSite,
+        data.http_redirect_target ?? data.httpRedirectTarget
       );
     }
 
@@ -402,7 +404,7 @@ class NginxServerManager {
     };
   }
 
-  buildDockerMeta(pathRules, upstreamServers, existingMeta, staticSiteConfig) {
+  buildDockerMeta(pathRules, upstreamServers, existingMeta, staticSiteConfig, httpRedirectTarget) {
     const meta = {
       paths: {},
       upstreams: {},
@@ -435,6 +437,11 @@ class NginxServerManager {
       meta.site = this.normalizeStaticSiteConfig(staticSiteConfig);
     } else if (meta.site) {
       meta.site = this.normalizeStaticSiteConfig(meta.site);
+    }
+    if (httpRedirectTarget !== undefined) {
+      meta.httpRedirectTarget = httpRedirectTarget || 'https://$host$request_uri';
+    } else if (!meta.httpRedirectTarget) {
+      meta.httpRedirectTarget = 'https://$host$request_uri';
     }
     return meta;
   }
@@ -628,10 +635,14 @@ class NginxServerManager {
     }
 
     if (server.ssl_type !== 'none') {
+      const httpRedirectTarget =
+        server.docker_meta?.httpRedirectTarget ||
+        server.dockerMeta?.httpRedirectTarget ||
+        'https://$host$request_uri';
       config += `server {
     listen 80;
     server_name ${domains};
-    return 301 https://$server_name$request_uri;
+    return 301 ${httpRedirectTarget};
 }
 
 `;
@@ -1059,7 +1070,9 @@ ${buildProxyBlock(proxyTarget)}    }
             dockerMeta: this.buildDockerMeta(
               normalized.path_rules || [],
               normalized.upstream_servers || [],
-              existing?.dockerMeta || null
+              existing?.dockerMeta || null,
+              undefined,
+              normalized.http_redirect_target
             )
           }
         });
@@ -1677,6 +1690,10 @@ ${buildProxyBlock(proxyTarget)}    }
       const sslType = hasSSL
         ? (sslCertPath && sslCertPath.includes('/etc/letsencrypt/') ? 'letsencrypt' : 'manual')
         : 'none';
+      const httpRedirectTargetMatch = content.match(/return\s+301\s+(https:\/\/[^;]+);/i);
+      const httpRedirectTarget = httpRedirectTargetMatch
+        ? httpRedirectTargetMatch[1].trim()
+        : 'https://$host$request_uri';
 
       // Check server type
       let serverType = 'proxy';
@@ -1884,6 +1901,7 @@ ${buildProxyBlock(proxyTarget)}    }
         security_headers_enabled: securityHeadersEnabled,
         server_tokens_off: serverTokensOff,
         tls_min_version_enforced: tlsMinVersionEnforced,
+        http_redirect_target: httpRedirectTarget,
         raw_config: content
       };
     } catch (err) {
@@ -1928,6 +1946,7 @@ ${buildProxyBlock(proxyTarget)}    }
       security_headers_enabled: data.security_headers_enabled ?? data.securityHeadersEnabled ?? false,
       server_tokens_off: data.server_tokens_off ?? data.serverTokensOff ?? true,
       tls_min_version_enforced: data.tls_min_version_enforced ?? data.tlsMinVersionEnforced ?? true,
+      http_redirect_target: data.http_redirect_target || data.httpRedirectTarget || 'https://$host$request_uri',
       is_active: data.is_active ?? data.isActive ?? true
     };
   }
@@ -1974,7 +1993,8 @@ ${buildProxyBlock(proxyTarget)}    }
       configData.path_rules || [],
       configData.upstream_servers || [],
       existing?.dockerMeta || null,
-      configData.static_site || configData.staticSite
+      configData.static_site || configData.staticSite,
+      configData.http_redirect_target
     );
 
     const server = existing
