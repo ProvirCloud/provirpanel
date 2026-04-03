@@ -625,7 +625,27 @@ const port = Number(process.env.PORT || process.env.APP_PORT || 3000);
 const siteDir = path.resolve(__dirname, ${JSON.stringify(siteFolder)});
 const siteType = ${JSON.stringify(siteType)};
 const fallbackFile = ${JSON.stringify(fallbackFile)};
-const fallbackPath = path.join(siteDir, fallbackFile);
+
+const normalizePrefix = (value) => {
+  const raw = String(value || '').trim();
+  if (!raw || raw === '/') return '';
+  const prefixed = raw.startsWith('/') ? raw : '/' + raw;
+  return prefixed.replace(/\\/+$/, '');
+};
+
+const stripForwardedPrefix = (urlPath, prefix) => {
+  if (!prefix) return urlPath;
+  if (urlPath === prefix) return '/';
+  if (urlPath.startsWith(prefix + '/')) {
+    return urlPath.slice(prefix.length) || '/';
+  }
+  return urlPath;
+};
+
+const hasFileExtension = (requestPath) => {
+  const base = path.posix.basename(String(requestPath || ''));
+  return base.includes('.');
+};
 
 const sendSiteFile = (relativePath, res, next, notFoundStatus = 404) => {
   const targetPath = path.resolve(siteDir, relativePath);
@@ -646,12 +666,26 @@ app.use((req, _res, next) => {
   next();
 });
 
+app.use((req, _res, next) => {
+  const forwardedPrefix = normalizePrefix(req.headers['x-forwarded-prefix'] || process.env.SITE_BASE_PATH || '');
+  if (forwardedPrefix) {
+    req.url = stripForwardedPrefix(req.url, forwardedPrefix);
+  }
+  next();
+});
+
 app.use(express.static(siteDir, { index: false, fallthrough: true }));
 
 app.get('/', (req, res, next) => sendSiteFile(fallbackFile, res, next));
 
 if (siteType === 'spa') {
-  app.get('*', (req, res, next) => sendSiteFile(fallbackFile, res, next, 500));
+  app.get('*', (req, res, next) => {
+    const requested = req.path.replace(/^\\/+/, '');
+    if (requested && hasFileExtension(requested)) {
+      return res.status(404).send('Arquivo não encontrado');
+    }
+    return sendSiteFile(fallbackFile, res, next, 404);
+  });
 } else {
   app.get('*', (req, res, next) => {
     const requested = req.path.replace(/^\\/+/, '');
