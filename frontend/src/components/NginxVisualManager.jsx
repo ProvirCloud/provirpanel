@@ -426,6 +426,7 @@ const PathRuleModal = ({ initialRule, onSave, onCancel, saving }) => {
     proxy_host: 'localhost',
     proxy_port: 3000,
     proxy_pass_path: '',
+    forwarded_prefix_path: '',
     helper_subpath_app: false,
     subpath_proxy_mode: initialRule?.subpath_proxy_mode
       || ((initialRule?.proxy_pass_path || '') === '/' ? 'strip_prefix' : 'keep_prefix'),
@@ -463,10 +464,8 @@ const PathRuleModal = ({ initialRule, onSave, onCancel, saving }) => {
     if (isProxy && nextRule.helper_subpath_app) {
       const normalized = normalizePath(nextRule.path || '/app')
       nextRule.path = normalized.endsWith('/') ? normalized : `${normalized}/`
-      if (nextRule.subpath_proxy_mode === 'strip_prefix') {
+      if (nextRule.subpath_proxy_mode === 'strip_prefix' && !nextRule.proxy_pass_path) {
         nextRule.proxy_pass_path = '/'
-      } else {
-        delete nextRule.proxy_pass_path
       }
       nextRule.forward_prefix_enabled = true
       nextRule.fix_root_redirect_enabled = true
@@ -482,6 +481,9 @@ const PathRuleModal = ({ initialRule, onSave, onCancel, saving }) => {
     }
     if (!nextRule.proxy_pass_path) {
       delete nextRule.proxy_pass_path
+    }
+    if (!nextRule.forwarded_prefix_path) {
+      delete nextRule.forwarded_prefix_path
     }
     await onSave(nextRule)
   }
@@ -602,6 +604,20 @@ const PathRuleModal = ({ initialRule, onSave, onCancel, saving }) => {
                     </select>
                     <p className="mt-1 text-[11px] text-blue-200/90">
                       Se houver loop de redirecionamento, use "Manter prefixo".
+                    </p>
+                  </div>
+                )}
+                {rule.helper_subpath_app && (
+                  <div className="mt-2">
+                    <label className="text-[11px] text-blue-200">Prefixo encaminhado (X-Forwarded-Prefix)</label>
+                    <input
+                      className="mt-1 w-full rounded-xl border border-blue-700 bg-slate-950 px-3 py-2 text-xs"
+                      value={rule.forwarded_prefix_path || ''}
+                      onChange={(e) => setRule({ ...rule, forwarded_prefix_path: e.target.value })}
+                      placeholder="/legacy-admin"
+                    />
+                    <p className="mt-1 text-[11px] text-blue-200/90">
+                      Deixe vazio para usar o próprio path. Preencha quando o path incluir sub-rotas, como <span className="font-mono">/legacy-admin/management/</span>.
                     </p>
                   </div>
                 )}
@@ -1663,6 +1679,7 @@ const ServerForm = ({ server, onSave, onApply, onCancel, dockerContainers, docke
         proxy_host: 'localhost',
         proxy_port: 3000,
         proxy_pass_path: '',
+        forwarded_prefix_path: '',
         rewrite_enabled: false,
         rewrite_from: '',
         rewrite_to: '',
@@ -1871,6 +1888,7 @@ const ServerForm = ({ server, onSave, onApply, onCancel, dockerContainers, docke
         type: 'proxy',
         proxy_host: '127.0.0.1',
         proxy_port: targetPort,
+        forwarded_prefix_path: '',
         subpath_proxy_mode: 'strip_prefix',
         proxy_redirect_mode: 'auto',
         proxy_redirect_off: false,

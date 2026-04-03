@@ -248,14 +248,13 @@ class NginxServerManager {
             mergedRule.subpath_proxy_mode = match.subpath_proxy_mode;
           }
           if (
-            mergedRule.subpath_proxy_mode !== 'keep_prefix'
-            && mergedRule.proxy_pass_path === undefined
+            mergedRule.proxy_pass_path === undefined
             && match.proxy_pass_path !== undefined
           ) {
             mergedRule.proxy_pass_path = match.proxy_pass_path;
           }
-          if (mergedRule.subpath_proxy_mode === 'keep_prefix') {
-            delete mergedRule.proxy_pass_path;
+          if (mergedRule.forwarded_prefix_path === undefined && match.forwarded_prefix_path !== undefined) {
+            mergedRule.forwarded_prefix_path = match.forwarded_prefix_path;
           }
           if (mergedRule.proxy_redirect_off === undefined && match.proxy_redirect_off !== undefined) {
             mergedRule.proxy_redirect_off = match.proxy_redirect_off;
@@ -753,6 +752,7 @@ class NginxServerManager {
           proxy_host: rule.proxy_host || rule.host || server.proxy_host || 'localhost',
           proxy_port: rule.proxy_port || rule.port || server.proxy_port || 3000,
           proxy_pass_path: rule.proxy_pass_path,
+          forwarded_prefix_path: rule.forwarded_prefix_path,
           subpath_proxy_mode: rule.subpath_proxy_mode,
           proxy_redirect_off: Boolean(rule.proxy_redirect_off),
           rewrite_enabled: rule.rewrite_enabled,
@@ -874,12 +874,17 @@ ${staticRewriteBlock}        absolute_redirect off;
           const fixRootRedirectEnabled = !rule.proxy_redirect_off
             && Boolean(rule.helper_subpath_app || rule.fix_root_redirect_enabled);
           const normalizedPrefix = rule.path === '/' ? '/' : rule.path.replace(/\/+$/, '');
+          const normalizedForwardedPrefix = rule.forwarded_prefix_path
+            ? (String(rule.forwarded_prefix_path).startsWith('/')
+              ? String(rule.forwarded_prefix_path).replace(/\/+$/, '') || '/'
+              : `/${String(rule.forwarded_prefix_path).replace(/\/+$/, '')}`)
+            : normalizedPrefix;
           const normalizedRedirectTarget = rule.path === '/'
             ? '/'
             : (rule.path.endsWith('/') ? rule.path : `${rule.path}/`);
           const extraProxyLines = [];
-          if (forwardPrefixEnabled && normalizedPrefix) {
-            extraProxyLines.push(`        proxy_set_header X-Forwarded-Prefix ${normalizedPrefix};`);
+          if (forwardPrefixEnabled && normalizedForwardedPrefix) {
+            extraProxyLines.push(`        proxy_set_header X-Forwarded-Prefix ${normalizedForwardedPrefix};`);
           }
           if (rule.proxy_redirect_off) {
             extraProxyLines.push('        proxy_redirect off;');
@@ -1780,7 +1785,9 @@ ${buildProxyBlock(proxyTarget)}    }
           rewriteTo = parts[1];
           rewriteFlag = parts[2];
         }
-        const forwardPrefixEnabled = /proxy_set_header\s+X-Forwarded-Prefix\s+[^;]+;/i.test(block);
+        const forwardPrefixMatch = block.match(/proxy_set_header\s+X-Forwarded-Prefix\s+([^;]+);/i);
+        const forwardPrefixEnabled = Boolean(forwardPrefixMatch);
+        const forwardedPrefixPath = forwardPrefixMatch ? forwardPrefixMatch[1].trim() : undefined;
         const proxyRedirectOff = /proxy_redirect\s+off;/i.test(block);
         const fixRootRedirectEnabled = /proxy_redirect\s+~\^https\?:\/\/\[\^\/\]\+/i.test(block)
           || /proxy_redirect\s+~\^\//i.test(block);
@@ -1798,6 +1805,7 @@ ${buildProxyBlock(proxyTarget)}    }
             proxy_host: host,
             proxy_port: port,
             proxy_pass_path: pathSuffix,
+            forwarded_prefix_path: forwardedPrefixPath,
             subpath_proxy_mode: pathSuffix === '/' ? 'strip_prefix' : 'keep_prefix',
             proxy_redirect_off: proxyRedirectOff,
             rewrite_enabled: Boolean(rewriteFrom && rewriteTo),
