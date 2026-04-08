@@ -1,8 +1,38 @@
-@import url('https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@400;500;600;700&family=JetBrains+Mono:wght@400;600&display=swap');
-
 @tailwind base;
 @tailwind components;
 @tailwind utilities;
+
+@font-face {
+  font-family: 'Objektiv Mk1 Trial';
+  src: url('./assets/fonts/ObjektivMk1Trial-Light-C58fVFyY.woff2') format('woff2');
+  font-weight: 300;
+  font-style: normal;
+  font-display: swap;
+}
+
+@font-face {
+  font-family: 'Objektiv Mk1 Trial';
+  src: url('./assets/fonts/ObjektivMk1Trial-Regular-Z38qA-2S.woff2') format('woff2');
+  font-weight: 400;
+  font-style: normal;
+  font-display: swap;
+}
+
+@font-face {
+  font-family: 'Objektiv Mk1 Trial';
+  src: url('./assets/fonts/ObjektivMk1Trial-Bold-CcOJhIwO.woff2') format('woff2');
+  font-weight: 700;
+  font-style: normal;
+  font-display: swap;
+}
+
+@font-face {
+  font-family: 'Objektiv Mk1 Trial';
+  src: url('./assets/fonts/ObjektivMk1Trial-XBold-ClQ3OiM-.woff2') format('woff2');
+  font-weight: 800;
+  font-style: normal;
+  font-display: swap;
+}
 
 @layer base {
   :root {
@@ -22,7 +52,7 @@
       radial-gradient(circle at top, rgba(125, 211, 252, 0.24), transparent 28%),
       radial-gradient(circle at 18% 18%, rgba(59, 130, 246, 0.12), transparent 16%),
       linear-gradient(180deg, #f8fbff 0%, #edf4ff 36%, #e6eefc 100%);
-    font-family: 'Space Grotesk', system-ui, sans-serif;
+    font-family: 'Objektiv Mk1 Trial', system-ui, sans-serif;
     min-height: 100vh;
   }
 
@@ -45,7 +75,7 @@
 }
 
 .mono {
-  font-family: 'JetBrains Mono', ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, 'Liberation Mono',
+  font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, 'Liberation Mono',
     'Courier New', monospace;
 }
 
