@@ -510,33 +510,33 @@ const Terminal = () => {
     <div className="space-y-4">
       <div className="flex flex-wrap items-center justify-between gap-3">
         <div>
-          <p className="text-xs uppercase tracking-[0.3em] text-slate-400">Terminal</p>
-          <h2 className="text-2xl font-semibold text-white">Sessao interativa</h2>
+          <p className="zeus-kicker text-xs font-semibold uppercase">Terminal</p>
+          <h2 className="text-2xl font-semibold text-slate-900">Sessao interativa</h2>
         </div>
         <div className="flex items-center gap-2">
           <button
-            className="flex items-center gap-2 rounded-xl border border-slate-800 bg-slate-900/60 px-3 py-2 text-xs text-slate-200 transition hover:border-blue-500/60"
+            className="flex items-center gap-2 rounded-2xl border border-blue-100 bg-white px-3 py-2 text-xs text-slate-700 transition hover:border-blue-400"
             onClick={copyLastOutput}
           >
             <Copy className="h-4 w-4" />
             Copiar resultado
           </button>
           <button
-            className="flex items-center gap-2 rounded-xl border border-slate-800 bg-slate-900/60 px-3 py-2 text-xs text-slate-200 transition hover:border-blue-500/60"
+            className="flex items-center gap-2 rounded-2xl border border-blue-100 bg-white px-3 py-2 text-xs text-slate-700 transition hover:border-blue-400"
             onClick={clearTerminal}
           >
             <Trash2 className="h-4 w-4" />
             Limpar
           </button>
           <button
-            className="flex items-center gap-2 rounded-xl border border-slate-800 bg-slate-900/60 px-3 py-2 text-xs text-slate-200 transition hover:border-blue-500/60"
+            className="flex items-center gap-2 rounded-2xl border border-blue-100 bg-white px-3 py-2 text-xs text-slate-700 transition hover:border-blue-400"
             onClick={resetConnection}
           >
             <RefreshCw className="h-4 w-4" />
             Resetar conexao
           </button>
           <button
-            className="flex items-center gap-2 rounded-xl bg-blue-500 px-3 py-2 text-xs font-semibold text-slate-950 transition hover:bg-blue-400"
+            className="flex items-center gap-2 rounded-2xl bg-[linear-gradient(135deg,_#16366f,_#2563eb)] px-3 py-2 text-xs font-semibold text-white transition hover:brightness-110"
             onClick={addTab}
           >
             <Plus className="h-4 w-4" />
@@ -552,18 +552,18 @@ const Terminal = () => {
             onClick={() => setActiveId(tab.id)}
             className={`flex items-center gap-2 rounded-full border px-4 py-2 text-xs transition ${
               activeId === tab.id
-                ? 'border-blue-500/60 bg-blue-500/10 text-blue-200'
-                : 'border-slate-800 bg-slate-900/60 text-slate-300 hover:border-blue-500/40'
+                ? 'border-blue-300 bg-blue-50 text-blue-800'
+                : 'border-blue-100 bg-white text-slate-600 hover:border-blue-300'
             }`}
           >
             <TerminalIcon className="h-3.5 w-3.5" />
             {tab.title}
-            <span className="rounded-full bg-slate-800 px-2 py-0.5 text-[10px] text-slate-300">
+            <span className="rounded-full bg-slate-100 px-2 py-0.5 text-[10px] text-slate-600">
               {formatStatus(tab.status)}
             </span>
             {tabs.length > 1 && (
               <span
-                className="ml-1 text-slate-500 hover:text-rose-300"
+                className="ml-1 text-slate-400 hover:text-rose-500"
                 onClick={(event) => {
                   event.stopPropagation()
                   closeTab(tab.id)
@@ -576,8 +576,8 @@ const Terminal = () => {
         ))}
       </div>
 
-      <div className="rounded-2xl border border-slate-800 bg-slate-900/60 p-4">
-        <div className="mb-3 flex items-center justify-between text-xs text-slate-400">
+      <div className="zeus-panel-dark rounded-[2rem] p-4">
+        <div className="mb-3 flex items-center justify-between text-xs text-slate-300">
           <span className="flex items-center gap-2">
             <Wifi className="h-4 w-4 text-blue-300" />
             {formatStatus(tabs.find((tab) => tab.id === activeId)?.status)}
@@ -591,10 +591,10 @@ const Terminal = () => {
           >
             <div
               ref={setContainerRef(tab.id)}
-              className="h-80 min-h-[16rem] w-full resize-y overflow-auto rounded-xl border border-slate-800 bg-[#0b1120]"
+              className="h-80 min-h-[16rem] w-full resize-y overflow-auto rounded-2xl border border-slate-700 bg-[#07101f] text-slate-100 shadow-inner shadow-black/30"
             />
             <button
-              className="absolute right-3 top-3 hidden items-center gap-2 rounded-lg border border-slate-700 bg-slate-950/90 px-3 py-1 text-[11px] text-slate-200 shadow-lg transition group-hover:flex"
+              className="absolute right-3 top-3 hidden items-center gap-2 rounded-xl border border-slate-700 bg-slate-950/90 px-3 py-1 text-[11px] text-slate-200 shadow-lg transition group-hover:flex"
               onClick={copyLastOutput}
             >
               <Copy className="h-3 w-3" />
