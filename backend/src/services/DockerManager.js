@@ -228,6 +228,17 @@ class DockerManager {
       return true;
     }
 
+    const networkNames = [
+      ...Object.keys(containerInfo.NetworkSettings?.Networks || {}),
+      ...(Array.isArray(containerInfo.NetworkSettings?.Networks)
+        ? containerInfo.NetworkSettings.Networks.map((network) => network?.NetworkID || network?.Name).filter(Boolean)
+        : [])
+    ].map((value) => String(value || '').toLowerCase());
+
+    if (networkNames.some((name) => name === 'provirpanel' || name.includes('provirpanel'))) {
+      return true;
+    }
+
     const mounts = containerInfo.Mounts || [];
     return mounts.some((mount) => {
       const source = String(mount.Source || mount.hostPath || '');

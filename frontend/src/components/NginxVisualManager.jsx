@@ -1880,6 +1880,8 @@ const ServerForm = ({ server, onSave, onApply, onCancel, dockerContainers, docke
     const scriptEnv = service?.envVars?.find((env) => env.key === 'SCRIPT_NAME')?.value
     const suggestedPath = normalizePath(scriptEnv || container.path || container.name)
     const targetPort = Number(service?.hostPort || container.port || 3000)
+    const normalizedScriptName = normalizeScriptName(suggestedPath)
+    const isPgAdmin = service?.templateId === 'pgadmin'
     setPathRuleModal({
       mode: 'create',
       index: null,
@@ -1888,10 +1890,10 @@ const ServerForm = ({ server, onSave, onApply, onCancel, dockerContainers, docke
         type: 'proxy',
         proxy_host: '127.0.0.1',
         proxy_port: targetPort,
-        forwarded_prefix_path: '',
-        subpath_proxy_mode: 'strip_prefix',
+        forwarded_prefix_path: isPgAdmin ? normalizedScriptName : '',
+        subpath_proxy_mode: isPgAdmin ? 'keep_prefix' : 'strip_prefix',
         proxy_redirect_mode: 'auto',
-        proxy_redirect_off: false,
+        proxy_redirect_off: isPgAdmin,
         docker: true,
         docker_container: container.name
       }
