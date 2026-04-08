@@ -1,4 +1,5 @@
 import { useEffect, useMemo, useState } from 'react'
+import { Cpu, HardDrive, MemoryStick, RadioTower, ServerCog } from 'lucide-react'
 import { PieChart, Pie, ResponsiveContainer, Cell } from 'recharts'
 import { createMetricsSocket } from '../services/socket.js'
 import api from '../services/api.js'
@@ -24,33 +25,42 @@ const ringData = (value) => [
   { name: 'free', value: 100 - value }
 ]
 
-const RingChart = ({ value, label }) => {
+const COLORS = ['#2563eb', '#dbeafe']
+
+const RingChart = ({ value, label, icon: Icon, tone }) => {
   return (
-    <div className="flex flex-col items-center gap-3 rounded-2xl border border-slate-800 bg-slate-900/60 p-5">
-      <div className="h-28 w-28">
+    <div className="zeus-panel rounded-[2rem] p-5">
+      <div className="flex items-center justify-between gap-3">
+        <div>
+          <p className="zeus-kicker text-[10px] font-semibold uppercase">{label}</p>
+          <p className="mt-2 text-3xl font-bold text-slate-900">{value}%</p>
+        </div>
+        <div className={`rounded-2xl p-3 ${tone}`}>
+          <Icon className="h-5 w-5" />
+        </div>
+      </div>
+      <div className="mt-4 h-32">
         <ResponsiveContainer width="100%" height="100%">
           <PieChart>
-            <Pie
-              data={ringData(value)}
-              innerRadius={38}
-              outerRadius={52}
-              paddingAngle={3}
-              dataKey="value"
-              stroke="none"
-            >
-              <Cell fill="#3B82F6" />
-              <Cell fill="#0f172a" />
+            <Pie data={ringData(value)} innerRadius={42} outerRadius={56} paddingAngle={3} dataKey="value" stroke="none">
+              {COLORS.map((color) => (
+                <Cell key={color} fill={color} />
+              ))}
             </Pie>
           </PieChart>
         </ResponsiveContainer>
       </div>
-      <div className="text-center">
-        <p className="text-xs uppercase tracking-[0.3em] text-slate-400">{label}</p>
-        <p className="mt-2 text-2xl font-semibold text-white">{value}%</p>
-      </div>
     </div>
   )
 }
+
+const StatCard = ({ title, value, subtitle, accent }) => (
+  <div className={`rounded-[1.8rem] border px-5 py-5 ${accent}`}>
+    <p className="text-[10px] font-semibold uppercase tracking-[0.3em]">{title}</p>
+    <p className="mt-3 text-3xl font-bold">{value}</p>
+    <p className="mt-2 text-sm opacity-75">{subtitle}</p>
+  </div>
+)
 
 const Dashboard = () => {
   const [metrics, setMetrics] = useState(null)
@@ -115,43 +125,74 @@ const Dashboard = () => {
 
   return (
     <div className="space-y-6">
-      <div className="grid gap-6 lg:grid-cols-3">
-        <RingChart value={cpu} label="CPU" />
-        <RingChart value={ramPercent} label="RAM" />
-        <RingChart value={diskPercent} label="Disco" />
+      <section className="zeus-panel overflow-hidden rounded-[2.4rem] p-8">
+        <div className="grid gap-6 lg:grid-cols-[1.4fr_0.9fr]">
+          <div>
+            <p className="zeus-kicker text-xs font-semibold uppercase">ZeusEngine operations center</p>
+            <h1 className="zeus-title mt-4 text-4xl font-black tracking-[0.06em]">
+              Infraestrutura, containers e rotas em um unico cockpit.
+            </h1>
+            <p className="mt-4 max-w-3xl text-base leading-8 text-slate-600">
+              Monitoramento em tempo real para deploy, Docker, Nginx, storage e seguranca com
+              uma interface alinhada a identidade ZeusEngine.
+            </p>
+          </div>
+
+          <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-1">
+            <StatCard
+              title="Conectividade"
+              value={socketStatus === 'connected' ? 'LIVE' : 'SYNC'}
+              subtitle={socketStatus === 'connected' ? 'Telemetria em tempo real' : 'Fallback por polling ativo'}
+              accent="border-blue-200 bg-[linear-gradient(135deg,_rgba(255,255,255,0.96),_rgba(219,234,254,0.75))] text-slate-900"
+            />
+            <StatCard
+              title="Containers ativos"
+              value={metrics?.containersRunning ?? '—'}
+              subtitle="Carga operacional em execucao"
+              accent="border-sky-200 bg-[linear-gradient(135deg,_rgba(219,234,254,0.82),_rgba(125,211,252,0.26))] text-slate-900"
+            />
+          </div>
+        </div>
+      </section>
+
+      <div className="grid gap-6 xl:grid-cols-3">
+        <RingChart value={cpu} label="CPU" icon={Cpu} tone="bg-blue-50 text-blue-700" />
+        <RingChart value={ramPercent} label="RAM" icon={MemoryStick} tone="bg-sky-50 text-sky-700" />
+        <RingChart value={diskPercent} label="DISCO" icon={HardDrive} tone="bg-indigo-50 text-indigo-700" />
       </div>
 
-      <div className="grid gap-6 lg:grid-cols-[2fr_1fr]">
-        <div className="rounded-2xl border border-slate-800 bg-slate-900/60 p-6">
-          <div className="mb-4 flex items-center justify-between">
+      <div className="grid gap-6 xl:grid-cols-[1.4fr_0.9fr]">
+        <section className="zeus-panel rounded-[2rem] p-6">
+          <div className="mb-4 flex items-center justify-between gap-4">
             <div>
-              <p className="text-xs uppercase tracking-[0.3em] text-slate-400">Processos</p>
-              <h2 className="text-xl font-semibold text-white">Top 5 por CPU e RAM</h2>
+              <p className="zeus-kicker text-[10px] font-semibold uppercase">Processos prioritarios</p>
+              <h2 className="mt-2 text-2xl font-bold text-slate-900">Top 5 por CPU e RAM</h2>
             </div>
-            <span className="rounded-full border border-blue-500/40 bg-blue-500/10 px-3 py-1 text-xs text-blue-200">
+            <div className="rounded-full border border-blue-200 bg-blue-50 px-3 py-1 text-xs font-semibold text-blue-700">
               {socketStatus === 'connected' ? 'Atualizacao ao vivo' : 'Atualizacao parcial'}
-            </span>
+            </div>
           </div>
-          <div className="overflow-hidden rounded-xl border border-slate-800">
-            <table className="w-full text-left text-sm text-slate-200">
-              <thead className="bg-slate-950 text-xs uppercase tracking-wide text-slate-400">
+
+          <div className="overflow-hidden rounded-[1.5rem] border border-blue-100">
+            <table className="w-full text-left text-sm text-slate-700">
+              <thead className="bg-[#16366f] text-[11px] uppercase tracking-[0.22em] text-blue-50">
                 <tr>
                   <th className="px-4 py-3">Processo</th>
                   <th className="px-4 py-3">CPU%</th>
                   <th className="px-4 py-3">RAM%</th>
                 </tr>
               </thead>
-              <tbody>
+              <tbody className="bg-white/70">
                 {processes.map((proc) => (
-                  <tr key={proc.pid} className="border-t border-slate-800">
+                  <tr key={proc.pid} className="border-t border-blue-50">
                     <td className="px-4 py-3">{proc.command}</td>
-                    <td className="px-4 py-3 text-blue-200">{proc.cpu}</td>
-                    <td className="px-4 py-3 text-blue-200">{proc.mem}</td>
+                    <td className="px-4 py-3 font-semibold text-blue-700">{proc.cpu}</td>
+                    <td className="px-4 py-3 font-semibold text-blue-700">{proc.mem}</td>
                   </tr>
                 ))}
                 {processes.length === 0 && (
                   <tr>
-                    <td className="px-4 py-4 text-slate-500" colSpan={3}>
+                    <td className="px-4 py-6 text-slate-500" colSpan={3}>
                       Aguardando dados...
                     </td>
                   </tr>
@@ -159,34 +200,65 @@ const Dashboard = () => {
               </tbody>
             </table>
           </div>
-        </div>
+        </section>
 
-        <div className="space-y-4">
-          <div className="rounded-2xl border border-slate-800 bg-slate-900/60 p-5">
-            <p className="text-xs uppercase tracking-[0.3em] text-slate-400">Uptime</p>
-            <p className="mt-3 text-2xl font-semibold text-white">
-              {metrics?.system?.uptime ? `${Math.floor(metrics.system.uptime / 3600)}h` : '—'}
-            </p>
-            <p className="mt-1 text-xs text-slate-400">{metrics?.system?.hostname || 'Servidor'}</p>
+        <section className="space-y-4">
+          <div className="zeus-panel rounded-[1.8rem] p-5">
+            <div className="flex items-center justify-between gap-3">
+              <div>
+                <p className="zeus-kicker text-[10px] font-semibold uppercase">Host</p>
+                <p className="mt-2 text-2xl font-bold text-slate-900">
+                  {metrics?.system?.hostname || 'Servidor'}
+                </p>
+                <p className="mt-1 text-sm text-slate-500">
+                  Uptime {metrics?.system?.uptime ? `${Math.floor(metrics.system.uptime / 3600)}h` : '—'}
+                </p>
+              </div>
+              <div className="rounded-2xl bg-blue-50 p-3 text-blue-700">
+                <ServerCog className="h-5 w-5" />
+              </div>
+            </div>
           </div>
-          <div className="rounded-2xl border border-slate-800 bg-gradient-to-br from-slate-900 via-slate-950 to-blue-950/40 p-5">
-            <p className="text-xs uppercase tracking-[0.3em] text-slate-400">Containers</p>
-            <p className="mt-3 text-2xl font-semibold text-white">
-              {metrics?.containersRunning ?? '—'}
-            </p>
-            <p className="mt-1 text-xs text-blue-200">Rodando agora</p>
+
+          <div className="zeus-panel rounded-[1.8rem] p-5">
+            <div className="flex items-center justify-between gap-3">
+              <div>
+                <p className="zeus-kicker text-[10px] font-semibold uppercase">Memoria</p>
+                <p className="mt-2 text-2xl font-bold text-slate-900">{formatBytes(memoryTotal)}</p>
+                <p className="mt-1 text-sm text-slate-500">{formatBytes(memoryUsed)} em uso</p>
+              </div>
+              <div className="rounded-2xl bg-sky-50 p-3 text-sky-700">
+                <MemoryStick className="h-5 w-5" />
+              </div>
+            </div>
           </div>
-          <div className="rounded-2xl border border-slate-800 bg-slate-900/60 p-5">
-            <p className="text-xs uppercase tracking-[0.3em] text-slate-400">RAM total</p>
-            <p className="mt-3 text-xl font-semibold text-white">{formatBytes(memoryTotal)}</p>
-            <p className="mt-1 text-xs text-slate-400">{formatBytes(memoryUsed)} usada</p>
+
+          <div className="zeus-panel rounded-[1.8rem] p-5">
+            <div className="flex items-center justify-between gap-3">
+              <div>
+                <p className="zeus-kicker text-[10px] font-semibold uppercase">Disco</p>
+                <p className="mt-2 text-2xl font-bold text-slate-900">{formatBytes(diskTotal)}</p>
+                <p className="mt-1 text-sm text-slate-500">{formatBytes(diskUsed)} utilizado</p>
+              </div>
+              <div className="rounded-2xl bg-indigo-50 p-3 text-indigo-700">
+                <HardDrive className="h-5 w-5" />
+              </div>
+            </div>
           </div>
-          <div className="rounded-2xl border border-slate-800 bg-slate-900/60 p-5">
-            <p className="text-xs uppercase tracking-[0.3em] text-slate-400">Disco total</p>
-            <p className="mt-3 text-xl font-semibold text-white">{formatBytes(diskTotal)}</p>
-            <p className="mt-1 text-xs text-slate-400">{formatBytes(diskUsed)} usado</p>
+
+          <div className="rounded-[1.8rem] border border-blue-300/30 bg-[linear-gradient(135deg,_#16366f,_#2563eb)] p-5 text-white shadow-[0_18px_60px_rgba(37,99,235,0.24)]">
+            <div className="flex items-center justify-between gap-3">
+              <div>
+                <p className="text-[10px] font-semibold uppercase tracking-[0.3em] text-blue-100/80">Fluxo</p>
+                <p className="mt-2 text-2xl font-bold">Telemetria unificada</p>
+                <p className="mt-2 text-sm text-blue-100/80">
+                  Supervisao de recursos, containers e trafego de infraestrutura.
+                </p>
+              </div>
+              <RadioTower className="h-8 w-8 text-cyan-200" />
+            </div>
           </div>
-        </div>
+        </section>
       </div>
     </div>
   )

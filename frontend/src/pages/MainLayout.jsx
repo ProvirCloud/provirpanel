@@ -99,7 +99,7 @@ const MainLayout = () => {
   }
 
   return (
-    <div className="min-h-screen bg-[radial-gradient(circle_at_top,_rgba(56,189,248,0.18),_transparent_55%)]">
+    <div className="zeus-shell px-4 py-4 lg:px-5">
       <Navbar
         onLogout={handleLogout}
         onChangePassword={() => setShowPasswordModal(true)}
@@ -107,22 +107,22 @@ const MainLayout = () => {
         onManageMfa={openMfaModal}
         username={username}
       />
-      <div className="flex">
+      <div className="mt-4 flex gap-4">
         <Sidebar />
-        <main className="flex-1 px-6 py-8">
+        <main className="min-w-0 flex-1 pb-8">
           <Outlet />
         </main>
       </div>
 
       {(showPasswordModal || showCreateModal || showMfaModal) && (
         <div className="fixed inset-0 z-40 flex items-center justify-center bg-black/60 p-4">
-          <div className="w-full max-w-md rounded-2xl border border-slate-800 bg-slate-900/90 p-6 text-slate-100">
+          <div className="zeus-panel w-full max-w-md rounded-[1.8rem] p-6 text-slate-800">
             {showPasswordModal && (
               <>
-                <h3 className="text-lg font-semibold">Alterar senha</h3>
+                <h3 className="text-lg font-semibold text-slate-900">Alterar senha</h3>
                 <form className="mt-4 space-y-3" onSubmit={submitPassword}>
                   <input
-                    className="w-full rounded-xl border border-slate-800 bg-slate-950 px-4 py-2 text-sm"
+                    className="w-full rounded-2xl border border-blue-100 bg-white px-4 py-3 text-sm text-slate-900"
                     type="password"
                     placeholder="Senha atual"
                     value={passwordForm.currentPassword}
@@ -134,7 +134,7 @@ const MainLayout = () => {
                     }
                   />
                   <input
-                    className="w-full rounded-xl border border-slate-800 bg-slate-950 px-4 py-2 text-sm"
+                    className="w-full rounded-2xl border border-blue-100 bg-white px-4 py-3 text-sm text-slate-900"
                     type="password"
                     placeholder="Nova senha"
                     value={passwordForm.newPassword}
@@ -146,12 +146,12 @@ const MainLayout = () => {
                     }
                   />
                   <div className="flex gap-2">
-                    <button className="rounded-xl bg-blue-500 px-4 py-2 text-xs font-semibold text-slate-950">
+                    <button className="rounded-2xl bg-[linear-gradient(135deg,_#16366f,_#3b82f6)] px-4 py-2.5 text-xs font-semibold text-white">
                       Salvar
                     </button>
                     <button
                       type="button"
-                      className="rounded-xl border border-slate-800 bg-slate-950 px-4 py-2 text-xs text-slate-200"
+                      className="rounded-2xl border border-blue-100 bg-white px-4 py-2.5 text-xs text-slate-700"
                       onClick={() => setShowPasswordModal(false)}
                     >
                       Cancelar
@@ -163,10 +163,10 @@ const MainLayout = () => {
 
             {showCreateModal && (
               <>
-                <h3 className="text-lg font-semibold">Criar usuario</h3>
+                <h3 className="text-lg font-semibold text-slate-900">Criar usuario</h3>
                 <form className="mt-4 space-y-3" onSubmit={submitCreateUser}>
                   <input
-                    className="w-full rounded-xl border border-slate-800 bg-slate-950 px-4 py-2 text-sm"
+                    className="w-full rounded-2xl border border-blue-100 bg-white px-4 py-3 text-sm text-slate-900"
                     placeholder="Usuario"
                     value={createForm.username}
                     onChange={(event) =>
@@ -174,7 +174,7 @@ const MainLayout = () => {
                     }
                   />
                   <input
-                    className="w-full rounded-xl border border-slate-800 bg-slate-950 px-4 py-2 text-sm"
+                    className="w-full rounded-2xl border border-blue-100 bg-white px-4 py-3 text-sm text-slate-900"
                     type="password"
                     placeholder="Senha"
                     value={createForm.password}
@@ -183,7 +183,7 @@ const MainLayout = () => {
                     }
                   />
                   <select
-                    className="w-full rounded-xl border border-slate-800 bg-slate-950 px-4 py-2 text-sm"
+                    className="w-full rounded-2xl border border-blue-100 bg-white px-4 py-3 text-sm text-slate-900"
                     value={createForm.role}
                     onChange={(event) =>
                       setCreateForm((prev) => ({ ...prev, role: event.target.value }))
@@ -194,12 +194,12 @@ const MainLayout = () => {
                     <option value="viewer">Viewer</option>
                   </select>
                   <div className="flex gap-2">
-                    <button className="rounded-xl bg-blue-500 px-4 py-2 text-xs font-semibold text-slate-950">
+                    <button className="rounded-2xl bg-[linear-gradient(135deg,_#16366f,_#3b82f6)] px-4 py-2.5 text-xs font-semibold text-white">
                       Criar
                     </button>
                     <button
                       type="button"
-                      className="rounded-xl border border-slate-800 bg-slate-950 px-4 py-2 text-xs text-slate-200"
+                      className="rounded-2xl border border-blue-100 bg-white px-4 py-2.5 text-xs text-slate-700"
                       onClick={() => setShowCreateModal(false)}
                     >
                       Cancelar
@@ -211,22 +211,22 @@ const MainLayout = () => {
 
             {showMfaModal && (
               <>
-                <h3 className="text-lg font-semibold">MFA (Authenticator)</h3>
-                <p className="mt-1 text-xs text-slate-400">
+                <h3 className="text-lg font-semibold text-slate-900">MFA (Authenticator)</h3>
+                <p className="mt-1 text-xs text-slate-500">
                   Conecte seu aplicativo (Google/Microsoft Authenticator) para proteger a conta.
                 </p>
                 {mfaEnabled ? (
                   <div className="mt-4 space-y-3">
                     <p className="text-sm text-emerald-300">MFA ativo</p>
                     <input
-                      className="w-full rounded-xl border border-slate-800 bg-slate-950 px-4 py-2 text-sm"
+                      className="w-full rounded-2xl border border-blue-100 bg-white px-4 py-3 text-sm text-slate-900"
                       placeholder="Codigo MFA"
                       value={mfaCode}
                       onChange={(event) => setMfaCode(event.target.value)}
                     />
                     <div className="flex gap-2">
                       <button
-                        className="rounded-xl bg-rose-500 px-4 py-2 text-xs font-semibold text-white"
+                        className="rounded-2xl bg-rose-500 px-4 py-2.5 text-xs font-semibold text-white"
                         onClick={async () => {
                           setMessage('')
                           try {
@@ -243,7 +243,7 @@ const MainLayout = () => {
                       </button>
                       <button
                         type="button"
-                        className="rounded-xl border border-slate-800 bg-slate-950 px-4 py-2 text-xs text-slate-200"
+                        className="rounded-2xl border border-blue-100 bg-white px-4 py-2.5 text-xs text-slate-700"
                         onClick={() => setShowMfaModal(false)}
                       >
                         Fechar
@@ -254,7 +254,7 @@ const MainLayout = () => {
                   <div className="mt-4 space-y-3">
                     {!mfaSetup && (
                       <button
-                        className="rounded-xl bg-blue-500 px-4 py-2 text-xs font-semibold text-slate-950"
+                        className="rounded-2xl bg-[linear-gradient(135deg,_#16366f,_#3b82f6)] px-4 py-2.5 text-xs font-semibold text-white"
                         onClick={async () => {
                           setMessage('')
                           try {
@@ -273,18 +273,18 @@ const MainLayout = () => {
                         {mfaSetup.qr && (
                           <img src={mfaSetup.qr} alt="QR Code MFA" className="mx-auto h-40 w-40 rounded-xl bg-white p-2" />
                         )}
-                        <div className="rounded-xl border border-slate-800 bg-slate-950 px-3 py-2 text-xs text-slate-200">
+                        <div className="rounded-2xl border border-blue-100 bg-white px-3 py-3 text-xs text-slate-700">
                           Codigo manual: <span className="font-mono text-emerald-300">{mfaSetup.secret}</span>
                         </div>
                         <input
-                          className="w-full rounded-xl border border-slate-800 bg-slate-950 px-4 py-2 text-sm"
+                          className="w-full rounded-2xl border border-blue-100 bg-white px-4 py-3 text-sm text-slate-900"
                           placeholder="Codigo MFA"
                           value={mfaCode}
                           onChange={(event) => setMfaCode(event.target.value)}
                         />
                         <div className="flex gap-2">
                           <button
-                            className="rounded-xl bg-emerald-500 px-4 py-2 text-xs font-semibold text-slate-950"
+                            className="rounded-2xl bg-emerald-500 px-4 py-2.5 text-xs font-semibold text-slate-950"
                             onClick={async () => {
                               setMessage('')
                               try {
@@ -302,7 +302,7 @@ const MainLayout = () => {
                           </button>
                           <button
                             type="button"
-                            className="rounded-xl border border-slate-800 bg-slate-950 px-4 py-2 text-xs text-slate-200"
+                            className="rounded-2xl border border-blue-100 bg-white px-4 py-2.5 text-xs text-slate-700"
                             onClick={() => setShowMfaModal(false)}
                           >
                             Cancelar
@@ -312,7 +312,7 @@ const MainLayout = () => {
                     )}
                   </div>
                 )}
-                {message && <p className="mt-3 text-xs text-slate-300">{message}</p>}
+                {message && <p className="mt-3 text-xs text-slate-600">{message}</p>}
               </>
             )}
           </div>
@@ -320,7 +320,7 @@ const MainLayout = () => {
       )}
 
       {message && (
-        <div className="fixed right-6 top-24 rounded-xl border border-blue-500/40 bg-blue-500/10 px-4 py-3 text-xs text-blue-200">
+        <div className="zeus-panel fixed right-6 top-24 rounded-2xl px-4 py-3 text-xs text-slate-700">
           {message}
         </div>
       )}

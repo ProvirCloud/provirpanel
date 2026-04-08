@@ -7,15 +7,78 @@
 @layer base {
   :root {
     color-scheme: light;
+    --zeus-navy: #16366f;
+    --zeus-navy-deep: #0c1d42;
+    --zeus-blue: #3b82f6;
+    --zeus-cyan: #7dd3fc;
+    --zeus-ice: #eef5ff;
+    --zeus-border: rgba(37, 99, 235, 0.16);
+    --zeus-shadow: 0 24px 80px rgba(12, 29, 66, 0.16);
   }
 
   body {
-    @apply bg-slate-950 text-slate-100 antialiased;
+    @apply text-slate-900 antialiased;
+    background:
+      radial-gradient(circle at top, rgba(125, 211, 252, 0.24), transparent 28%),
+      radial-gradient(circle at 18% 18%, rgba(59, 130, 246, 0.12), transparent 16%),
+      linear-gradient(180deg, #f8fbff 0%, #edf4ff 36%, #e6eefc 100%);
     font-family: 'Space Grotesk', system-ui, sans-serif;
+    min-height: 100vh;
+  }
+
+  body::before {
+    content: '';
+    position: fixed;
+    inset: 0;
+    pointer-events: none;
+    opacity: 0.2;
+    background-image:
+      linear-gradient(rgba(22, 54, 111, 0.06) 1px, transparent 1px),
+      linear-gradient(90deg, rgba(22, 54, 111, 0.06) 1px, transparent 1px);
+    background-size: 64px 64px;
+    mask-image: radial-gradient(circle at center, black, transparent 78%);
+  }
+
+  #root {
+    min-height: 100vh;
   }
 }
 
 .mono {
   font-family: 'JetBrains Mono', ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, 'Liberation Mono',
     'Courier New', monospace;
+}
+
+@layer components {
+  .zeus-shell {
+    @apply min-h-screen;
+    background:
+      radial-gradient(circle at top right, rgba(125, 211, 252, 0.18), transparent 22%),
+      radial-gradient(circle at bottom left, rgba(59, 130, 246, 0.12), transparent 24%);
+  }
+
+  .zeus-panel {
+    background: rgba(255, 255, 255, 0.72);
+    border: 1px solid var(--zeus-border);
+    box-shadow: var(--zeus-shadow);
+    backdrop-filter: blur(16px);
+  }
+
+  .zeus-panel-dark {
+    background:
+      linear-gradient(180deg, rgba(14, 31, 67, 0.96) 0%, rgba(9, 22, 48, 0.96) 100%);
+    border: 1px solid rgba(125, 211, 252, 0.14);
+    box-shadow: 0 24px 80px rgba(8, 15, 35, 0.42);
+    color: #e6eefc;
+  }
+
+  .zeus-title {
+    color: var(--zeus-navy);
+    letter-spacing: 0.04em;
+  }
+
+  .zeus-kicker {
+    color: rgba(22, 54, 111, 0.7);
+    letter-spacing: 0.28em;
+  }
 }

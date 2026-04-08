@@ -58,7 +58,7 @@ const App = () => {
   const ProtectedRoute = ({ children }) => {
     if (authState.loading) {
       return (
-        <div className="flex min-h-screen items-center justify-center bg-slate-950 text-slate-200">
+        <div className="zeus-shell flex min-h-screen items-center justify-center text-slate-700">
           Validando sessao...
         </div>
       )
@@ -72,7 +72,7 @@ const App = () => {
   const PublicRoute = ({ children }) => {
     if (authState.loading) {
       return (
-        <div className="flex min-h-screen items-center justify-center bg-slate-950 text-slate-200">
+        <div className="zeus-shell flex min-h-screen items-center justify-center text-slate-700">
           Validando sessao...
         </div>
       )
