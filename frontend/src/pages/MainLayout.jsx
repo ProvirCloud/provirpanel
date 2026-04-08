@@ -109,7 +109,7 @@ const MainLayout = () => {
       />
       <div className="mt-4 flex gap-4">
         <Sidebar />
-        <main className="min-w-0 flex-1 pb-8">
+        <main className="zeus-content min-w-0 flex-1 pb-8">
           <Outlet />
         </main>
       </div>
