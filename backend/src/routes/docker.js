@@ -1272,10 +1272,6 @@ router.post('/images/build', upload.single('contextArchive'), async (req, res, n
   }
 });
 
-router.get('/services', async (req, res, next) => {
-  await sendServicesResponse(res, next);
-});
-
 router.post('/containers/run', async (req, res, next) => {
   try {
     const { imageName, config } = req.body || {};

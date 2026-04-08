@@ -338,10 +338,15 @@ const DockerPanel = () => {
   const loadServices = async () => {
     try {
       const response = await api.get('/docker/services')
-      console.log('Services loaded:', response.data.services) // Debug
-      setServices(response.data.services || [])
+      const loadedServices = Array.isArray(response.data?.services)
+        ? response.data.services
+        : Array.isArray(response.data)
+          ? response.data
+          : Array.isArray(response.data?.data)
+            ? response.data.data
+            : []
+      setServices(loadedServices)
     } catch (err) {
-      console.error('Error loading services:', err) // Debug
       addToast('Erro ao carregar servicos', 'error')
     }
   }
