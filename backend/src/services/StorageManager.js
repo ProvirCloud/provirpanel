@@ -3,7 +3,12 @@
 const fs = require('fs');
 const fsp = fs.promises;
 const path = require('path');
-const { execSync } = require('child_process');
+const { execFile, execSync } = require('child_process');
+const { promisify } = require('util');
+
+const execFileAsync = promisify(execFile);
+
+const ARCHIVE_SUFFIXES = ['.tar.gz', '.tgz', '.tar', '.zip'];
 
 class StorageManager {
   constructor(options = {}) {
@@ -124,6 +129,80 @@ class StorageManager {
     await fsp.mkdir(path.dirname(destination), { recursive: true });
     await fsp.rename(source, destination);
     return true;
+  }
+
+  isSupportedArchive(targetPath) {
+    const lowerPath = String(targetPath || '').toLowerCase();
+    return ARCHIVE_SUFFIXES.some((suffix) => lowerPath.endsWith(suffix));
+  }
+
+  stripArchiveExtension(filename) {
+    const lowerName = String(filename || '').toLowerCase();
+    const matched = ARCHIVE_SUFFIXES.find((suffix) => lowerName.endsWith(suffix));
+    if (!matched) {
+      return filename;
+    }
+    return filename.slice(0, filename.length - matched.length);
+  }
+
+  async ensureUniquePath(targetPath) {
+    const resolved = this.safeResolve(targetPath);
+    const dir = path.dirname(resolved);
+    const ext = path.extname(resolved);
+    const base = path.basename(resolved, ext);
+    let counter = 1;
+    let candidate = resolved;
+
+    while (true) {
+      try {
+        await fsp.access(candidate);
+        const suffix = `-${counter}`;
+        candidate = path.join(dir, `${base}${suffix}${ext}`);
+        counter += 1;
+      } catch (err) {
+        if (err.code === 'ENOENT') {
+          return path.join('/', path.relative(this.basePath, candidate));
+        }
+        throw err;
+      }
+    }
+  }
+
+  async extractArchive(archivePath, destinationPath) {
+    const source = this.safeResolve(archivePath);
+    const stats = await fsp.stat(source);
+    if (stats.isDirectory()) {
+      throw new Error('Archive path must be a file');
+    }
+    if (!this.isSupportedArchive(archivePath)) {
+      throw new Error('Unsupported archive format');
+    }
+
+    const archiveDir = path.posix.dirname(archivePath || '/') || '/';
+    const archiveName = path.posix.basename(archivePath);
+    const suggestedPath = destinationPath || path.posix.join(archiveDir, this.stripArchiveExtension(archiveName));
+    const targetPath = await this.ensureUniquePath(suggestedPath);
+    const destination = this.safeResolve(targetPath);
+
+    await fsp.mkdir(destination, { recursive: true });
+
+    try {
+      if (archivePath.toLowerCase().endsWith('.zip')) {
+        await execFileAsync('unzip', ['-o', source, '-d', destination]);
+      } else {
+        await execFileAsync('tar', ['-xf', source, '-C', destination]);
+      }
+    } catch (err) {
+      if (err.code === 'ENOENT') {
+        throw new Error('Extractor command not available');
+      }
+      throw err;
+    }
+
+    return {
+      path: targetPath,
+      name: path.posix.basename(targetPath)
+    };
   }
 
   getStorageStats() {

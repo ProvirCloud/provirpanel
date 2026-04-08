@@ -15,12 +15,19 @@ import Editor from '@monaco-editor/react'
 import api from '../services/api.js'
 import { createMetricsSocket } from '../services/socket.js'
 
+const ARCHIVE_SUFFIXES = ['.tar.gz', '.tgz', '.tar', '.zip']
+
+const isArchiveName = (name) => {
+  const lowerName = String(name || '').toLowerCase()
+  return ARCHIVE_SUFFIXES.some((suffix) => lowerName.endsWith(suffix))
+}
+
 const iconFor = (name, isDir) => {
   if (isDir) return Folder
   const ext = name.split('.').pop().toLowerCase()
   if (['png', 'jpg', 'jpeg', 'gif', 'webp', 'svg'].includes(ext)) return Image
   if (['js', 'jsx', 'ts', 'tsx', 'json', 'yml', 'yaml', 'md'].includes(ext)) return FileCode
-  if (['zip', 'tar', 'gz'].includes(ext)) return FileArchive
+  if (isArchiveName(name) || ext === 'gz') return FileArchive
   return FileText
 }
 
@@ -45,6 +52,7 @@ const FileManager = () => {
   const [showMove, setShowMove] = useState(false)
   const [moveTarget, setMoveTarget] = useState('/')
   const [dragItem, setDragItem] = useState(null)
+  const [extractingPath, setExtractingPath] = useState('')
   const uploadRef = useRef(null)
   const socket = useMemo(() => createMetricsSocket(), [])
 
@@ -341,6 +349,22 @@ const FileManager = () => {
     window.open(`${api.defaults.baseURL}/storage/download?path=${encodeURIComponent(selected.path)}`)
   }
 
+  const handleExtract = async (item = selected) => {
+    if (!item || item.isDir || !isArchiveName(item.name)) return
+    setExtractingPath(item.path)
+    try {
+      const response = await api.post('/storage/extract', { path: item.path })
+      setToast(`Descompactado em ${response.data?.extracted?.path || path}`)
+      setMenuItem(null)
+      loadItems(path)
+      loadTree()
+    } catch (err) {
+      setToast(err.response?.data?.message || 'Erro ao descompactar')
+    } finally {
+      setExtractingPath('')
+    }
+  }
+
   const handleRename = async () => {
     if (!menuItem || !renameValue.trim()) return
     const basePath = menuItem.path.split('/').slice(0, -1).join('/') || '/'
@@ -418,6 +442,14 @@ const FileManager = () => {
           >
             <Download className="h-4 w-4" />
             Download
+          </button>
+          <button
+            className="flex items-center gap-2 rounded-xl border border-slate-800 bg-slate-900/60 px-3 py-2 text-xs text-slate-200 transition hover:border-blue-500/60 disabled:cursor-not-allowed disabled:opacity-50"
+            onClick={() => handleExtract(selected)}
+            disabled={!selected || selected?.isDir || !isArchiveName(selected?.name) || extractingPath === selected?.path}
+          >
+            <FileArchive className="h-4 w-4" />
+            {extractingPath === selected?.path ? 'Descompactando...' : 'Descompactar'}
           </button>
         </div>
       </div>
@@ -624,6 +656,15 @@ const FileManager = () => {
               >
                 Mover
               </button>
+              {!menuItem.isDir && isArchiveName(menuItem.name) && (
+                <button
+                  className="w-full rounded-lg border border-slate-800 bg-slate-950 px-3 py-2 text-left"
+                  onClick={() => handleExtract(menuItem)}
+                  disabled={extractingPath === menuItem.path}
+                >
+                  {extractingPath === menuItem.path ? 'Descompactando...' : 'Descompactar'}
+                </button>
+              )}
               <button
                 className="w-full rounded-lg border border-slate-800 bg-slate-950 px-3 py-2 text-left"
                 onClick={() => {

@@ -228,6 +228,22 @@ router.post('/create', async (req, res, next) => {
   }
 });
 
+router.post('/extract', async (req, res, next) => {
+  try {
+    const { path: archivePath, destinationPath } = req.body || {};
+    if (!archivePath) {
+      return res.status(400).json({ message: 'path is required' });
+    }
+    const extracted = await storageManager.extractArchive(archivePath, destinationPath);
+    return res.json({ status: 'extracted', extracted });
+  } catch (err) {
+    if (err.message === 'Unsupported archive format') {
+      return res.status(400).json({ message: err.message });
+    }
+    return next(err);
+  }
+});
+
 router.delete('/', async (req, res, next) => {
   try {
     await storageManager.deleteFile(req.query.path);
