@@ -23,7 +23,7 @@ const sections = [
     items: [
       { to: '/',        label: 'Dashboard',    icon: Activity, end: true },
       { to: '/stacks',  label: 'Infra Canvas', icon: Layers },
-      { to: '/docker',  label: 'Docker',        icon: Boxes },
+      { to: '/docker',  label: 'Container Service', icon: Boxes },
       { to: '/terminal',label: 'Terminal',      icon: Terminal },
       { to: '/files',   label: 'Arquivos',      icon: Files },
       { to: '/logs',    label: 'Logs',          icon: FileText },

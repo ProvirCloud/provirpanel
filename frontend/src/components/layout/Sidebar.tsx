@@ -16,7 +16,7 @@ const sections = [
   {
     label: 'Infra Canvas',
     items: [
-      { to: '/docker', label: 'Docker', icon: Boxes },
+      { to: '/docker', label: 'Container Service', icon: Boxes },
       { to: '/terminal', label: 'Terminal', icon: Terminal },
       { to: '/files', label: 'Arquivos', icon: Files },
       { to: '/logs', label: 'Logs', icon: FileText },

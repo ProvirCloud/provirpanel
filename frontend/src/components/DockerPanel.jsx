@@ -1,5 +1,9 @@
 import { useEffect, useMemo, useState } from 'react'
 import {
+  Activity,
+  AlertTriangle,
+  AppWindow,
+  Boxes,
   Play,
   Square,
   RefreshCw,
@@ -283,8 +287,130 @@ const TEMPLATE_APP_META = {
 
 const getTemplateMeta = (templateId) => TEMPLATE_APP_META[templateId] || TEMPLATE_APP_META.default
 
+const METRIC_TONES = {
+  brand: 'border-blue-500/30 bg-blue-500/10 text-blue-100',
+  success: 'border-emerald-500/30 bg-emerald-500/10 text-emerald-100',
+  warning: 'border-amber-500/30 bg-amber-500/10 text-amber-100',
+  danger: 'border-rose-500/30 bg-rose-500/10 text-rose-100'
+}
+
+const getContainerName = (container) => container?.Names?.[0]?.replace('/', '') || container?.Id?.slice(0, 12) || 'container'
+
+const getContainerStatusMeta = (rawState) => {
+  const state = String(rawState || 'unknown').toLowerCase()
+
+  if (state === 'running') {
+    return {
+      key: 'running',
+      label: 'Running',
+      className: 'border-emerald-500/30 bg-emerald-500/10 text-emerald-200'
+    }
+  }
+
+  if (['restarting', 'created', 'paused'].includes(state)) {
+    return {
+      key: 'starting',
+      label: 'Starting',
+      className: 'border-amber-500/30 bg-amber-500/10 text-amber-200'
+    }
+  }
+
+  if (['dead', 'removing'].includes(state)) {
+    return {
+      key: 'error',
+      label: 'Error',
+      className: 'border-rose-500/30 bg-rose-500/10 text-rose-200'
+    }
+  }
+
+  if (state === 'exited') {
+    return {
+      key: 'stopped',
+      label: 'Stopped',
+      className: 'border-rose-500/30 bg-rose-500/10 text-rose-200'
+    }
+  }
+
+  return {
+    key: 'unknown',
+    label: state || 'Unknown',
+    className: 'border-slate-700 bg-slate-900/80 text-slate-300'
+  }
+}
+
+const DockerMetricCard = ({ icon: Icon, label, value, hint, tone = 'brand' }) => (
+  <div className={`rounded-2xl border p-4 ${METRIC_TONES[tone] || METRIC_TONES.brand}`}>
+    <div className="flex items-start justify-between gap-3">
+      <div>
+        <p className="text-[10px] uppercase tracking-[0.26em] opacity-80">{label}</p>
+        <p className="mt-2 text-2xl font-semibold text-white">{value}</p>
+        <p className="mt-1 text-xs opacity-80">{hint}</p>
+      </div>
+      <span className="rounded-xl border border-white/10 bg-slate-950/40 p-2 text-white">
+        <Icon className="h-4 w-4" />
+      </span>
+    </div>
+  </div>
+)
+
+const DockerViewTab = ({ active, icon: Icon, label, onClick }) => (
+  <button
+    onClick={onClick}
+    className={`flex items-center gap-2 rounded-full border px-4 py-2 text-xs font-medium transition ${
+      active
+        ? 'border-blue-500/60 bg-blue-500/10 text-blue-200'
+        : 'border-slate-800 bg-slate-900/60 text-slate-300 hover:border-blue-500/40 hover:text-white'
+    }`}
+  >
+    <Icon className="h-4 w-4" />
+    {label}
+  </button>
+)
+
+const DockerStatusBadge = ({ state }) => {
+  const meta = getContainerStatusMeta(state)
+  return <span className={`rounded-full border px-2.5 py-1 text-[11px] font-medium ${meta.className}`}>{meta.label}</span>
+}
+
+const DockerCatalogCard = ({ tpl, installedCount, onInstall }) => {
+  const appMeta = getTemplateMeta(tpl.id)
+  const Icon = appMeta.icon || Layers
+
+  return (
+    <div className={`group rounded-2xl border bg-gradient-to-br p-4 transition duration-300 hover:-translate-y-0.5 hover:shadow-xl hover:shadow-slate-950/40 ${appMeta.border} ${appMeta.accent}`}>
+      <div className="flex items-start justify-between gap-3">
+        <span className="rounded-xl border border-white/10 bg-slate-950/70 p-2 text-slate-100">
+          <Icon className="h-4 w-4" />
+        </span>
+        <span className="rounded-full border border-slate-700 bg-slate-950/70 px-2.5 py-1 text-[10px] text-slate-300">
+          {installedCount} instância(s)
+        </span>
+      </div>
+
+      <div className="mt-4 space-y-2">
+        <div>
+          <p className="text-base font-semibold text-white">{tpl.label}</p>
+          <p className="mt-1 text-sm leading-5 text-slate-300">{tpl.description}</p>
+        </div>
+
+        <div className="flex flex-wrap gap-2 text-[11px] text-slate-300">
+          <span className="rounded-full border border-slate-700 bg-slate-950/70 px-2.5 py-1">{tpl.image}:{tpl.tag}</span>
+          <span className="rounded-full border border-slate-700 bg-slate-950/70 px-2.5 py-1">{tpl.defaultPort} → {tpl.containerPort}</span>
+        </div>
+      </div>
+
+      <button
+        className="mt-4 w-full rounded-xl bg-blue-500 px-3 py-2 text-xs font-semibold text-slate-950 transition hover:bg-blue-400"
+        onClick={onInstall}
+      >
+        Install
+      </button>
+    </div>
+  )
+}
+
 const DockerPanel = () => {
-  const [activeTab, setActiveTab] = useState('services')
+  const [activeTab, setActiveTab] = useState('dashboard')
   const [containers, setContainers] = useState([])
   const [images, setImages] = useState([])
   const [stats, setStats] = useState({})
@@ -320,6 +446,7 @@ const DockerPanel = () => {
   const [pullWorking, setPullWorking] = useState(false)
   const [buildWorking, setBuildWorking] = useState(false)
   const [appSearch, setAppSearch] = useState('')
+  const [opsSearch, setOpsSearch] = useState('')
   const [appCategory, setAppCategory] = useState('all')
   const socket = useMemo(() => createDockerLogsSocket(), [])
   const progressSocket = useMemo(() => createDockerProgressSocket(), [])
@@ -404,10 +531,49 @@ const DockerPanel = () => {
   }, [templates])
 
   const totalInstalledInstances = services.length
-  const totalRunningInstances = useMemo(
-    () => groupedInstalledApps.reduce((sum, group) => sum + group.running, 0),
-    [groupedInstalledApps]
-  )
+  const containerLookup = useMemo(() => {
+    const map = new Map()
+    containers.forEach((container) => {
+      map.set(container.Id, container)
+      map.set(getContainerName(container), container)
+    })
+    return map
+  }, [containers])
+
+  const operationalInstances = useMemo(() => {
+    return services
+      .map((service) => {
+        const container = containerLookup.get(service.containerId) || containerLookup.get(service.name)
+        const runtimeState = container?.State || 'exited'
+        return {
+          ...service,
+          containerName: getContainerName(container) || service.name,
+          runtimeState,
+          stateMeta: getContainerStatusMeta(runtimeState)
+        }
+      })
+      .sort((a, b) => {
+        const priority = { running: 0, starting: 1, stopped: 2, error: 3, unknown: 4 }
+        return (priority[a.stateMeta.key] ?? 5) - (priority[b.stateMeta.key] ?? 5)
+      })
+  }, [services, containerLookup])
+
+  const filteredOperationalInstances = useMemo(() => {
+    const searchTerm = opsSearch.trim().toLowerCase()
+    if (!searchTerm) return operationalInstances
+
+    return operationalInstances.filter((service) => {
+      return [service.name, service.image, service.networkName, service.hostPort]
+        .filter(Boolean)
+        .some((value) => String(value).toLowerCase().includes(searchTerm))
+    })
+  }, [operationalInstances, opsSearch])
+
+  const totalRunningInstances = operationalInstances.filter((item) => item.stateMeta.key === 'running').length
+  const totalStoppedInstances = operationalInstances.filter((item) => item.stateMeta.key === 'stopped').length
+  const totalErrorInstances = operationalInstances.filter((item) => item.stateMeta.key === 'error').length
+  const totalStartingInstances = operationalInstances.filter((item) => item.stateMeta.key === 'starting').length
+  const quickInstallTemplate = templates.find((template) => template.id === 'nginx-static') || templates[0] || null
 
   const validateServiceName = (name) => {
     if (!name || typeof name !== 'string') {
@@ -843,6 +1009,27 @@ const DockerPanel = () => {
     }
   }
 
+  const openEditServiceDialog = (svc) => {
+    setProjectUploadStatus(null)
+    setEnvImportStatus(null)
+    setEditDialog({
+      ...svc,
+      newEnvVars: (svc.envVars || []).map((env) => ({
+        ...env,
+        value: env.secret ? '******' : env.value
+      })),
+      newBindLocalOnly: svc.bindLocalOnly ?? false,
+      commandInput: formatCommandForInput(svc.command),
+      newProjectArchive: null,
+      nodeServiceMode: svc.nodeServiceMode || NODE_SERVICE_MODES.service,
+      nodeSiteConfig: {
+        siteType: svc.nodeSiteConfig?.siteType || NODE_SITE_TYPES.common,
+        siteFolder: svc.nodeSiteConfig?.siteFolder || NODE_SITE_FOLDERS[0],
+        fallbackFile: svc.nodeSiteConfig?.fallbackFile || 'index.html'
+      }
+    })
+  }
+
   const createService = async (template, form) => {
     // Validate service name before sending to backend
     const nameError = validateServiceName(form.name);
@@ -927,9 +1114,6 @@ const DockerPanel = () => {
     const isNodeTemplate = tpl?.id === 'node-app'
     const isNodeSitesMode =
       isNodeTemplate && serviceForm.nodeServiceMode === NODE_SERVICE_MODES.sites
-
-    console.log('ServiceForm:', serviceForm) // Debug
-    console.log('Template:', tpl) // Debug
 
     return (
       <div className="wizard-container rounded-2xl border border-blue-500/30 bg-blue-500/10 p-5">
@@ -1604,391 +1788,279 @@ const DockerPanel = () => {
 
   return (
     <div className="space-y-6">
-      <div className="flex flex-wrap items-center justify-between gap-4">
-        <div>
-          <p className="zeus-heading-kicker">Docker</p>
-          <h2 className="zeus-heading-title">Gerenciamento de containers</h2>
+      <div className="rounded-[28px] border border-slate-800 bg-[radial-gradient(circle_at_top_left,_rgba(59,130,246,0.22),_rgba(15,23,42,0.92)_58%)] p-5 sm:p-6">
+        <div className="flex flex-wrap items-start justify-between gap-4">
+          <div className="max-w-2xl">
+            <p className="text-[11px] uppercase tracking-[0.34em] text-blue-200/80">Container Service</p>
+            <h2 className="mt-2 text-3xl font-semibold text-white sm:text-4xl">Cloud Runtime Control</h2>
+            <p className="mt-2 text-sm leading-6 text-slate-300">
+              Catálogo, deploy e lifecycle management com a simplicidade de SaaS moderna e clareza de operação.
+            </p>
+          </div>
+          <div className="flex flex-wrap items-center gap-2">
+            <button
+              className="rounded-xl border border-slate-700 bg-slate-950/70 px-4 py-2 text-sm text-slate-200 transition hover:border-blue-500/40 hover:text-white"
+              onClick={async () => {
+                await Promise.all([loadContainers(), loadServices(), loadImages(), loadNetworks()])
+              }}
+            >
+              Sync status
+            </button>
+            <button
+              className="flex items-center gap-2 rounded-xl bg-blue-500 px-4 py-2 text-sm font-semibold text-slate-950 transition hover:bg-blue-400"
+              onClick={() => quickInstallTemplate && setWizard(quickInstallTemplate)}
+            >
+              <Plus className="h-4 w-4" />
+              New Instance
+            </button>
+          </div>
         </div>
-        {activeTab === 'containers' && (
-          <button
-            className="flex items-center gap-2 rounded-xl bg-blue-500 px-4 py-2 text-sm font-semibold text-slate-950 transition hover:bg-blue-400"
-            onClick={() => setWizard({ id: 'nginx-static' })}
-          >
-            <Plus className="h-4 w-4" />
-            New Container
-          </button>
-        )}
+
+        <div className="mt-5 grid gap-3 md:grid-cols-2 xl:grid-cols-4">
+          <DockerMetricCard icon={AppWindow} label="Apps disponíveis" value={templates.length} hint="Catálogo pronto para deploy" tone="brand" />
+          <DockerMetricCard icon={Activity} label="Running" value={totalRunningInstances} hint={`${totalStartingInstances} iniciando`} tone="success" />
+          <DockerMetricCard icon={Boxes} label="Stopped" value={totalStoppedInstances} hint="Instâncias pausadas ou offline" tone="warning" />
+          <DockerMetricCard icon={AlertTriangle} label="Errors" value={totalErrorInstances} hint="Containers com falha ou remoção" tone="danger" />
+        </div>
       </div>
 
-      <div className="flex gap-2">
+      <div className="flex flex-wrap gap-2">
         {[
-          { id: 'services', label: 'Serviços', icon: TerminalSquare },
+          { id: 'dashboard', label: 'Dashboard', icon: Activity },
+          { id: 'apps', label: 'Apps', icon: AppWindow },
           { id: 'containers', label: 'Containers', icon: TerminalSquare },
-          { id: 'images', label: 'Imagens', icon: Layers }
+          { id: 'images', label: 'Images', icon: Layers }
         ].map((tab) => (
-          <button
+          <DockerViewTab
             key={tab.id}
+            active={activeTab === tab.id}
+            icon={tab.icon}
+            label={tab.label}
             onClick={() => setActiveTab(tab.id)}
-            className={`flex items-center gap-2 rounded-full border px-4 py-2 text-xs transition ${
-              activeTab === tab.id
-                ? 'border-blue-500/60 bg-blue-500/10 text-blue-200'
-                : 'border-slate-800 bg-slate-900/60 text-slate-300 hover:border-blue-500/40'
-            }`}
-          >
-            <tab.icon className="h-4 w-4" />
-            {tab.label}
-          </button>
+          />
         ))}
       </div>
 
-      {activeTab === 'services' && (
-        <div className="grid gap-4">
-          <div className="zeus-tech-surface rounded-2xl border border-slate-800 bg-[radial-gradient(circle_at_top_left,_rgba(59,130,246,0.18),_rgba(15,23,42,0.9)_55%)] p-5">
-            <div className="flex flex-wrap items-start justify-between gap-4">
+      {activeTab === 'dashboard' && (
+        <div className="grid gap-4 xl:grid-cols-[1.15fr_0.85fr]">
+          <div className="rounded-2xl border border-slate-800 bg-slate-900/60 p-4">
+            <div className="mb-4 flex items-center justify-between gap-3">
               <div>
-                <p className="text-[11px] uppercase tracking-[0.34em] text-blue-200/80">Apps Docker</p>
-                <h3 className="mt-2 text-2xl font-semibold text-white">Catálogo e Instâncias</h3>
-                <p className="mt-1 text-sm text-slate-300">
-                  Organize por tipo de app, instale novas stacks e gerencie serviços existentes.
-                </p>
+                <p className="text-xs uppercase tracking-[0.3em] text-slate-400">Apps Catalog</p>
+                <h3 className="mt-1 text-xl font-semibold text-white">Quick install</h3>
               </div>
-              <div className="grid grid-cols-3 gap-2 min-w-[280px]">
-                <div className="rounded-xl border border-white/10 bg-slate-950/40 px-3 py-2">
-                  <p className="text-[10px] uppercase tracking-[0.25em] text-slate-400">Catálogo</p>
-                  <p className="mt-1 text-xl font-semibold text-white">{templates.length}</p>
-                </div>
-                <div className="rounded-xl border border-white/10 bg-slate-950/40 px-3 py-2">
-                  <p className="text-[10px] uppercase tracking-[0.25em] text-slate-400">Instâncias</p>
-                  <p className="mt-1 text-xl font-semibold text-white">{totalInstalledInstances}</p>
-                </div>
-                <div className="rounded-xl border border-emerald-500/30 bg-emerald-500/10 px-3 py-2">
-                  <p className="text-[10px] uppercase tracking-[0.25em] text-emerald-200">Online</p>
-                  <p className="mt-1 text-xl font-semibold text-emerald-200">{totalRunningInstances}</p>
-                </div>
-              </div>
+              <span className="rounded-full border border-slate-700 bg-slate-950/70 px-2.5 py-1 text-[11px] text-slate-300">
+                {templates.length} app(s)
+              </span>
             </div>
-
-            <div className="mt-4 min-w-[220px]">
-              <input
-                className="w-full rounded-xl border border-slate-700 bg-slate-950/70 px-3 py-2.5 text-sm text-white placeholder:text-slate-500"
-                placeholder="Buscar app, imagem ou descrição"
-                value={appSearch}
-                onChange={(event) => setAppSearch(event.target.value)}
-              />
-            </div>
-          </div>
-
-          <div className="flex flex-wrap gap-2">
-            {appCategories.map((categoryId) => (
-              <button
-                key={categoryId}
-                onClick={() => setAppCategory(categoryId)}
-                className={`rounded-full border px-3 py-1.5 text-xs transition ${
-                  appCategory === categoryId
-                    ? 'border-blue-500/70 bg-blue-500/20 text-blue-100 shadow-[0_0_0_1px_rgba(59,130,246,0.2)]'
-                    : 'border-slate-700 bg-slate-900/70 text-slate-300 hover:border-blue-500/40 hover:text-white'
-                }`}
-              >
-                {APP_CATEGORY_LABELS[categoryId] || categoryId} ({appCategoryCounts[categoryId] || 0})
-              </button>
-            ))}
-          </div>
-
-          <div className="zeus-tech-surface rounded-2xl border border-slate-800 bg-slate-900/60 p-4">
-            <div className="mb-3 flex items-center justify-between">
-              <p className="text-xs uppercase tracking-[0.3em] text-slate-400">Catálogo de Apps</p>
-              <p className="text-xs text-slate-400">{filteredTemplates.length} app(s)</p>
-            </div>
-            <div className="grid gap-4 lg:grid-cols-3 md:grid-cols-2">
-              {filteredTemplates.map((tpl) => {
-                const appMeta = getTemplateMeta(tpl.id)
-                const Icon = appMeta.icon || Layers
-                const installedCount = services.filter((service) => service.templateId === tpl.id).length
-                return (
-                  <div
-                    key={tpl.id}
-                    className={`group rounded-2xl border bg-gradient-to-br p-4 transition duration-300 hover:-translate-y-0.5 hover:shadow-xl hover:shadow-slate-950/50 ${appMeta.border} ${appMeta.accent}`}
-                  >
-                    <div className="flex items-start justify-between gap-2">
-                      <div className="flex items-center gap-3">
-                        <span className="rounded-xl border border-white/10 bg-slate-950/70 p-2 text-slate-100">
-                          <Icon className="h-4 w-4" />
-                        </span>
-                        <div>
-                          <p className="text-base font-semibold text-white">{tpl.label}</p>
-                          <p className="text-xs leading-5 text-slate-300">{tpl.description}</p>
-                        </div>
-                      </div>
-                      <span className="rounded-full border border-slate-700 bg-slate-950/80 px-2.5 py-1 text-[10px] text-slate-300">
-                        {APP_CATEGORY_LABELS[appMeta.category] || appMeta.category}
-                      </span>
-                    </div>
-
-                    <div className="mt-3 grid grid-cols-3 gap-2 text-[11px] text-slate-300">
-                      <div className="rounded-lg border border-slate-700/70 bg-slate-950/60 p-2">
-                        <p className="text-[10px] uppercase tracking-[0.2em] text-slate-500">Imagem</p>
-                        <p className="mt-1 truncate font-medium text-slate-200">{tpl.image}:{tpl.tag}</p>
-                      </div>
-                      <div className="rounded-lg border border-slate-700/70 bg-slate-950/60 p-2">
-                        <p className="text-[10px] uppercase tracking-[0.2em] text-slate-500">Porta</p>
-                        <p className="mt-1 font-medium text-slate-200">{tpl.defaultPort} → {tpl.containerPort}</p>
-                      </div>
-                      <div className="rounded-lg border border-slate-700/70 bg-slate-950/60 p-2">
-                        <p className="text-[10px] uppercase tracking-[0.2em] text-slate-500">Instalados</p>
-                        <p className="mt-1 font-medium text-slate-200">{installedCount}</p>
-                      </div>
-                    </div>
-
-                    <div className="mt-4 flex gap-2">
-                      <button
-                        className="flex-1 rounded-xl bg-blue-500 px-3 py-2 text-xs font-semibold text-slate-950 transition hover:bg-blue-400"
-                        onClick={() => setWizard(tpl)}
-                      >
-                        Instalar App
-                      </button>
-                      <button
-                        className="rounded-xl border border-slate-700 bg-slate-950/80 px-3 py-2 text-xs text-slate-200 hover:border-blue-500/40"
-                        onClick={() => pullImage(tpl.image)}
-                      >
-                        Baixar imagem
-                      </button>
-                    </div>
-                  </div>
-                )
-              })}
+            <div className="grid gap-3 md:grid-cols-2">
+              {filteredTemplates.slice(0, 4).map((tpl) => (
+                <DockerCatalogCard
+                  key={tpl.id}
+                  tpl={tpl}
+                  installedCount={services.filter((service) => service.templateId === tpl.id).length}
+                  onInstall={() => setWizard(tpl)}
+                />
+              ))}
               {filteredTemplates.length === 0 && (
-                <p className="text-sm text-slate-400">Nenhum app encontrado com os filtros atuais.</p>
+                <p className="text-sm text-slate-400">Nenhum app encontrado para instalação rápida.</p>
               )}
             </div>
           </div>
 
-          <div className="zeus-tech-surface rounded-2xl border border-slate-800 bg-slate-900/60 p-4">
-            <div className="mb-3 flex items-center justify-between">
-              <p className="text-xs uppercase tracking-[0.3em] text-slate-400">Apps Instalados</p>
-              <p className="text-xs text-slate-400">{groupedInstalledApps.length} grupo(s)</p>
+          <div className="rounded-2xl border border-slate-800 bg-slate-900/60 p-4">
+            <div className="mb-4 flex items-center justify-between gap-3">
+              <div>
+                <p className="text-xs uppercase tracking-[0.3em] text-slate-400">Operational Pulse</p>
+                <h3 className="mt-1 text-xl font-semibold text-white">Installed apps</h3>
+              </div>
+              <span className="rounded-full border border-slate-700 bg-slate-950/70 px-2.5 py-1 text-[11px] text-slate-300">
+                {groupedInstalledApps.length} grupos
+              </span>
             </div>
-            <div className="mt-3 grid gap-3">
-              {groupedInstalledApps.length === 0 && (
-                <p className="text-sm text-slate-400">Nenhuma instância instalada para os filtros atuais.</p>
-              )}
-
-              {groupedInstalledApps.map((group) => {
+            <div className="space-y-2">
+              {groupedInstalledApps.slice(0, 6).map((group) => {
                 const Icon = group.meta.icon || Layers
-                const appLabel = group.template?.label || group.templateId
-                const appImage = group.template
-                  ? `${group.template.image}:${group.template.tag}`
-                  : group.services[0]?.image || 'custom'
                 return (
-                  <div
-                    key={group.templateId}
-                    className={`rounded-xl border bg-slate-950/35 p-4 ${group.meta.border}`}
-                  >
-                    <div className="flex flex-wrap items-center justify-between gap-3">
-                      <div className="flex items-center gap-3">
-                        <span className="rounded-xl border border-white/10 bg-slate-900 p-2 text-slate-200">
-                          <Icon className="h-4 w-4" />
-                        </span>
-                        <div>
-                          <p className="text-base font-semibold text-white">{appLabel}</p>
-                          <p className="text-xs text-slate-400">{appImage}</p>
-                        </div>
-                      </div>
-                      <div className="flex items-center gap-2 text-xs">
-                        <span className="rounded-full border border-slate-700 bg-slate-900 px-2 py-1 text-slate-300">
-                          {group.running}/{group.services.length} online
-                        </span>
-                        <button
-                          className="rounded-lg border border-blue-800 bg-blue-950 px-3 py-1.5 text-xs text-blue-200 hover:bg-blue-900"
-                          onClick={() => group.template && setWizard(group.template)}
-                          disabled={!group.template}
-                        >
-                          Nova instância
-                        </button>
+                  <div key={group.templateId} className="flex items-center justify-between rounded-xl border border-slate-800 bg-slate-950/70 px-3 py-3">
+                    <div className="flex items-center gap-3">
+                      <span className="rounded-lg border border-white/10 bg-slate-900 p-2 text-slate-200">
+                        <Icon className="h-4 w-4" />
+                      </span>
+                      <div>
+                        <p className="text-sm font-semibold text-white">{group.template?.label || group.templateId}</p>
+                        <p className="text-xs text-slate-400">{group.running}/{group.services.length} online</p>
                       </div>
                     </div>
-
-                    <div className="mt-3 grid gap-2">
-                      {group.services.map((svc) => {
-                        const managerService = services.find((service) => service.parentService === svc.id)
-                        return (
-                          <div
-                            key={svc.id}
-                            className="rounded-lg border border-slate-800 bg-slate-950/80 px-3 py-3"
-                          >
-                            <div className="flex flex-wrap items-center justify-between gap-2">
-                              <div>
-                                <p className="text-sm font-semibold text-white">{svc.name}</p>
-                                <p className="text-xs text-slate-400">
-                                  Porta {svc.hostPort} → {svc.containerPort} • Rede: {svc.networkName || 'bridge'}
-                                </p>
-                                <div className="mt-1 flex flex-wrap gap-2">
-                                  <a
-                                    className="text-xs text-blue-300 underline"
-                                    href={svc.url}
-                                    target="_blank"
-                                    rel="noreferrer"
-                                  >
-                                    localhost:{svc.hostPort}
-                                  </a>
-                                  {svc.serverIP && svc.serverIP !== 'localhost' && !svc.bindLocalOnly && (
-                                    <a
-                                      className="text-xs text-emerald-300 underline"
-                                      href={svc.externalUrl}
-                                      target="_blank"
-                                      rel="noreferrer"
-                                    >
-                                      {svc.serverIP}:{svc.hostPort}
-                                    </a>
-                                  )}
-                                </div>
-                                {managerService && (
-                                  <p className="mt-1 text-[11px] text-emerald-300">
-                                    pgAdmin vinculado em localhost:{managerService.hostPort}
-                                  </p>
-                                )}
-                              </div>
-                              <div className="flex gap-2">
-                                <button
-                                  className="rounded-xl border border-blue-800 bg-blue-950 px-3 py-2 text-xs text-blue-200 hover:bg-blue-900"
-                                  onClick={() => {
-                                    setProjectUploadStatus(null)
-                                    setEnvImportStatus(null)
-                                    setEditDialog({
-                                      ...svc,
-                                      newEnvVars: (svc.envVars || []).map((env) => ({
-                                        ...env,
-                                        value: env.secret ? '******' : env.value
-                                      })),
-                                      newBindLocalOnly: svc.bindLocalOnly ?? false,
-                                      commandInput: formatCommandForInput(svc.command),
-                                      newProjectArchive: null,
-                                      nodeServiceMode: svc.nodeServiceMode || NODE_SERVICE_MODES.service,
-                                      nodeSiteConfig: {
-                                        siteType: svc.nodeSiteConfig?.siteType || NODE_SITE_TYPES.common,
-                                        siteFolder: svc.nodeSiteConfig?.siteFolder || NODE_SITE_FOLDERS[0],
-                                        fallbackFile: svc.nodeSiteConfig?.fallbackFile || 'index.html'
-                                      }
-                                    })
-                                  }}
-                                >
-                                  Editar
-                                </button>
-                                <button
-                                  className="rounded-xl border border-rose-800 bg-rose-950 px-3 py-2 text-xs text-rose-200 hover:bg-rose-900"
-                                  onClick={() => setRemoveDialog(svc)}
-                                >
-                                  Remover
-                                </button>
-                              </div>
-                            </div>
-                          </div>
-                        )
-                      })}
-                    </div>
+                    <button
+                      className="rounded-lg border border-blue-800 bg-blue-950 px-3 py-1.5 text-xs text-blue-200 hover:bg-blue-900"
+                      onClick={() => group.template && setWizard(group.template)}
+                      disabled={!group.template}
+                    >
+                      Nova instância
+                    </button>
                   </div>
                 )
               })}
+              {groupedInstalledApps.length === 0 && (
+                <p className="text-sm text-slate-400">Ainda não há apps instalados.</p>
+              )}
             </div>
+          </div>
+        </div>
+      )}
+
+      {activeTab === 'apps' && (
+        <div className="grid gap-4">
+          <div className="rounded-2xl border border-slate-800 bg-slate-900/60 p-4">
+            <div className="flex flex-wrap items-center justify-between gap-3">
+              <div>
+                <p className="text-xs uppercase tracking-[0.3em] text-slate-400">Apps Catalog</p>
+                <h3 className="mt-1 text-xl font-semibold text-white">Install new services</h3>
+              </div>
+              <div className="min-w-[240px] flex-1 max-w-md">
+                <input
+                  className="w-full rounded-xl border border-slate-700 bg-slate-950/70 px-3 py-2.5 text-sm text-white placeholder:text-slate-500"
+                  placeholder="Buscar app, imagem ou descrição"
+                  value={appSearch}
+                  onChange={(event) => setAppSearch(event.target.value)}
+                />
+              </div>
+            </div>
+
+            <div className="mt-4 flex flex-wrap gap-2">
+              {appCategories.map((categoryId) => (
+                <button
+                  key={categoryId}
+                  onClick={() => setAppCategory(categoryId)}
+                  className={`rounded-full border px-3 py-1.5 text-xs transition ${
+                    appCategory === categoryId
+                      ? 'border-blue-500/70 bg-blue-500/20 text-blue-100 shadow-[0_0_0_1px_rgba(59,130,246,0.2)]'
+                      : 'border-slate-700 bg-slate-900/70 text-slate-300 hover:border-blue-500/40 hover:text-white'
+                  }`}
+                >
+                  {APP_CATEGORY_LABELS[categoryId] || categoryId} ({appCategoryCounts[categoryId] || 0})
+                </button>
+              ))}
+            </div>
+          </div>
+
+          <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-3">
+            {filteredTemplates.map((tpl) => (
+              <DockerCatalogCard
+                key={tpl.id}
+                tpl={tpl}
+                installedCount={services.filter((service) => service.templateId === tpl.id).length}
+                onInstall={() => setWizard(tpl)}
+              />
+            ))}
+            {filteredTemplates.length === 0 && (
+              <p className="text-sm text-slate-400">Nenhum app encontrado com os filtros atuais.</p>
+            )}
           </div>
         </div>
       )}
 
       {activeTab === 'containers' && (
         <div className="grid gap-4">
-          <div className="overflow-hidden rounded-2xl border border-slate-800 bg-slate-900/60">
-            <table className="w-full text-left text-sm text-slate-200">
-              <thead className="bg-slate-950 text-xs uppercase tracking-wide text-slate-400">
-                <tr>
-                  <th className="px-4 py-3">Nome</th>
-                  <th className="px-4 py-3">Status</th>
-                  <th className="px-4 py-3">CPU</th>
-                  <th className="px-4 py-3">RAM</th>
-                  <th className="px-4 py-3">Acoes</th>
-                </tr>
-              </thead>
-              <tbody>
-                {containers.map((container) => {
-                  const name = container.Names?.[0]?.replace('/', '') || container.Id.slice(0, 8)
-                  const running = container.State === 'running'
-                  const containerStats = stats[container.Id]
-                  return (
-                    <tr
-                      key={container.Id}
-                      className="cursor-pointer border-t border-slate-800 hover:bg-slate-900/40"
-                      onClick={() => openLogs(container)}
-                    >
-                      <td className="px-4 py-3">{name}</td>
-                      <td className="px-4 py-3">
-                        <span
-                          className={`rounded-full px-2 py-1 text-xs ${
-                            running
-                              ? 'bg-emerald-500/10 text-emerald-300'
-                              : 'bg-rose-500/10 text-rose-300'
-                          }`}
-                        >
-                          {container.State}
-                        </span>
-                      </td>
-                      <td className="px-4 py-3 text-blue-200">
-                        {containerStats?.cpuPercent ?? '—'}%
-                      </td>
-                      <td className="px-4 py-3 text-blue-200">
-                        {containerStats?.memoryUsage
-                          ? `${Math.round(containerStats.memoryUsage / 1024 / 1024)} MB`
-                          : '—'}
-                      </td>
-                      <td className="px-4 py-3">
-                        <div className="flex gap-2">
-                          <button
-                            className="rounded-lg border border-slate-800 bg-slate-950 p-2 text-slate-200 transition hover:text-emerald-300"
-                            onClick={(event) => {
-                              event.stopPropagation()
-                              handleAction('start', container.Id)
-                            }}
-                          >
-                            <Play className="h-4 w-4" />
-                          </button>
-                          <button
-                            className="rounded-lg border border-slate-800 bg-slate-950 p-2 text-slate-200 transition hover:text-amber-300"
-                            onClick={(event) => {
-                              event.stopPropagation()
-                              handleAction('stop', container.Id)
-                            }}
-                          >
-                            <Square className="h-4 w-4" />
-                          </button>
-                          <button
-                            className="rounded-lg border border-slate-800 bg-slate-950 p-2 text-slate-200 transition hover:text-sky-300"
-                            onClick={(event) => {
-                              event.stopPropagation()
-                              handleAction('restart', container.Id)
-                            }}
-                          >
-                            <RefreshCw className="h-4 w-4" />
-                          </button>
-                          <button
-                            className="rounded-lg border border-slate-800 bg-slate-950 p-2 text-slate-200 transition hover:text-rose-300"
-                            onClick={(event) => {
-                              event.stopPropagation()
-                              handleAction('delete', container.Id)
-                            }}
-                          >
-                            <Trash2 className="h-4 w-4" />
-                          </button>
-                        </div>
+          <div className="rounded-2xl border border-slate-800 bg-slate-900/60">
+            <div className="flex flex-wrap items-center justify-between gap-3 border-b border-slate-800 px-4 py-4">
+              <div>
+                <p className="text-xs uppercase tracking-[0.3em] text-slate-400">Running Instances</p>
+                <h3 className="mt-1 text-xl font-semibold text-white">Operational console</h3>
+              </div>
+              <div className="min-w-[240px] flex-1 max-w-md">
+                <input
+                  className="w-full rounded-xl border border-slate-700 bg-slate-950/70 px-3 py-2.5 text-sm text-white placeholder:text-slate-500"
+                  placeholder="Buscar instância, imagem, rede ou porta"
+                  value={opsSearch}
+                  onChange={(event) => setOpsSearch(event.target.value)}
+                />
+              </div>
+            </div>
+
+            <div className="overflow-x-auto">
+              <table className="w-full text-left text-sm text-slate-200">
+                <thead className="bg-slate-950 text-[11px] uppercase tracking-[0.18em] text-slate-400">
+                  <tr>
+                    <th className="px-4 py-3">Name</th>
+                    <th className="px-4 py-3">Status</th>
+                    <th className="px-4 py-3">Port mapping</th>
+                    <th className="px-4 py-3">Network</th>
+                    <th className="px-4 py-3">Actions</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {filteredOperationalInstances.map((instance) => {
+                    const container = containerLookup.get(instance.containerId) || containerLookup.get(instance.name)
+                    const isRunning = instance.stateMeta.key === 'running'
+                    return (
+                      <tr
+                        key={instance.id}
+                        className="border-t border-slate-800 hover:bg-slate-900/40"
+                        onClick={() => container && openLogs(container)}
+                      >
+                        <td className="px-4 py-3">
+                          <div>
+                            <p className="font-semibold text-white">{instance.name}</p>
+                            <p className="text-xs text-slate-400">{instance.image || 'custom-image'}</p>
+                          </div>
+                        </td>
+                        <td className="px-4 py-3">
+                          <DockerStatusBadge state={instance.runtimeState} />
+                        </td>
+                        <td className="px-4 py-3 text-slate-300">{instance.hostPort || 'auto'} → {instance.containerPort || '—'}</td>
+                        <td className="px-4 py-3 text-slate-300">{instance.networkName || 'bridge'}</td>
+                        <td className="px-4 py-3">
+                          <div className="flex flex-wrap gap-2">
+                            <button
+                              className={`rounded-lg border px-3 py-1.5 text-xs font-medium ${
+                                isRunning
+                                  ? 'border-amber-500/30 bg-amber-500/10 text-amber-200 hover:bg-amber-500/20'
+                                  : 'border-emerald-500/30 bg-emerald-500/10 text-emerald-200 hover:bg-emerald-500/20'
+                              }`}
+                              onClick={(event) => {
+                                event.stopPropagation()
+                                if (instance.containerId) {
+                                  handleAction(isRunning ? 'stop' : 'start', instance.containerId)
+                                }
+                              }}
+                            >
+                              {isRunning ? 'Stop' : 'Start'}
+                            </button>
+                            <button
+                              className="rounded-lg border border-blue-800 bg-blue-950 px-3 py-1.5 text-xs text-blue-200 hover:bg-blue-900"
+                              onClick={(event) => {
+                                event.stopPropagation()
+                                openEditServiceDialog(instance)
+                              }}
+                            >
+                              Edit
+                            </button>
+                            <button
+                              className="rounded-lg border border-rose-800 bg-rose-950 px-3 py-1.5 text-xs text-rose-200 hover:bg-rose-900"
+                              onClick={(event) => {
+                                event.stopPropagation()
+                                setRemoveDialog(instance)
+                              }}
+                            >
+                              Remove
+                            </button>
+                          </div>
+                        </td>
+                      </tr>
+                    )
+                  })}
+                  {filteredOperationalInstances.length === 0 && (
+                    <tr>
+                      <td className="px-4 py-8 text-slate-500" colSpan={5}>
+                        {loading ? 'Carregando instâncias...' : 'Nenhuma instância encontrada'}
                       </td>
                     </tr>
-                  )
-                })}
-                {containers.length === 0 && (
-                  <tr>
-                    <td className="px-4 py-6 text-slate-500" colSpan={5}>
-                      {loading ? 'Carregando...' : 'Nenhum container encontrado'}
-                    </td>
-                  </tr>
-                )}
-              </tbody>
-            </table>
+                  )}
+                </tbody>
+              </table>
+            </div>
           </div>
 
           {selectedContainer && (
@@ -2022,7 +2094,7 @@ const DockerPanel = () => {
                 </div>
               </div>
               <div className="h-64 overflow-y-auto rounded-xl border border-emerald-900/50 bg-gradient-to-b from-black via-black/95 to-slate-950 p-4 text-xs text-emerald-200">
-                <pre className="font-mono whitespace-pre-wrap">{logs || 'Aguardando logs...'}</pre>
+                <pre className="font-mono whitespace-pre-wrap">{logs || 'Clique em uma instância para inspecionar logs.'}</pre>
               </div>
             </div>
           )}

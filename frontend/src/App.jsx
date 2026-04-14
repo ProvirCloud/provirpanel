@@ -105,7 +105,7 @@ const App = () => {
           <Route index element={<Dashboard />} />
           <Route path="stacks" element={<StacksPanel />} />
           <Route path="terminal" element={<ModulePage showHeader={false} title="Terminal" subtitle="Acesso operacional aos ambientes conectados"><Terminal /></ModulePage>} />
-          <Route path="docker" element={<ModulePage showHeader={false} title="Docker" subtitle="Serviços, containers e topologias dos ambientes"><DockerPanel /></ModulePage>} />
+          <Route path="docker" element={<ModulePage showHeader={false} title="Container Service" subtitle="Serviços, containers e topologias dos ambientes"><DockerPanel /></ModulePage>} />
           <Route path="nginx" element={<ModulePage showHeader={false} title="Nginx Manager" subtitle="Rotas, proxy e publicação de aplicações"><NginxVisualManager /></ModulePage>} />
           <Route path="nginx-legacy" element={<ModulePage showHeader={false} title="Nginx Legacy" subtitle="Gestão avançada do ambiente Nginx"><NginxPanel /></ModulePage>} />
           <Route path="domains" element={<ModulePage showHeader={false} title="Rotas" subtitle="Domínios e mapeamento de acessos"><DomainsPanel /></ModulePage>} />
