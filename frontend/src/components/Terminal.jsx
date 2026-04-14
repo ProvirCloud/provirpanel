@@ -511,25 +511,25 @@ const Terminal = () => {
       <div className="flex flex-wrap items-center justify-between gap-3">
         <div>
           <p className="zeus-kicker text-xs font-semibold uppercase">Terminal</p>
-          <h2 className="text-2xl font-semibold text-slate-900">Sessao interativa</h2>
+          <h2 className="text-2xl font-semibold" style={{ color: 'var(--text-primary)' }}>Sessao interativa</h2>
         </div>
         <div className="flex items-center gap-2">
           <button
-            className="flex items-center gap-2 rounded-2xl border border-blue-100 bg-white px-3 py-2 text-xs text-slate-700 transition hover:border-blue-400"
+            className="flex items-center gap-2 rounded-lg border px-3 py-2 text-xs transition" style={{ background: 'var(--bg-elevated)', borderColor: 'var(--border-default)', color: 'var(--text-secondary)' }} onMouseEnter={e => { e.currentTarget.style.borderColor = 'var(--accent)'; e.currentTarget.style.color = 'var(--text-primary)' }} onMouseLeave={e => { e.currentTarget.style.borderColor = 'var(--border-default)'; e.currentTarget.style.color = 'var(--text-secondary)' }}
             onClick={copyLastOutput}
           >
             <Copy className="h-4 w-4" />
             Copiar resultado
           </button>
           <button
-            className="flex items-center gap-2 rounded-2xl border border-blue-100 bg-white px-3 py-2 text-xs text-slate-700 transition hover:border-blue-400"
+            className="flex items-center gap-2 rounded-lg border px-3 py-2 text-xs transition" style={{ background: 'var(--bg-elevated)', borderColor: 'var(--border-default)', color: 'var(--text-secondary)' }} onMouseEnter={e => { e.currentTarget.style.borderColor = 'var(--accent)'; e.currentTarget.style.color = 'var(--text-primary)' }} onMouseLeave={e => { e.currentTarget.style.borderColor = 'var(--border-default)'; e.currentTarget.style.color = 'var(--text-secondary)' }}
             onClick={clearTerminal}
           >
             <Trash2 className="h-4 w-4" />
             Limpar
           </button>
           <button
-            className="flex items-center gap-2 rounded-2xl border border-blue-100 bg-white px-3 py-2 text-xs text-slate-700 transition hover:border-blue-400"
+            className="flex items-center gap-2 rounded-lg border px-3 py-2 text-xs transition" style={{ background: 'var(--bg-elevated)', borderColor: 'var(--border-default)', color: 'var(--text-secondary)' }} onMouseEnter={e => { e.currentTarget.style.borderColor = 'var(--accent)'; e.currentTarget.style.color = 'var(--text-primary)' }} onMouseLeave={e => { e.currentTarget.style.borderColor = 'var(--border-default)'; e.currentTarget.style.color = 'var(--text-secondary)' }}
             onClick={resetConnection}
           >
             <RefreshCw className="h-4 w-4" />
@@ -550,20 +550,21 @@ const Terminal = () => {
           <button
             key={tab.id}
             onClick={() => setActiveId(tab.id)}
-            className={`flex items-center gap-2 rounded-full border px-4 py-2 text-xs transition ${
-              activeId === tab.id
-                ? 'border-blue-300 bg-blue-50 text-blue-800'
-                : 'border-blue-100 bg-white text-slate-600 hover:border-blue-300'
-            }`}
+            className="flex items-center gap-2 rounded-full border px-4 py-2 text-xs transition"
+            style={activeId === tab.id
+              ? { background: 'var(--accent-dim)', borderColor: 'rgba(77,126,247,0.35)', color: 'var(--accent)' }
+              : { background: 'var(--bg-elevated)', borderColor: 'var(--border-default)', color: 'var(--text-secondary)' }
+            }
           >
             <TerminalIcon className="h-3.5 w-3.5" />
             {tab.title}
-            <span className="rounded-full bg-slate-100 px-2 py-0.5 text-[10px] text-slate-600">
+            <span className="rounded-full px-2 py-0.5 text-[10px]" style={{ background: 'var(--bg-card)', color: 'var(--text-muted)' }}>
               {formatStatus(tab.status)}
             </span>
             {tabs.length > 1 && (
               <span
-                className="ml-1 text-slate-400 hover:text-rose-500"
+                className="ml-1 hover:text-rose-400"
+                style={{ color: 'var(--text-muted)' }}
                 onClick={(event) => {
                   event.stopPropagation()
                   closeTab(tab.id)

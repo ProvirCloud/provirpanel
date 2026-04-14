@@ -6,7 +6,11 @@ import {
   Trash2,
   Plus,
   TerminalSquare,
-  Layers
+  Layers,
+  Database,
+  Globe,
+  Cpu,
+  Wrench
 } from 'lucide-react'
 import api from '../services/api.js'
 import { createDockerLogsSocket, createDockerProgressSocket } from '../services/socket.js'
@@ -222,6 +226,63 @@ const NODE_SITE_TYPES = {
 
 const NODE_SITE_FOLDERS = ['www', 'publish']
 
+const APP_CATEGORY_LABELS = {
+  all: 'Todos',
+  web: 'Web',
+  runtime: 'Runtime',
+  database: 'Banco',
+  cache: 'Cache',
+  tools: 'Ferramentas',
+  other: 'Outros'
+}
+
+const TEMPLATE_APP_META = {
+  'nginx-static': {
+    category: 'web',
+    icon: Globe,
+    accent: 'from-cyan-500/20 to-sky-500/5',
+    border: 'border-cyan-500/30'
+  },
+  'node-app': {
+    category: 'runtime',
+    icon: Cpu,
+    accent: 'from-blue-500/20 to-indigo-500/5',
+    border: 'border-blue-500/30'
+  },
+  'postgres-db': {
+    category: 'database',
+    icon: Database,
+    accent: 'from-emerald-500/20 to-teal-500/5',
+    border: 'border-emerald-500/30'
+  },
+  pgadmin: {
+    category: 'tools',
+    icon: Wrench,
+    accent: 'from-violet-500/20 to-fuchsia-500/5',
+    border: 'border-violet-500/30'
+  },
+  'mysql-db': {
+    category: 'database',
+    icon: Database,
+    accent: 'from-amber-500/20 to-yellow-500/5',
+    border: 'border-amber-500/30'
+  },
+  'redis-cache': {
+    category: 'cache',
+    icon: Layers,
+    accent: 'from-rose-500/20 to-red-500/5',
+    border: 'border-rose-500/30'
+  },
+  default: {
+    category: 'other',
+    icon: Layers,
+    accent: 'from-slate-500/20 to-slate-500/5',
+    border: 'border-slate-700'
+  }
+}
+
+const getTemplateMeta = (templateId) => TEMPLATE_APP_META[templateId] || TEMPLATE_APP_META.default
+
 const DockerPanel = () => {
   const [activeTab, setActiveTab] = useState('services')
   const [containers, setContainers] = useState([])
@@ -258,8 +319,95 @@ const DockerPanel = () => {
   const [registryDialog, setRegistryDialog] = useState(null)
   const [pullWorking, setPullWorking] = useState(false)
   const [buildWorking, setBuildWorking] = useState(false)
+  const [appSearch, setAppSearch] = useState('')
+  const [appCategory, setAppCategory] = useState('all')
   const socket = useMemo(() => createDockerLogsSocket(), [])
   const progressSocket = useMemo(() => createDockerProgressSocket(), [])
+
+  const templateMap = useMemo(
+    () => new Map((templates || []).map((template) => [template.id, template])),
+    [templates]
+  )
+
+  const appCategories = useMemo(() => {
+    const categories = new Set(['all'])
+    templates.forEach((template) => {
+      categories.add(getTemplateMeta(template.id).category)
+    })
+    return Array.from(categories)
+  }, [templates])
+
+  const filteredTemplates = useMemo(() => {
+    const searchTerm = appSearch.trim().toLowerCase()
+    return templates.filter((template) => {
+      const meta = getTemplateMeta(template.id)
+      const matchesCategory = appCategory === 'all' || meta.category === appCategory
+      const matchesSearch =
+        !searchTerm ||
+        String(template.label || '').toLowerCase().includes(searchTerm) ||
+        String(template.description || '').toLowerCase().includes(searchTerm) ||
+        String(template.image || '').toLowerCase().includes(searchTerm)
+      return matchesCategory && matchesSearch
+    })
+  }, [templates, appCategory, appSearch])
+
+  const groupedInstalledApps = useMemo(() => {
+    const runningByContainerId = new Map(
+      containers.map((container) => [container.Id, container.State === 'running'])
+    )
+    const groups = new Map()
+
+    services.forEach((service) => {
+      const templateId = service.templateId || 'custom-image'
+      const template = templateMap.get(templateId)
+      const meta = getTemplateMeta(templateId)
+      if (!groups.has(templateId)) {
+        groups.set(templateId, {
+          templateId,
+          template,
+          meta,
+          services: [],
+          running: 0
+        })
+      }
+      const group = groups.get(templateId)
+      group.services.push(service)
+      if (runningByContainerId.get(service.containerId)) {
+        group.running += 1
+      }
+    })
+
+    const searchTerm = appSearch.trim().toLowerCase()
+    return Array.from(groups.values())
+      .filter((group) => {
+        const label = group.template?.label || group.services[0]?.templateId || group.templateId
+        const description = group.template?.description || ''
+        const imageName = group.template?.image || group.services[0]?.image || ''
+        const matchesCategory = appCategory === 'all' || group.meta.category === appCategory
+        const matchesSearch =
+          !searchTerm ||
+          String(label).toLowerCase().includes(searchTerm) ||
+          String(description).toLowerCase().includes(searchTerm) ||
+          String(imageName).toLowerCase().includes(searchTerm)
+        return matchesCategory && matchesSearch
+      })
+      .sort((a, b) => b.services.length - a.services.length)
+  }, [services, containers, templateMap, appCategory, appSearch])
+
+  const appCategoryCounts = useMemo(() => {
+    const counts = { all: templates.length }
+    templates.forEach((template) => {
+      const category = getTemplateMeta(template.id).category
+      counts[category] = (counts[category] || 0) + 1
+    })
+    return counts
+  }, [templates])
+
+  const totalInstalledInstances = services.length
+  const totalRunningInstances = useMemo(
+    () => groupedInstalledApps.reduce((sum, group) => sum + group.running, 0),
+    [groupedInstalledApps]
+  )
 
   const validateServiceName = (name) => {
     if (!name || typeof name !== 'string') {
@@ -1458,8 +1606,8 @@ const DockerPanel = () => {
     <div className="space-y-6">
       <div className="flex flex-wrap items-center justify-between gap-4">
         <div>
-          <p className="text-xs uppercase tracking-[0.3em] text-slate-400">Docker</p>
-          <h2 className="text-2xl font-semibold text-white">Gerenciamento de containers</h2>
+          <p className="zeus-heading-kicker">Docker</p>
+          <h2 className="zeus-heading-title">Gerenciamento de containers</h2>
         </div>
         {activeTab === 'containers' && (
           <button
@@ -1495,177 +1643,250 @@ const DockerPanel = () => {
 
       {activeTab === 'services' && (
         <div className="grid gap-4">
-          <div className="flex flex-wrap justify-between gap-3">
-            <div>
-              <p className="text-xs uppercase tracking-[0.3em] text-slate-400">Serviços</p>
-              <h3 className="text-xl font-semibold text-white">Plug & Play</h3>
+          <div className="zeus-tech-surface rounded-2xl border border-slate-800 bg-[radial-gradient(circle_at_top_left,_rgba(59,130,246,0.18),_rgba(15,23,42,0.9)_55%)] p-5">
+            <div className="flex flex-wrap items-start justify-between gap-4">
+              <div>
+                <p className="text-[11px] uppercase tracking-[0.34em] text-blue-200/80">Apps Docker</p>
+                <h3 className="mt-2 text-2xl font-semibold text-white">Catálogo e Instâncias</h3>
+                <p className="mt-1 text-sm text-slate-300">
+                  Organize por tipo de app, instale novas stacks e gerencie serviços existentes.
+                </p>
+              </div>
+              <div className="grid grid-cols-3 gap-2 min-w-[280px]">
+                <div className="rounded-xl border border-white/10 bg-slate-950/40 px-3 py-2">
+                  <p className="text-[10px] uppercase tracking-[0.25em] text-slate-400">Catálogo</p>
+                  <p className="mt-1 text-xl font-semibold text-white">{templates.length}</p>
+                </div>
+                <div className="rounded-xl border border-white/10 bg-slate-950/40 px-3 py-2">
+                  <p className="text-[10px] uppercase tracking-[0.25em] text-slate-400">Instâncias</p>
+                  <p className="mt-1 text-xl font-semibold text-white">{totalInstalledInstances}</p>
+                </div>
+                <div className="rounded-xl border border-emerald-500/30 bg-emerald-500/10 px-3 py-2">
+                  <p className="text-[10px] uppercase tracking-[0.25em] text-emerald-200">Online</p>
+                  <p className="mt-1 text-xl font-semibold text-emerald-200">{totalRunningInstances}</p>
+                </div>
+              </div>
+            </div>
+
+            <div className="mt-4 min-w-[220px]">
+              <input
+                className="w-full rounded-xl border border-slate-700 bg-slate-950/70 px-3 py-2.5 text-sm text-white placeholder:text-slate-500"
+                placeholder="Buscar app, imagem ou descrição"
+                value={appSearch}
+                onChange={(event) => setAppSearch(event.target.value)}
+              />
             </div>
           </div>
 
-          <div className="grid gap-4 lg:grid-cols-3 md:grid-cols-2">
-            {templates.map((tpl) => (
-              <div
-                key={tpl.id}
-                className="rounded-2xl border border-slate-800 bg-slate-900/60 p-4"
+          <div className="flex flex-wrap gap-2">
+            {appCategories.map((categoryId) => (
+              <button
+                key={categoryId}
+                onClick={() => setAppCategory(categoryId)}
+                className={`rounded-full border px-3 py-1.5 text-xs transition ${
+                  appCategory === categoryId
+                    ? 'border-blue-500/70 bg-blue-500/20 text-blue-100 shadow-[0_0_0_1px_rgba(59,130,246,0.2)]'
+                    : 'border-slate-700 bg-slate-900/70 text-slate-300 hover:border-blue-500/40 hover:text-white'
+                }`}
               >
-                <div className="flex items-center justify-between">
-                  <div>
-                    <p className="text-lg font-semibold text-white">{tpl.label}</p>
-                    <p className="text-xs text-slate-400">{tpl.description}</p>
-                  </div>
-                  <span className="rounded-full border border-slate-800 bg-slate-950 px-3 py-1 text-xs text-blue-200">
-                    {tpl.image}:{tpl.tag}
-                  </span>
-                </div>
-                <div className="mt-3 text-xs text-slate-300 space-y-1">
-                  <p>Porta sugerida: {tpl.defaultPort} → {tpl.containerPort}</p>
-                  {tpl.volumes?.map((v) => (
-                    <p key={v.containerPath}>Volume: {v.hostPath} → {v.containerPath}</p>
-                  ))}
-                </div>
-                <div className="mt-4 flex gap-2">
-                  <button
-                    className="rounded-xl bg-blue-500 px-3 py-2 text-xs font-semibold text-slate-950 transition hover:bg-blue-400"
-                    onClick={() => setWizard(tpl)}
-                  >
-                    Configurar & Rodar
-                  </button>
-                  <button
-                    className="rounded-xl border border-slate-800 bg-slate-950 px-3 py-2 text-xs text-slate-200"
-                    onClick={() => pullImage(tpl.image)}
-                  >
-                    Baixar imagem
-                  </button>
-                </div>
-              </div>
+                {APP_CATEGORY_LABELS[categoryId] || categoryId} ({appCategoryCounts[categoryId] || 0})
+              </button>
             ))}
           </div>
 
-          <div className="rounded-2xl border border-slate-800 bg-slate-900/60 p-4">
-            <p className="text-xs uppercase tracking-[0.3em] text-slate-400">Serviços criados</p>
-            <div className="mt-3 grid gap-3">
-              {services.length === 0 && (
-                <p className="text-sm text-slate-400">Nenhum serviço criado ainda.</p>
-              )}
-              {services.map((svc) => {
-                const managerService = services.find(s => s.parentService === svc.id);
+          <div className="zeus-tech-surface rounded-2xl border border-slate-800 bg-slate-900/60 p-4">
+            <div className="mb-3 flex items-center justify-between">
+              <p className="text-xs uppercase tracking-[0.3em] text-slate-400">Catálogo de Apps</p>
+              <p className="text-xs text-slate-400">{filteredTemplates.length} app(s)</p>
+            </div>
+            <div className="grid gap-4 lg:grid-cols-3 md:grid-cols-2">
+              {filteredTemplates.map((tpl) => {
+                const appMeta = getTemplateMeta(tpl.id)
+                const Icon = appMeta.icon || Layers
+                const installedCount = services.filter((service) => service.templateId === tpl.id).length
                 return (
                   <div
-                    key={svc.id}
-                    className="rounded-xl border border-slate-800 bg-slate-950/60 px-4 py-3"
+                    key={tpl.id}
+                    className={`group rounded-2xl border bg-gradient-to-br p-4 transition duration-300 hover:-translate-y-0.5 hover:shadow-xl hover:shadow-slate-950/50 ${appMeta.border} ${appMeta.accent}`}
                   >
-                    <div className="flex flex-wrap items-center justify-between gap-2">
-                      <div>
-                        <p className="text-lg font-semibold text-white">{svc.name}</p>
-                        <p className="text-xs text-slate-400">
-                          {svc.image} • Porta {svc.hostPort} → {svc.containerPort} • Rede: {svc.networkName || 'bridge'}
-                          {svc.hasProject && ' • 📁 Com projeto exemplo'}
-                        </p>
-                        {!svc.bindLocalOnly && (
-                          <p className="text-[11px] text-rose-300 mt-1">
-                            Porta exposta publicamente. Use apenas se necessario.
-                          </p>
-                        )}
-                        <div className="flex flex-wrap gap-2 mt-1">
-                          <a
-                            className="text-xs text-blue-300 underline"
-                            href={svc.url}
-                            target="_blank"
-                            rel="noreferrer"
-                          >
-                            localhost:{svc.hostPort}
-                          </a>
-                          {svc.serverIP && svc.serverIP !== 'localhost' && !svc.bindLocalOnly && (
-                            <a
-                              className="text-xs text-emerald-300 underline"
-                              href={svc.externalUrl}
-                              target="_blank"
-                              rel="noreferrer"
-                            >
-                              {svc.serverIP}:{svc.hostPort}
-                            </a>
-                          )}
+                    <div className="flex items-start justify-between gap-2">
+                      <div className="flex items-center gap-3">
+                        <span className="rounded-xl border border-white/10 bg-slate-950/70 p-2 text-slate-100">
+                          <Icon className="h-4 w-4" />
+                        </span>
+                        <div>
+                          <p className="text-base font-semibold text-white">{tpl.label}</p>
+                          <p className="text-xs leading-5 text-slate-300">{tpl.description}</p>
                         </div>
-                        {svc.bindLocalOnly && (
-                          <p className="text-[11px] text-amber-300 mt-1">Acesso publico desativado</p>
-                        )}
-                        {managerService && (
-                          <div className="mt-2 p-2 rounded-lg border border-emerald-500/30 bg-emerald-500/10">
-                            <p className="text-xs text-emerald-300 font-semibold">🔧 pgAdmin disponível:</p>
-                            <div className="flex flex-wrap gap-2 mt-1">
-                              <a
-                                className="text-xs text-emerald-300 underline"
-                                href={managerService.url}
-                                target="_blank"
-                                rel="noreferrer"
-                              >
-                                localhost:{managerService.hostPort}
-                              </a>
-                              {managerService.serverIP && managerService.serverIP !== 'localhost' && !managerService.bindLocalOnly && (
-                                <a
-                                  className="text-xs text-emerald-400 underline"
-                                  href={managerService.externalUrl}
-                                  target="_blank"
-                                  rel="noreferrer"
-                                >
-                                  {managerService.serverIP}:{managerService.hostPort}
-                                </a>
-                              )}
-                            </div>
-                            <p className="text-xs text-emerald-400 mt-1">
-                              Login: {managerService.credentials?.email} | Senha: {managerService.credentials?.password}
-                            </p>
-                            {managerService.dbConnection && (
-                              <p className="text-xs text-slate-300 mt-1">
-                                Host: {managerService.dbConnection.host}:{managerService.dbConnection.port} | DB: {managerService.dbConnection.database}
-                              </p>
-                            )}
-                          </div>
-                        )}
                       </div>
-                      <div className="text-xs text-slate-300">
-                        <p>Container: {svc.containerId?.slice(0, 12)}</p>
-                        <p>Volumes: {svc.volumes?.length || 0}</p>
-                        {managerService && (
-                          <p className="text-emerald-300">+ pgAdmin</p>
-                        )}
+                      <span className="rounded-full border border-slate-700 bg-slate-950/80 px-2.5 py-1 text-[10px] text-slate-300">
+                        {APP_CATEGORY_LABELS[appMeta.category] || appMeta.category}
+                      </span>
+                    </div>
+
+                    <div className="mt-3 grid grid-cols-3 gap-2 text-[11px] text-slate-300">
+                      <div className="rounded-lg border border-slate-700/70 bg-slate-950/60 p-2">
+                        <p className="text-[10px] uppercase tracking-[0.2em] text-slate-500">Imagem</p>
+                        <p className="mt-1 truncate font-medium text-slate-200">{tpl.image}:{tpl.tag}</p>
                       </div>
-                      <div className="flex gap-2">
+                      <div className="rounded-lg border border-slate-700/70 bg-slate-950/60 p-2">
+                        <p className="text-[10px] uppercase tracking-[0.2em] text-slate-500">Porta</p>
+                        <p className="mt-1 font-medium text-slate-200">{tpl.defaultPort} → {tpl.containerPort}</p>
+                      </div>
+                      <div className="rounded-lg border border-slate-700/70 bg-slate-950/60 p-2">
+                        <p className="text-[10px] uppercase tracking-[0.2em] text-slate-500">Instalados</p>
+                        <p className="mt-1 font-medium text-slate-200">{installedCount}</p>
+                      </div>
+                    </div>
+
+                    <div className="mt-4 flex gap-2">
+                      <button
+                        className="flex-1 rounded-xl bg-blue-500 px-3 py-2 text-xs font-semibold text-slate-950 transition hover:bg-blue-400"
+                        onClick={() => setWizard(tpl)}
+                      >
+                        Instalar App
+                      </button>
+                      <button
+                        className="rounded-xl border border-slate-700 bg-slate-950/80 px-3 py-2 text-xs text-slate-200 hover:border-blue-500/40"
+                        onClick={() => pullImage(tpl.image)}
+                      >
+                        Baixar imagem
+                      </button>
+                    </div>
+                  </div>
+                )
+              })}
+              {filteredTemplates.length === 0 && (
+                <p className="text-sm text-slate-400">Nenhum app encontrado com os filtros atuais.</p>
+              )}
+            </div>
+          </div>
+
+          <div className="zeus-tech-surface rounded-2xl border border-slate-800 bg-slate-900/60 p-4">
+            <div className="mb-3 flex items-center justify-between">
+              <p className="text-xs uppercase tracking-[0.3em] text-slate-400">Apps Instalados</p>
+              <p className="text-xs text-slate-400">{groupedInstalledApps.length} grupo(s)</p>
+            </div>
+            <div className="mt-3 grid gap-3">
+              {groupedInstalledApps.length === 0 && (
+                <p className="text-sm text-slate-400">Nenhuma instância instalada para os filtros atuais.</p>
+              )}
+
+              {groupedInstalledApps.map((group) => {
+                const Icon = group.meta.icon || Layers
+                const appLabel = group.template?.label || group.templateId
+                const appImage = group.template
+                  ? `${group.template.image}:${group.template.tag}`
+                  : group.services[0]?.image || 'custom'
+                return (
+                  <div
+                    key={group.templateId}
+                    className={`rounded-xl border bg-slate-950/35 p-4 ${group.meta.border}`}
+                  >
+                    <div className="flex flex-wrap items-center justify-between gap-3">
+                      <div className="flex items-center gap-3">
+                        <span className="rounded-xl border border-white/10 bg-slate-900 p-2 text-slate-200">
+                          <Icon className="h-4 w-4" />
+                        </span>
+                        <div>
+                          <p className="text-base font-semibold text-white">{appLabel}</p>
+                          <p className="text-xs text-slate-400">{appImage}</p>
+                        </div>
+                      </div>
+                      <div className="flex items-center gap-2 text-xs">
+                        <span className="rounded-full border border-slate-700 bg-slate-900 px-2 py-1 text-slate-300">
+                          {group.running}/{group.services.length} online
+                        </span>
                         <button
-                          className="rounded-xl border border-blue-800 bg-blue-950 px-3 py-2 text-xs text-blue-200 hover:bg-blue-900"
-                          onClick={() => {
-                            setProjectUploadStatus(null)
-                            setEnvImportStatus(null)
-                            setEditDialog({ 
-                              ...svc, 
-                              newEnvVars: (svc.envVars || []).map((env) => ({
-                                ...env,
-                                value: env.secret ? '******' : env.value
-                              })),
-                              newBindLocalOnly: svc.bindLocalOnly ?? false,
-                              commandInput: formatCommandForInput(svc.command),
-                              newProjectArchive: null,
-                              nodeServiceMode: svc.nodeServiceMode || NODE_SERVICE_MODES.service,
-                              nodeSiteConfig: {
-                                siteType: svc.nodeSiteConfig?.siteType || NODE_SITE_TYPES.common,
-                                siteFolder: svc.nodeSiteConfig?.siteFolder || NODE_SITE_FOLDERS[0],
-                                fallbackFile: svc.nodeSiteConfig?.fallbackFile || 'index.html'
-                              }
-                            })
-                          }}
+                          className="rounded-lg border border-blue-800 bg-blue-950 px-3 py-1.5 text-xs text-blue-200 hover:bg-blue-900"
+                          onClick={() => group.template && setWizard(group.template)}
+                          disabled={!group.template}
                         >
-                          Editar
-                        </button>
-                        <button
-                          className="rounded-xl border border-rose-800 bg-rose-950 px-3 py-2 text-xs text-rose-200 hover:bg-rose-900"
-                          onClick={() => setRemoveDialog(svc)}
-                        >
-                          Remover
+                          Nova instância
                         </button>
                       </div>
                     </div>
+
+                    <div className="mt-3 grid gap-2">
+                      {group.services.map((svc) => {
+                        const managerService = services.find((service) => service.parentService === svc.id)
+                        return (
+                          <div
+                            key={svc.id}
+                            className="rounded-lg border border-slate-800 bg-slate-950/80 px-3 py-3"
+                          >
+                            <div className="flex flex-wrap items-center justify-between gap-2">
+                              <div>
+                                <p className="text-sm font-semibold text-white">{svc.name}</p>
+                                <p className="text-xs text-slate-400">
+                                  Porta {svc.hostPort} → {svc.containerPort} • Rede: {svc.networkName || 'bridge'}
+                                </p>
+                                <div className="mt-1 flex flex-wrap gap-2">
+                                  <a
+                                    className="text-xs text-blue-300 underline"
+                                    href={svc.url}
+                                    target="_blank"
+                                    rel="noreferrer"
+                                  >
+                                    localhost:{svc.hostPort}
+                                  </a>
+                                  {svc.serverIP && svc.serverIP !== 'localhost' && !svc.bindLocalOnly && (
+                                    <a
+                                      className="text-xs text-emerald-300 underline"
+                                      href={svc.externalUrl}
+                                      target="_blank"
+                                      rel="noreferrer"
+                                    >
+                                      {svc.serverIP}:{svc.hostPort}
+                                    </a>
+                                  )}
+                                </div>
+                                {managerService && (
+                                  <p className="mt-1 text-[11px] text-emerald-300">
+                                    pgAdmin vinculado em localhost:{managerService.hostPort}
+                                  </p>
+                                )}
+                              </div>
+                              <div className="flex gap-2">
+                                <button
+                                  className="rounded-xl border border-blue-800 bg-blue-950 px-3 py-2 text-xs text-blue-200 hover:bg-blue-900"
+                                  onClick={() => {
+                                    setProjectUploadStatus(null)
+                                    setEnvImportStatus(null)
+                                    setEditDialog({
+                                      ...svc,
+                                      newEnvVars: (svc.envVars || []).map((env) => ({
+                                        ...env,
+                                        value: env.secret ? '******' : env.value
+                                      })),
+                                      newBindLocalOnly: svc.bindLocalOnly ?? false,
+                                      commandInput: formatCommandForInput(svc.command),
+                                      newProjectArchive: null,
+                                      nodeServiceMode: svc.nodeServiceMode || NODE_SERVICE_MODES.service,
+                                      nodeSiteConfig: {
+                                        siteType: svc.nodeSiteConfig?.siteType || NODE_SITE_TYPES.common,
+                                        siteFolder: svc.nodeSiteConfig?.siteFolder || NODE_SITE_FOLDERS[0],
+                                        fallbackFile: svc.nodeSiteConfig?.fallbackFile || 'index.html'
+                                      }
+                                    })
+                                  }}
+                                >
+                                  Editar
+                                </button>
+                                <button
+                                  className="rounded-xl border border-rose-800 bg-rose-950 px-3 py-2 text-xs text-rose-200 hover:bg-rose-900"
+                                  onClick={() => setRemoveDialog(svc)}
+                                >
+                                  Remover
+                                </button>
+                              </div>
+                            </div>
+                          </div>
+                        )
+                      })}
+                    </div>
                   </div>
-                );
+                )
               })}
             </div>
           </div>

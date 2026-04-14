@@ -1,13 +1,41 @@
 import { useState } from 'react'
 import { useNavigate } from 'react-router-dom'
-import { Zap, ShieldCheck } from 'lucide-react'
+import {
+  ShieldCheck,
+  Server,
+  Activity,
+  Lock,
+  Eye,
+  EyeOff,
+  ArrowRight,
+} from 'lucide-react'
 import api from '../services/api.js'
-import logoImg from '../assets/logo.png'
+import logoNameDark from '../assets/images/logoname.webp'
+
+const highlights = [
+  {
+    icon: Server,
+    label: 'Infraestrutura centralizada',
+    desc: 'Gerencie serviços, aplicações, storage e rede em uma única camada operacional.',
+  },
+  {
+    icon: Activity,
+    label: 'Operação em tempo real',
+    desc: 'Monitore disponibilidade, observabilidade e estado dos ambientes sem trocar de contexto.',
+  },
+  {
+    icon: Lock,
+    label: 'Governança e segurança',
+    desc: 'Controle acessos, políticas e fluxos críticos com postura enterprise desde a entrada.',
+  },
+]
 
 const LoginPage = () => {
   const navigate = useNavigate()
   const [username, setUsername] = useState('')
   const [password, setPassword] = useState('')
+  const [showPassword, setShowPassword] = useState(false)
+  const [rememberMe, setRememberMe] = useState(true)
   const [mfaCode, setMfaCode] = useState('')
   const [mfaToken, setMfaToken] = useState('')
   const [mfaRequired, setMfaRequired] = useState(false)
@@ -15,177 +43,239 @@ const LoginPage = () => {
   const [mfaSetupRequired, setMfaSetupRequired] = useState(false)
   const [mfaSetup, setMfaSetup] = useState(null)
   const [error, setError] = useState('')
+  const [loading, setLoading] = useState(false)
 
-  const handleSubmit = async (event) => {
-    event.preventDefault()
+  const handleSubmit = async (e) => {
+    e.preventDefault()
     setError('')
+    setLoading(true)
     try {
       if (mfaSetupRequired) {
         if (!mfaSetup) {
-          const setupResponse = await api.post('/auth/mfa/setup-login', { mfaSetupToken })
-          setMfaSetup(setupResponse.data)
+          const r = await api.post('/auth/mfa/setup-login', { mfaSetupToken })
+          setMfaSetup(r.data)
+          setLoading(false)
           return
         }
-        const enableResponse = await api.post('/auth/mfa/enable-login', {
-          token: mfaCode,
-          mfaSetupToken
-        })
-        if (enableResponse.data?.token) {
-          localStorage.setItem('provirpanel-token', enableResponse.data.token)
-        }
-        window.dispatchEvent(new CustomEvent('provirpanel-auth', {
-          detail: { authenticated: true }
-        }))
+        const r = await api.post('/auth/mfa/enable-login', { token: mfaCode, mfaSetupToken })
+        if (r.data?.token) localStorage.setItem('provirpanel-token', r.data.token)
+        window.dispatchEvent(new CustomEvent('provirpanel-auth', { detail: { authenticated: true } }))
         navigate('/')
         return
       }
 
       if (mfaRequired) {
-        const response = await api.post('/auth/mfa/confirm', {
-          token: mfaCode,
-          mfaToken
-        })
-        if (response.data?.token) {
-          localStorage.setItem('provirpanel-token', response.data.token)
-        }
-        window.dispatchEvent(new CustomEvent('provirpanel-auth', {
-          detail: { authenticated: true }
-        }))
+        const r = await api.post('/auth/mfa/confirm', { token: mfaCode, mfaToken })
+        if (r.data?.token) localStorage.setItem('provirpanel-token', r.data.token)
+        window.dispatchEvent(new CustomEvent('provirpanel-auth', { detail: { authenticated: true } }))
         navigate('/')
         return
       }
 
-      const response = await api.post('/auth/login', { username, password })
-      if (response.data?.mfaSetupRequired) {
+      const r = await api.post('/auth/login', { username, password })
+      if (r.data?.mfaSetupRequired) {
         setMfaSetupRequired(true)
-        setMfaSetupToken(response.data.mfaSetupToken || '')
+        setMfaSetupToken(r.data.mfaSetupToken || '')
+        setLoading(false)
         return
       }
-      if (response.data?.mfaRequired) {
+      if (r.data?.mfaRequired) {
         setMfaRequired(true)
-        setMfaToken(response.data.mfaToken || '')
+        setMfaToken(r.data.mfaToken || '')
+        setLoading(false)
         return
       }
-      if (response.data?.token) {
-        localStorage.setItem('provirpanel-token', response.data.token)
-      }
-      window.dispatchEvent(new CustomEvent('provirpanel-auth', {
-        detail: { authenticated: true }
-      }))
+      if (r.data?.token) localStorage.setItem('provirpanel-token', r.data.token)
+      window.dispatchEvent(new CustomEvent('provirpanel-auth', { detail: { authenticated: true } }))
       navigate('/')
-    } catch (err) {
-      if (mfaSetupRequired) {
-        setError('Nao foi possivel configurar o MFA')
-      } else {
-        setError(mfaRequired ? 'Codigo MFA invalido' : 'Credenciais invalidas')
-      }
+    } catch {
+      setError(
+        mfaSetupRequired
+          ? 'Não foi possível configurar o MFA'
+          : mfaRequired
+            ? 'Código MFA inválido'
+            : 'Credenciais inválidas'
+      )
+      setLoading(false)
     }
   }
 
   return (
-    <div className="zeus-shell relative overflow-hidden px-6 py-10">
-      <div className="mx-auto grid min-h-[calc(100vh-5rem)] max-w-7xl items-center gap-8 lg:grid-cols-[1.2fr_0.8fr]">
-        <section className="relative overflow-hidden rounded-[2.5rem] border border-blue-200/60 bg-[linear-gradient(135deg,_rgba(255,255,255,0.92),_rgba(226,238,255,0.8))] p-8 shadow-[0_24px_90px_rgba(22,54,111,0.12)] lg:p-12">
-          <div className="absolute inset-0 bg-[radial-gradient(circle_at_center,_rgba(125,211,252,0.16),_transparent_40%)]" />
-          <div className="relative">
-            <p className="zeus-kicker text-xs font-semibold uppercase">ZeusEngine | Hybrid AI Development Platform</p>
-            <h1 className="zeus-title mt-5 max-w-4xl text-4xl font-bold leading-tight lg:text-6xl">
-              Plataforma hibrida de IA para o desenvolvimento de softwares e negocios.
-            </h1>
-            <p className="mt-6 max-w-2xl text-lg leading-8 text-slate-600">
-              Painel operacional com identidade ZeusEngine para deploy, Docker, rotas, arquivos
-              e governanca de infraestrutura.
-            </p>
+    <div className="relative min-h-screen overflow-hidden bg-[#0b0f1a] text-white">
+      <div className="pointer-events-none absolute inset-0">
+        <div className="absolute inset-0 bg-[radial-gradient(circle_at_15%_20%,rgba(71,107,255,0.26),transparent_24%),radial-gradient(circle_at_80%_18%,rgba(79,174,255,0.18),transparent_20%),radial-gradient(circle_at_55%_80%,rgba(115,74,255,0.16),transparent_26%)]" />
+        <div className="absolute inset-0 opacity-[0.08] [background-image:linear-gradient(rgba(255,255,255,0.08)_1px,transparent_1px),linear-gradient(90deg,rgba(255,255,255,0.05)_1px,transparent_1px)] [background-size:88px_88px]" />
+        <div className="absolute left-[8%] top-[14%] h-72 w-72 rounded-full bg-[#3d63ff]/25 blur-3xl animate-[pulse_12s_ease-in-out_infinite]" />
+        <div className="absolute bottom-[10%] right-[10%] h-80 w-80 rounded-full bg-cyan-400/15 blur-3xl animate-[pulse_14s_ease-in-out_infinite]" />
+      </div>
 
-            <div className="mt-10 rounded-[2rem] border border-white/70 bg-white/60 p-6 shadow-inner shadow-sky-100/70">
-              <div className="flex flex-wrap items-center justify-between gap-6">
-                <div className="flex items-center gap-5">
-                  <div className="flex h-20 w-20 items-center justify-center rounded-[1.75rem] border border-blue-200 bg-white shadow-lg shadow-blue-500/10">
-                    <img src={logoImg} alt="Zeus Engine" className="h-12 w-12 object-contain" />
-                  </div>
-                  <div>
-                    <p className="text-4xl font-black tracking-[0.1em] text-[#16366f]">ZEUS ENGINE</p>
-                    <p className="mt-2 text-xl font-medium text-slate-500">peerless technology</p>
-                  </div>
+      <div className="relative mx-auto flex min-h-screen max-w-[1560px] items-center px-4 py-6 sm:px-6 lg:px-10">
+        <div className="grid w-full items-center gap-8 lg:grid-cols-[1.1fr_0.9fr] xl:gap-12">
+          <section className="order-2 lg:order-1">
+            <div className="mx-auto max-w-[720px] lg:mx-0 lg:min-h-[680px] lg:justify-center">
+              <div className="rounded-[28px] border border-white/10 bg-white/[0.04] p-7 shadow-[0_20px_80px_rgba(6,12,28,0.38)] backdrop-blur-xl sm:p-10 lg:p-12">
+                <img src={logoNameDark} alt="Zeus AI Cloud OS" className="h-12 w-auto object-contain sm:h-14" />
+
+                <div className="mt-10 max-w-[640px] space-y-6">
+                  <p className="text-[11px] font-semibold uppercase tracking-[0.34em] text-blue-200/85">
+                    AI Cloud OS
+                  </p>
+                  <h1 className="max-w-[620px] text-4xl font-semibold leading-[1.02] tracking-[-0.04em] text-white sm:text-5xl xl:text-[4.25rem]">
+                    Controle sua infraestrutura em uma única plataforma
+                  </h1>
+                  <p className="max-w-[620px] text-base leading-8 text-slate-300 sm:text-lg">
+                    Orquestre aplicações, serviços, storage, backups e observabilidade com segurança e operação em tempo real.
+                  </p>
                 </div>
-                <div className="rounded-[1.5rem] border border-sky-200 bg-[linear-gradient(135deg,_rgba(125,211,252,0.2),_rgba(255,255,255,0.8))] p-4">
-                  <Zap className="h-10 w-10 text-blue-700" />
+
+                <div className="mt-10 grid gap-3 sm:grid-cols-3">
+                  {highlights.map(({ icon: Icon, label, desc }) => (
+                    <div
+                      key={label}
+                      className="rounded-2xl border border-white/8 bg-white/[0.03] p-4 transition-all duration-300 hover:border-blue-400/30 hover:bg-white/[0.05]"
+                    >
+                      <div className="mb-4 flex h-11 w-11 items-center justify-center rounded-xl border border-white/10 bg-gradient-to-br from-blue-500/20 to-violet-500/10 shadow-[0_0_24px_rgba(61,99,255,0.18)]">
+                        <Icon size={18} className="text-blue-200" />
+                      </div>
+                      <p className="text-sm font-semibold text-white">{label}</p>
+                      <p className="mt-2 text-sm leading-6 text-slate-400">{desc}</p>
+                    </div>
+                  ))}
                 </div>
               </div>
             </div>
-          </div>
-        </section>
+          </section>
 
-        <section className="zeus-panel relative rounded-[2.25rem] p-8 lg:p-10">
-          <div className="flex items-center gap-3">
-            <div className="flex h-12 w-12 items-center justify-center rounded-2xl bg-[linear-gradient(135deg,_#16366f,_#3b82f6)] text-white shadow-lg shadow-blue-500/20">
-              <ShieldCheck className="h-6 w-6" />
-            </div>
-            <div>
-              <p className="zeus-kicker text-[10px] font-semibold uppercase">Acesso seguro</p>
-              <h2 className="mt-1 text-2xl font-bold text-slate-900">Entrar no painel</h2>
-            </div>
-          </div>
+          <section className="order-1 lg:order-2">
+            <div className="mx-auto w-full max-w-[420px]">
+              <div className="rounded-[20px] border border-white/10 bg-[rgba(10,14,24,0.72)] p-5 shadow-[0_24px_80px_rgba(0,0,0,0.45)] backdrop-blur-2xl sm:p-8">
+                <div className="mb-8 lg:hidden">
+                  <img src={logoNameDark} alt="Zeus AI Cloud OS" className="mx-auto h-12 w-auto object-contain sm:h-14" />
+                </div>
 
-          <p className="mt-4 text-sm leading-6 text-slate-600">
-            Autenticacao unificada para operacao, observabilidade e administracao da plataforma.
-          </p>
+                <div className="mb-8">
+                  <p className="text-[11px] font-semibold uppercase tracking-[0.28em] text-blue-200/80">
+                    Secure Access
+                  </p>
+                  <h2 className="mt-3 text-3xl font-semibold tracking-[-0.03em] text-white">
+                    {mfaSetupRequired ? 'Configurar MFA' : mfaRequired ? 'Verificação MFA' : 'Acesse o AI Cloud OS'}
+                  </h2>
+                  <p className="mt-3 text-sm leading-7 text-slate-300">
+                    {mfaRequired
+                      ? 'Insira o código do autenticador para continuar.'
+                      : 'Controle total da sua infraestrutura, aplicações e dados.'}
+                  </p>
+                </div>
 
-          <form className="mt-8 space-y-4" onSubmit={handleSubmit}>
-            <input
-              className="w-full rounded-2xl border border-blue-100 bg-white px-4 py-3.5 text-sm text-slate-900 outline-none transition focus:border-blue-400"
-              placeholder="Usuario"
-              value={username}
-              onChange={(event) => setUsername(event.target.value)}
-              autoComplete="username"
-              disabled={mfaRequired || mfaSetupRequired}
-            />
-            <input
-              className="w-full rounded-2xl border border-blue-100 bg-white px-4 py-3.5 text-sm text-slate-900 outline-none transition focus:border-blue-400"
-              type="password"
-              placeholder="Senha"
-              value={password}
-              onChange={(event) => setPassword(event.target.value)}
-              autoComplete="current-password"
-              disabled={mfaRequired || mfaSetupRequired}
-            />
+                <form onSubmit={handleSubmit} className="space-y-5">
+                  {!mfaRequired && !mfaSetupRequired && (
+                    <>
+                      <label className="block space-y-2">
+                        <span className="text-sm font-medium text-slate-200">Usuário ou email</span>
+                        <input
+                          className="w-full rounded-2xl border border-white/10 bg-white/5 px-4 py-3.5 text-base text-white outline-none transition-all placeholder:text-slate-500 focus:border-blue-400/60 focus:bg-white/[0.07] focus:shadow-[0_0_0_4px_rgba(64,120,255,0.12)]"
+                          placeholder="Digite seu acesso"
+                          value={username}
+                          onChange={(e) => setUsername(e.target.value)}
+                          autoComplete="username"
+                          autoFocus
+                        />
+                      </label>
 
-            {mfaSetupRequired && (
-              <>
-                {!mfaSetup ? (
-                  <div className="rounded-2xl border border-blue-100 bg-blue-50/80 px-4 py-3 text-xs text-slate-700">
-                    MFA obrigatorio. Continue para gerar o QR Code.
-                  </div>
-                ) : (
-                  <>
-                    {mfaSetup.qr && (
-                      <img src={mfaSetup.qr} alt="QR Code MFA" className="mx-auto h-36 w-36 rounded-2xl bg-white p-2" />
-                    )}
-                    <div className="rounded-2xl border border-blue-100 bg-white px-4 py-3 text-xs text-slate-700">
-                      Codigo manual: <span className="mono text-blue-700">{mfaSetup.secret}</span>
+                      <label className="block space-y-2">
+                        <span className="text-sm font-medium text-slate-200">Senha</span>
+                        <div className="relative">
+                          <input
+                            className="w-full rounded-2xl border border-white/10 bg-white/5 px-4 py-3.5 pr-12 text-base text-white outline-none transition-all placeholder:text-slate-500 focus:border-blue-400/60 focus:bg-white/[0.07] focus:shadow-[0_0_0_4px_rgba(64,120,255,0.12)]"
+                            type={showPassword ? 'text' : 'password'}
+                            placeholder="Digite sua senha"
+                            value={password}
+                            onChange={(e) => setPassword(e.target.value)}
+                            autoComplete="current-password"
+                          />
+                          <button
+                            type="button"
+                            onClick={() => setShowPassword((v) => !v)}
+                            className="absolute right-3 top-1/2 -translate-y-1/2 rounded-lg p-2 text-slate-400 transition-colors hover:text-white"
+                            aria-label={showPassword ? 'Ocultar senha' : 'Mostrar senha'}
+                          >
+                            {showPassword ? <EyeOff size={18} /> : <Eye size={18} />}
+                          </button>
+                        </div>
+                      </label>
+                    </>
+                  )}
+
+                  {mfaSetupRequired && (
+                    <>
+                      {!mfaSetup ? (
+                        <div className="rounded-2xl border border-blue-400/20 bg-blue-500/10 px-4 py-3 text-sm text-blue-100">
+                          MFA obrigatório. Continue para gerar o QR Code do autenticador.
+                        </div>
+                      ) : (
+                        <>
+                          {mfaSetup.qr && (
+                            <div className="flex justify-center rounded-2xl border border-white/10 bg-white p-4">
+                              <img src={mfaSetup.qr} alt="QR Code MFA" className="h-40 w-40" />
+                            </div>
+                          )}
+                          <div className="rounded-2xl border border-white/10 bg-white/5 px-4 py-3">
+                            <p className="mb-1 text-xs text-slate-400">Código manual</p>
+                            <p className="mono break-all text-sm text-blue-200">{mfaSetup.secret}</p>
+                          </div>
+                        </>
+                      )}
+                    </>
+                  )}
+
+                  {(mfaRequired || (mfaSetupRequired && mfaSetup)) && (
+                    <label className="block space-y-2">
+                      <span className="text-sm font-medium text-slate-200">Código de autenticação</span>
+                      <input
+                        className="mono w-full rounded-2xl border border-white/10 bg-white/5 px-4 py-3.5 text-base text-white outline-none transition-all placeholder:text-slate-500 focus:border-blue-400/60 focus:bg-white/[0.07] focus:shadow-[0_0_0_4px_rgba(64,120,255,0.12)]"
+                        placeholder="000000"
+                        value={mfaCode}
+                        onChange={(e) => setMfaCode(e.target.value)}
+                        autoComplete="one-time-code"
+                        maxLength={6}
+                        autoFocus
+                      />
+                    </label>
+                  )}
+
+                  {!mfaRequired && !mfaSetupRequired && (
+                    <div className="flex items-center justify-between gap-4 text-sm">
+                      <label className="flex items-center gap-3 text-slate-300">
+                        <input
+                          type="checkbox"
+                          checked={rememberMe}
+                          onChange={(e) => setRememberMe(e.target.checked)}
+                          className="h-4 w-4 rounded border-white/20 bg-white/5 text-blue-500 focus:ring-blue-400/30"
+                        />
+                        <span>Manter conectado</span>
+                      </label>
+
+                      <button type="button" className="text-slate-300 transition-colors hover:text-white">
+                        Esqueceu sua senha?
+                      </button>
                     </div>
-                  </>
-                )}
-              </>
-            )}
+                  )}
 
-            {(mfaRequired || mfaSetupRequired) && (
-              <input
-                className="w-full rounded-2xl border border-blue-100 bg-white px-4 py-3.5 text-sm text-slate-900 outline-none transition focus:border-blue-400"
-                placeholder="Codigo MFA (6 digitos)"
-                value={mfaCode}
-                onChange={(event) => setMfaCode(event.target.value)}
-                autoComplete="one-time-code"
-              />
-            )}
+                  {error && <p className="text-sm text-red-300">{error}</p>}
 
-            {error && <p className="text-xs text-rose-600">{error}</p>}
-
-            <button className="w-full rounded-2xl bg-[linear-gradient(135deg,_#16366f,_#2563eb)] py-3.5 text-sm font-semibold tracking-[0.08em] text-white transition hover:brightness-110">
-              {mfaSetupRequired ? 'CONFIGURAR MFA' : mfaRequired ? 'VALIDAR MFA' : 'ENTRAR'}
-            </button>
-          </form>
-        </section>
+                  <button
+                    type="submit"
+                    disabled={loading}
+                    className="group flex w-full items-center justify-center gap-2 rounded-2xl bg-gradient-to-r from-blue-600 via-indigo-500 to-violet-500 px-4 py-3.5 text-base font-semibold text-white transition-all duration-300 hover:scale-[1.01] hover:shadow-[0_18px_40px_rgba(77,99,255,0.35)] disabled:cursor-not-allowed disabled:opacity-60"
+                  >
+                    <span>{loading ? 'Aguarde...' : mfaSetupRequired ? 'Configurar MFA' : mfaRequired ? 'Verificar acesso' : 'Entrar no painel'}</span>
+                    {!loading && !mfaRequired && !mfaSetupRequired && <ArrowRight size={18} className="transition-transform duration-300 group-hover:translate-x-0.5" />}
+                  </button>
+                </form>
+              </div>
+            </div>
+          </section>
+        </div>
       </div>
     </div>
   )

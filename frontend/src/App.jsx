@@ -14,6 +14,7 @@ import ProvirGateway from './components/ProvirGateway.jsx'
 import SecurityAuditPanel from './components/SecurityAuditPanel.jsx'
 import NginxPanel from './components/NginxPanel.jsx'
 import NginxVisualManager from './components/NginxVisualManager.jsx'
+import StacksPanel from './components/StacksPanel.jsx'
 import api from './services/api.js'
 
 const App = () => {
@@ -36,22 +37,25 @@ const App = () => {
   }, [])
 
   useEffect(() => {
-    let cleanup = null
-    const handleAuthChange = (event) => {
-      if (event?.detail?.authenticated === false) {
-        setAuthState({ loading: false, authenticated: false })
-        return
-      }
-      if (event?.detail?.authenticated === true) {
-        setAuthState((prev) => ({ ...prev, loading: true }))
-      }
-      cleanup = refreshAuth()
-    }
-    handleAuthChange()
-    window.addEventListener('provirpanel-auth', handleAuthChange)
+    const stop = refreshAuth()
     return () => {
-      if (cleanup) cleanup()
-      window.removeEventListener('provirpanel-auth', handleAuthChange)
+      if (typeof stop === 'function') stop()
+    }
+  }, [refreshAuth])
+
+  useEffect(() => {
+    const handler = (event) => {
+      if (event?.detail?.authenticated === true) {
+        setAuthState({ loading: false, authenticated: true })
+      } else if (event?.detail?.authenticated === false) {
+        setAuthState({ loading: false, authenticated: false })
+      } else {
+        refreshAuth()
+      }
+    }
+    window.addEventListener('provirpanel-auth', handler)
+    return () => {
+      window.removeEventListener('provirpanel-auth', handler)
     }
   }, [refreshAuth])
 
@@ -103,6 +107,7 @@ const App = () => {
           }
         >
           <Route index element={<Dashboard />} />
+          <Route path="stacks" element={<StacksPanel />} />
           <Route path="terminal" element={<Terminal />} />
           <Route path="docker" element={<DockerPanel />} />
           <Route path="nginx" element={<NginxVisualManager />} />

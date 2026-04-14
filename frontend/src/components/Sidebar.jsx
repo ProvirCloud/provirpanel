@@ -11,114 +11,116 @@ import {
   Mail,
   Route,
   Shield,
-  Cpu
+  Layers,
+  ChevronRight
 } from 'lucide-react'
-import logoImg from '../assets/logo.png'
+import logoIcon from '../assets/images/logoicon.webp'
+import logoName from '../assets/images/logoname.webp'
 
 const sections = [
   {
-    title: 'Operacao',
+    label: 'Operação',
     items: [
-      { to: '/', label: 'Dashboard', icon: Activity, end: true },
-      { to: '/terminal', label: 'Terminal', icon: Terminal },
-      { to: '/docker', label: 'Docker', icon: Boxes },
-      { to: '/files', label: 'Arquivos', icon: Files },
-      { to: '/logs', label: 'Logs', icon: FileText }
+      { to: '/',        label: 'Dashboard',    icon: Activity, end: true },
+      { to: '/stacks',  label: 'Infra Canvas', icon: Layers },
+      { to: '/docker',  label: 'Docker',        icon: Boxes },
+      { to: '/terminal',label: 'Terminal',      icon: Terminal },
+      { to: '/files',   label: 'Arquivos',      icon: Files },
+      { to: '/logs',    label: 'Logs',          icon: FileText },
     ]
   },
   {
-    title: 'Infraestrutura',
+    label: 'Infraestrutura',
     items: [
-      { to: '/nginx', label: 'Nginx Manager', icon: Server },
-      { to: '/domains', label: 'Rotas', icon: Globe },
-      { to: '/gateway', label: 'Gateway', icon: Route },
-      { to: '/security', label: 'Auditoria', icon: Shield }
+      { to: '/nginx',   label: 'Nginx Manager', icon: Server },
+      { to: '/domains', label: 'Rotas',         icon: Globe },
+      { to: '/gateway', label: 'Gateway',        icon: Route },
+      { to: '/security',label: 'Auditoria',     icon: Shield },
     ]
   },
   {
-    title: 'Workspace',
+    label: 'Workspace',
     items: [
-      { to: '/users', label: 'Usuarios', icon: Users },
-      { to: '/email', label: 'Email', icon: Mail }
+      { to: '/users',   label: 'Usuários', icon: Users },
+      { to: '/email',   label: 'E-mail',   icon: Mail },
     ]
   }
 ]
 
 const Sidebar = () => {
   return (
-    <aside className="zeus-panel-dark sticky top-4 flex h-[calc(100vh-2rem)] w-72 shrink-0 flex-col gap-6 overflow-hidden rounded-[2rem] px-5 py-5">
-      <div className="absolute inset-x-0 top-0 h-40 bg-[radial-gradient(circle_at_top,_rgba(125,211,252,0.16),_transparent_60%)]" />
+    <aside className="zeus-sidebar flex h-screen w-60 shrink-0 flex-col overflow-hidden" style={{ position: 'sticky', top: 0 }}>
 
-      <div className="relative rounded-[1.6rem] border border-white/10 bg-white/[0.045] p-4">
+      {/* Brand */}
+      <div className="px-4 py-5" style={{ borderBottom: '1px solid var(--border-subtle)' }}>
         <div className="flex items-center gap-3">
-          <div className="flex h-14 w-14 items-center justify-center rounded-2xl border border-white/10 bg-white/10 shadow-lg shadow-slate-950/20">
-            <img src={logoImg} alt="Zeus Engine" className="h-9 w-9 object-contain" />
-          </div>
-          <div className="min-w-0">
-            <p className="truncate text-[11px] font-semibold uppercase tracking-[0.34em] text-slate-300">
-              ZeusEngine
-            </p>
-            <h1 className="text-lg font-bold tracking-[0.08em] text-white">Hybrid AI Panel</h1>
-          </div>
+        <div className="flex h-9 w-9 shrink-0 items-center justify-center rounded-lg"
+          style={{ background: 'linear-gradient(145deg, rgba(56,162,255,0.20), rgba(56,162,255,0.08))', border: '1px solid rgba(99,185,255,0.36)', boxShadow: 'inset 0 1px 0 rgba(178,224,255,0.28), 0 0 16px rgba(56,162,255,0.24)' }}>
+          <img src={logoIcon} alt="Zeus Cloud" className="h-5 w-5 object-contain" />
         </div>
-
-        <div className="mt-5 rounded-[1.35rem] border border-white/10 bg-[linear-gradient(135deg,_rgba(37,99,235,0.18),_rgba(15,23,42,0.05))] p-4">
-          <div className="flex items-start justify-between gap-3">
-            <div>
-              <p className="text-[10px] uppercase tracking-[0.34em] text-slate-400">Nucleo</p>
-              <p className="mt-2 text-2xl font-semibold text-white">Zeus</p>
-              <p className="mt-1 text-xs leading-5 text-slate-300">
-                Plataforma hibrida de IA para operacao, deploy e infraestrutura.
-              </p>
-            </div>
-            <div className="rounded-2xl border border-white/10 bg-slate-950/35 p-2 text-blue-200">
-              <Cpu className="h-5 w-5" />
-            </div>
-          </div>
+        <div className="min-w-0">
+          <img src={logoName} alt="Zeus Cloud" className="h-6 w-auto object-contain" />
+          <p className="mt-1 truncate text-[10px]" style={{ color: 'var(--text-secondary)' }}>
+            Hybrid AI Autonomous Platform
+          </p>
+        </div>
         </div>
       </div>
 
-      <div className="relative flex-1 space-y-5 overflow-y-auto pr-1">
+      {/* Navigation */}
+      <nav className="flex-1 overflow-y-auto px-3 py-4 space-y-5">
         {sections.map((section) => (
-          <div key={section.title}>
-            <p className="px-2 text-[10px] font-semibold uppercase tracking-[0.34em] text-slate-400">
-              {section.title}
-            </p>
-            <nav className="mt-2 space-y-1.5">
+          <div key={section.label}>
+            <p className="zeus-section-label mb-2 px-2">{section.label}</p>
+            <ul className="space-y-0.5">
               {section.items.map(({ to, label, icon: Icon, end }) => (
-                <NavLink
-                  key={to}
-                  to={to}
-                  end={end}
-                  className={({ isActive }) =>
-                    `group flex items-center gap-3 rounded-2xl px-3.5 py-3 text-sm font-medium transition ${
-                      isActive
-                        ? 'border border-blue-300/20 bg-[linear-gradient(135deg,_rgba(37,99,235,0.36),_rgba(29,78,216,0.2))] text-white shadow-lg shadow-blue-900/20'
-                        : 'border border-transparent text-slate-300 hover:border-white/8 hover:bg-white/[0.055] hover:text-white'
-                    }`
-                  }
-                >
-                  <span className="flex h-10 w-10 items-center justify-center rounded-xl border border-white/8 bg-white/5 transition group-hover:border-blue-300/20 group-hover:bg-blue-400/10">
-                    <Icon className="h-4 w-4" />
-                  </span>
-                  <span>{label}</span>
-                </NavLink>
+                <li key={to}>
+                  <NavLink
+                    to={to}
+                    end={end}
+                    className={({ isActive }) =>
+                      `group flex items-center gap-3 rounded-lg px-2.5 py-2 text-sm transition-all ${
+                        isActive
+                          ? 'font-medium'
+                          : 'font-normal'
+                      }`
+                    }
+                    style={({ isActive }) => isActive
+                      ? { background: 'linear-gradient(135deg, rgba(56,162,255,0.20), rgba(56,162,255,0.08))', color: 'var(--accent-soft)', border: '1px solid rgba(99,185,255,0.36)', boxShadow: 'inset 0 1px 0 rgba(179,224,255,0.22)' }
+                      : { background: 'transparent', color: 'var(--text-secondary)', border: '1px solid transparent' }
+                    }
+                  >
+                    {({ isActive }) => (
+                      <>
+                        <Icon
+                          size={15}
+                          style={{ color: isActive ? 'var(--accent)' : 'var(--text-muted)', flexShrink: 0 }}
+                        />
+                        <span className="flex-1 truncate">{label}</span>
+                        {isActive && (
+                          <ChevronRight size={12} style={{ color: 'var(--accent)', opacity: 0.6 }} />
+                        )}
+                      </>
+                    )}
+                  </NavLink>
+                </li>
               ))}
-            </nav>
+            </ul>
           </div>
         ))}
-      </div>
+      </nav>
 
-      <div className="relative rounded-[1.4rem] border border-white/10 bg-white/[0.045] p-4">
-        <p className="text-[10px] uppercase tracking-[0.34em] text-slate-400">Status</p>
-        <div className="mt-3 flex items-center justify-between gap-3">
-          <div>
-            <p className="text-sm font-semibold text-white">Peerless technology</p>
-            <p className="mt-1 text-xs text-slate-300">Infraestrutura pronta para software e negocios.</p>
-          </div>
-          <span className="inline-flex h-3 w-3 rounded-full bg-emerald-400 shadow-[0_0_18px_rgba(74,222,128,0.8)]" />
+      {/* Footer status */}
+      <div className="px-4 py-4" style={{ borderTop: '1px solid var(--border-subtle)' }}>
+        <div className="flex items-center gap-2 rounded-lg border px-2.5 py-2" style={{ borderColor: 'rgba(99,185,255,0.22)', background: 'rgba(14,33,64,0.42)' }}>
+          <span
+            className="h-2 w-2 rounded-full"
+            style={{ backgroundColor: '#48d4ff', boxShadow: '0 0 10px rgba(72,212,255,0.8)' }}
+          />
+          <span className="text-xs" style={{ color: 'var(--text-secondary)' }}>Sistema operacional</span>
         </div>
       </div>
+
     </aside>
   )
 }
