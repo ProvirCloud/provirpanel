@@ -16,8 +16,8 @@ type SidebarSectionProps = {
 
 const SidebarSection = ({ label, items, onNavigate }: SidebarSectionProps) => {
   return (
-    <section className="space-y-2">
-      <p className="px-3 text-[11px] font-semibold uppercase tracking-[0.24em] text-slate-500">{label}</p>
+    <section className="space-y-2.5">
+      <p className="px-3 text-[11px] font-semibold uppercase tracking-[0.26em] text-[var(--color-text-soft)]">{label}</p>
       <div className="space-y-1">
         {items.map((item) => (
           <SidebarItem key={item.to} {...item} onClick={onNavigate} />

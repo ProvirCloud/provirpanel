@@ -1,8 +1,12 @@
 import { useEffect, useMemo, useState } from 'react'
-import { Cpu, HardDrive, MemoryStick, RadioTower, ServerCog, Activity } from 'lucide-react'
-import { PieChart, Pie, ResponsiveContainer, Cell } from 'recharts'
+import { Activity, Cpu, HardDrive, MemoryStick, RadioTower, ServerCog } from 'lucide-react'
+import { Cell, Pie, PieChart, ResponsiveContainer } from 'recharts'
 import { createMetricsSocket } from '../services/socket.js'
 import api from '../services/api.js'
+import MetricsRow from './dashboard/MetricsRow'
+import PageHeader from './layout/PageHeader'
+import Card from './ui/Card'
+import SectionContainer from './ui/SectionContainer'
 
 const formatBytes = (bytes) => {
   if (!bytes) return '0 B'
@@ -16,97 +20,47 @@ const percent = (used, total) => {
   return Number(((used / total) * 100).toFixed(1))
 }
 
-const ringData = (v) => [{ value: v }, { value: 100 - v }]
+const ringData = (value) => [{ value }, { value: 100 - value }]
 
-/* ── Ring chart ──────────────────────────────────────────────────────────────── */
-const RingChart = ({ value, label, icon: Icon, accentColor }) => {
-  const fill = accentColor || 'var(--accent)'
-  const track = 'rgba(255,255,255,0.06)'
-
-  return (
-    <div
-      className="rounded-xl p-5"
-      style={{ background: 'var(--bg-card)', border: '1px solid var(--border-default)' }}
-    >
-      <div className="flex items-start justify-between gap-3">
-        <div>
-          <p className="zeus-section-label">{label}</p>
-          <p className="mt-2 text-3xl font-bold" style={{ color: 'var(--text-primary)' }}>
-            {value}
-            <span className="text-lg font-normal" style={{ color: 'var(--text-muted)' }}>%</span>
-          </p>
-        </div>
-        <div
-          className="flex h-9 w-9 items-center justify-center rounded-lg"
-          style={{ background: `${fill}18`, border: `1px solid ${fill}30` }}
-        >
-          <Icon size={16} style={{ color: fill }} />
-        </div>
+const RingChart = ({ value, label, icon: Icon, accentColor }) => (
+  <Card className="p-5">
+    <div className="flex items-start justify-between gap-3">
+      <div>
+        <p className="text-[11px] font-semibold uppercase tracking-[0.2em] text-[var(--color-text-soft)]">{label}</p>
+        <p className="mt-2 text-3xl font-bold text-[var(--color-text)]">
+          {value}
+          <span className="ml-1 text-lg font-normal text-[var(--color-text-soft)]">%</span>
+        </p>
       </div>
-
-      <div className="mt-4 h-28">
-        <ResponsiveContainer width="100%" height="100%">
-          <PieChart>
-            <Pie
-              data={ringData(value)}
-              innerRadius={38}
-              outerRadius={50}
-              paddingAngle={2}
-              dataKey="value"
-              stroke="none"
-              startAngle={90}
-              endAngle={-270}
-            >
-              <Cell fill={fill} />
-              <Cell fill={track} />
-            </Pie>
-          </PieChart>
-        </ResponsiveContainer>
-      </div>
-
-      {/* Mini bar */}
-      <div className="mt-2 h-1 rounded-full overflow-hidden" style={{ background: 'var(--border-subtle)' }}>
-        <div
-          className="h-full rounded-full transition-all duration-700"
-          style={{ width: `${value}%`, background: fill }}
-        />
+      <div className="flex h-10 w-10 items-center justify-center rounded-[14px] border" style={{ borderColor: 'var(--color-border)', background: 'var(--color-brand-soft)', color: accentColor }}>
+        <Icon size={16} />
       </div>
     </div>
-  )
-}
 
-/* ── Stat card ────────────────────────────────────────────────────────────────── */
-const StatCard = ({ label, value, sub, icon: Icon, accent }) => (
-  <div
-    className="rounded-xl p-4"
-    style={{ background: 'var(--bg-card)', border: '1px solid var(--border-default)' }}
-  >
-    <div className="flex items-start justify-between gap-2">
-      <div className="min-w-0">
-        <p className="zeus-section-label">{label}</p>
-        <p className="mt-2 text-2xl font-bold truncate" style={{ color: 'var(--text-primary)' }}>{value}</p>
-        {sub && <p className="mt-1 text-xs truncate" style={{ color: 'var(--text-muted)' }}>{sub}</p>}
-      </div>
-      {Icon && (
-        <div
-          className="flex h-8 w-8 shrink-0 items-center justify-center rounded-lg"
-          style={{ background: accent ? `${accent}18` : 'var(--accent-dim)', border: `1px solid ${accent || 'var(--accent)'}30` }}
-        >
-          <Icon size={15} style={{ color: accent || 'var(--accent)' }} />
-        </div>
-      )}
+    <div className="mt-4 h-28">
+      <ResponsiveContainer width="100%" height="100%">
+        <PieChart>
+          <Pie data={ringData(value)} innerRadius={38} outerRadius={50} paddingAngle={2} dataKey="value" stroke="none" startAngle={90} endAngle={-270}>
+            <Cell fill={accentColor} />
+            <Cell fill="rgba(148, 163, 184, 0.14)" />
+          </Pie>
+        </PieChart>
+      </ResponsiveContainer>
     </div>
-  </div>
+
+    <div className="mt-2 h-1 overflow-hidden rounded-full bg-[var(--color-border-subtle)]">
+      <div className="h-full rounded-full transition-all duration-700" style={{ width: `${value}%`, background: accentColor }} />
+    </div>
+  </Card>
 )
 
-/* ── Dashboard ────────────────────────────────────────────────────────────────── */
 const Dashboard = () => {
   const [metrics, setMetrics] = useState(null)
   const [socketStatus, setSocketStatus] = useState('disconnected')
   const socket = useMemo(() => createMetricsSocket(), [])
 
   useEffect(() => {
-    if (!socket) return
+    if (!socket) return undefined
     socket.on('metrics', setMetrics)
     socket.on('connect', () => setSocketStatus('connected'))
     socket.on('disconnect', () => setSocketStatus('disconnected'))
@@ -120,219 +74,141 @@ const Dashboard = () => {
   useEffect(() => {
     let active = true
     const load = async () => {
-      try { const r = await api.get('/api/metrics'); if (active) setMetrics(r.data) } catch { /* ignore */ }
+      try {
+        const response = await api.get('/api/metrics')
+        if (active) setMetrics(response.data)
+      } catch {
+        // ignore
+      }
     }
     load()
-    const t = setInterval(() => { if (socketStatus !== 'connected') load() }, 10000)
-    return () => { active = false; clearInterval(t) }
+    const timer = setInterval(() => {
+      if (socketStatus !== 'connected') load()
+    }, 10000)
+    return () => {
+      active = false
+      clearInterval(timer)
+    }
   }, [socketStatus])
 
-  const cpu         = metrics?.cpu ? Number(metrics.cpu.toFixed(1)) : 0
-  const memUsed     = metrics?.memory?.used || 0
-  const memTotal    = metrics?.memory?.total || 0
-  const diskUsed    = metrics?.disk?.used || 0
-  const diskTotal   = metrics?.disk?.total || 0
-  const ramPercent  = percent(memUsed, memTotal)
+  const cpu = metrics?.cpu ? Number(metrics.cpu.toFixed(1)) : 0
+  const memUsed = metrics?.memory?.used || 0
+  const memTotal = metrics?.memory?.total || 0
+  const diskUsed = metrics?.disk?.used || 0
+  const diskTotal = metrics?.disk?.total || 0
+  const ramPercent = percent(memUsed, memTotal)
   const diskPercent = percent(diskUsed, diskTotal)
-  const processes   = metrics?.processes || []
-  const isLive      = socketStatus === 'connected'
+  const processes = metrics?.processes || []
+  const isLive = socketStatus === 'connected'
+
+  const metricCards = [
+    {
+      label: 'Host',
+      value: metrics?.system?.hostname || '—',
+      hint: metrics?.system?.uptime ? `Uptime ${Math.floor(metrics.system.uptime / 3600)}h` : 'Coletando dados...',
+    },
+    {
+      label: 'Containers ativos',
+      value: metrics?.containersRunning ?? '—',
+      hint: 'Em execução agora',
+    },
+    {
+      label: 'RAM total',
+      value: formatBytes(memTotal),
+      hint: `${formatBytes(memUsed)} em uso`,
+    },
+    {
+      label: 'Disco total',
+      value: formatBytes(diskTotal),
+      hint: `${formatBytes(diskUsed)} utilizado`,
+    },
+  ]
 
   return (
-    <div className="space-y-5">
-      <div
-        className="zeus-tech-surface rounded-xl px-6 py-5 flex items-center justify-between gap-4"
-        style={{ background: 'var(--bg-card)', border: '1px solid var(--border-default)' }}
-      >
-        <div>
-          <p className="zeus-heading-kicker">Operations Center</p>
-          <h1 className="zeus-heading-title" style={{ fontSize: '1.55rem' }}>
-            Dashboard
-          </h1>
-          <p className="zeus-heading-subtitle">
-            Monitoramento em tempo real — Docker, Nginx, storage e segurança.
-          </p>
-        </div>
-        <div className="flex items-center gap-2 shrink-0">
-          <span
-            className="h-2 w-2 rounded-full"
-            style={{
-              background: isLive ? 'var(--success)' : 'var(--text-muted)',
-              boxShadow: isLive ? '0 0 8px rgba(34,197,94,0.6)' : 'none'
-            }}
-          />
-          <span className="text-xs" style={{ color: isLive ? 'var(--success)' : 'var(--text-muted)' }}>
+    <div className="space-y-8">
+      <PageHeader
+        title="Dashboard"
+        subtitle="Visão operacional da plataforma Zeus Cloud com telemetria de host, runtime e capacidade."
+        actions={
+          <div className="inline-flex items-center gap-2 rounded-full border px-3 py-1.5 text-xs font-medium" style={{ borderColor: isLive ? 'color-mix(in srgb, var(--color-success) 26%, transparent)' : 'var(--color-border)', background: isLive ? 'var(--color-success-soft)' : 'var(--color-surface-2)', color: isLive ? 'var(--color-success)' : 'var(--color-text-muted)' }}>
+            <span className="h-2 w-2 rounded-full" style={{ background: isLive ? 'var(--color-success)' : 'var(--color-text-soft)' }} />
             {isLive ? 'Telemetria ao vivo' : 'Polling ativo'}
-          </span>
-        </div>
-      </div>
+          </div>
+        }
+      />
 
-      {/* ── Stat cards ────────────────────────────────────────────────────────── */}
-      <div className="grid grid-cols-2 gap-4 xl:grid-cols-4">
-        <StatCard
-          label="Host"
-          value={metrics?.system?.hostname || '—'}
-          sub={metrics?.system?.uptime ? `Uptime ${Math.floor(metrics.system.uptime / 3600)}h` : 'Coletando dados...'}
-          icon={ServerCog}
-        />
-        <StatCard
-          label="Containers ativos"
-          value={metrics?.containersRunning ?? '—'}
-          sub="Em execução agora"
-          icon={Activity}
-          accent="#22c55e"
-        />
-        <StatCard
-          label="RAM total"
-          value={formatBytes(memTotal)}
-          sub={`${formatBytes(memUsed)} em uso`}
-          icon={MemoryStick}
-          accent="#a78bfa"
-        />
-        <StatCard
-          label="Disco total"
-          value={formatBytes(diskTotal)}
-          sub={`${formatBytes(diskUsed)} utilizado`}
-          icon={HardDrive}
-          accent="#f59e0b"
-        />
-      </div>
+      <MetricsRow metrics={metricCards} />
 
-      {/* ── Ring charts ───────────────────────────────────────────────────────── */}
       <div className="grid gap-4 xl:grid-cols-3">
-        <RingChart value={cpu}         label="CPU"   icon={Cpu}        accentColor="#4d7ef7" />
-        <RingChart value={ramPercent}  label="RAM"   icon={MemoryStick} accentColor="#a78bfa" />
-        <RingChart value={diskPercent} label="Disco" icon={HardDrive}  accentColor="#f59e0b" />
+        <RingChart value={cpu} label="CPU" icon={Cpu} accentColor="var(--color-brand)" />
+        <RingChart value={ramPercent} label="RAM" icon={MemoryStick} accentColor="var(--zeus-electric-400)" />
+        <RingChart value={diskPercent} label="Disco" icon={HardDrive} accentColor="var(--color-warning)" />
       </div>
 
-      {/* ── Tabela de processos + cards laterais ──────────────────────────────── */}
-      <div className="grid gap-4 xl:grid-cols-[1fr_280px]">
-
-        {/* Processos */}
-        <div
-          className="rounded-xl overflow-hidden"
-          style={{ background: 'var(--bg-card)', border: '1px solid var(--border-default)' }}
-        >
-          <div className="flex items-center justify-between px-5 py-4" style={{ borderBottom: '1px solid var(--border-subtle)' }}>
-            <div>
-              <p className="zeus-section-label">Processos</p>
-              <p className="mt-0.5 text-sm font-semibold" style={{ color: 'var(--text-primary)' }}>
-                Top 5 por CPU e RAM
-              </p>
-            </div>
-            <span
-              className="rounded-md px-2 py-1 text-xs"
-              style={{
-                background: isLive ? 'rgba(34,197,94,0.10)' : 'var(--bg-elevated)',
-                border: `1px solid ${isLive ? 'rgba(34,197,94,0.25)' : 'var(--border-default)'}`,
-                color: isLive ? 'var(--success)' : 'var(--text-muted)'
-              }}
-            >
-              {isLive ? 'Ao vivo' : 'Polling'}
-            </span>
-          </div>
-
-          <table className="w-full text-sm">
-            <thead>
-              <tr style={{ borderBottom: '1px solid var(--border-subtle)' }}>
-                {['Processo', 'CPU %', 'RAM %'].map(h => (
-                  <th key={h} className="px-5 py-3 text-left text-xs font-semibold"
-                    style={{ color: 'var(--text-muted)' }}>
-                    {h}
-                  </th>
-                ))}
-              </tr>
-            </thead>
-            <tbody>
-              {processes.map((proc, i) => (
-                <tr
-                  key={proc.pid}
-                  style={{ borderBottom: i < processes.length - 1 ? '1px solid var(--border-subtle)' : 'none' }}
-                >
-                  <td className="px-5 py-3 font-mono text-xs" style={{ color: 'var(--text-secondary)' }}>
-                    {proc.command}
-                  </td>
-                  <td className="px-5 py-3 text-xs font-semibold" style={{ color: 'var(--accent)' }}>
-                    {proc.cpu}
-                  </td>
-                  <td className="px-5 py-3 text-xs font-semibold" style={{ color: '#a78bfa' }}>
-                    {proc.mem}
-                  </td>
-                </tr>
-              ))}
-              {processes.length === 0 && (
+      <div className="grid gap-4 xl:grid-cols-[1.15fr_0.85fr]">
+        <SectionContainer title="Processos" subtitle="Top 5 por CPU e consumo de memória.">
+          <div className="overflow-hidden rounded-[20px] border" style={{ borderColor: 'var(--color-border)' }}>
+            <table className="w-full text-sm">
+              <thead style={{ background: 'var(--color-panel-muted)' }}>
                 <tr>
-                  <td colSpan={3} className="px-5 py-8 text-center text-sm" style={{ color: 'var(--text-muted)' }}>
-                    Aguardando dados do servidor...
-                  </td>
+                  {['Processo', 'CPU %', 'RAM %'].map((header) => (
+                    <th key={header} className="px-5 py-3 text-left text-xs font-semibold uppercase tracking-[0.18em] text-[var(--color-text-soft)]">
+                      {header}
+                    </th>
+                  ))}
                 </tr>
-              )}
-            </tbody>
-          </table>
-        </div>
-
-        {/* Cards lateral */}
-        <div className="space-y-3">
-          {/* Telemetria */}
-          <div
-            className="rounded-xl p-4"
-            style={{
-              background: 'linear-gradient(135deg, rgba(77,126,247,0.18) 0%, rgba(77,126,247,0.05) 100%)',
-              border: '1px solid rgba(77,126,247,0.25)'
-            }}
-          >
-            <div className="flex items-center gap-3 mb-3">
-              <RadioTower size={16} style={{ color: 'var(--accent)' }} />
-              <p className="text-sm font-semibold" style={{ color: 'var(--text-primary)' }}>Telemetria</p>
-            </div>
-            <p className="text-xs leading-relaxed" style={{ color: 'var(--text-secondary)' }}>
-              Supervisão contínua de recursos, containers e tráfego de infraestrutura via WebSocket.
-            </p>
-            <div className="mt-3 flex items-center gap-2">
-              <span className="h-1.5 w-1.5 rounded-full" style={{ background: isLive ? 'var(--success)' : 'var(--text-muted)' }} />
-              <span className="text-xs" style={{ color: isLive ? 'var(--success)' : 'var(--text-muted)' }}>
-                {isLive ? 'Conexão WebSocket ativa' : 'Modo polling (10s)'}
-              </span>
-            </div>
+              </thead>
+              <tbody>
+                {processes.map((process, index) => (
+                  <tr key={process.pid || index} className="border-t" style={{ borderColor: 'var(--color-divider)' }}>
+                    <td className="px-5 py-3 font-mono text-xs text-[var(--color-text-muted)]">{process.command}</td>
+                    <td className="px-5 py-3 text-xs font-semibold text-[var(--color-brand)]">{process.cpu}</td>
+                    <td className="px-5 py-3 text-xs font-semibold text-[var(--zeus-electric-400)]">{process.mem}</td>
+                  </tr>
+                ))}
+                {!processes.length ? (
+                  <tr>
+                    <td colSpan={3} className="px-5 py-10 text-center text-sm text-[var(--color-text-muted)]">Sem processos reportados no momento.</td>
+                  </tr>
+                ) : null}
+              </tbody>
+            </table>
           </div>
+        </SectionContainer>
 
-          {/* Memória detalhada */}
-          <div
-            className="zeus-tech-surface rounded-xl p-4"
-            style={{ background: 'var(--bg-card)', border: '1px solid var(--border-default)' }}
-          >
-            <p className="zeus-section-label mb-3">Memória detalhada</p>
-            {[
-              { label: 'Total', value: formatBytes(memTotal) },
-              { label: 'Em uso', value: formatBytes(memUsed) },
-              { label: 'Livre', value: formatBytes(memTotal - memUsed) },
-            ].map(({ label, value }) => (
-              <div key={label} className="flex items-center justify-between py-1.5" style={{ borderBottom: '1px solid var(--border-subtle)' }}>
-                <span className="text-xs" style={{ color: 'var(--text-muted)' }}>{label}</span>
-                <span className="text-xs font-medium mono" style={{ color: 'var(--text-primary)' }}>{value}</span>
+        <div className="grid gap-4 sm:grid-cols-2 xl:grid-cols-1">
+          <Card className="p-5">
+            <div className="flex items-center justify-between gap-3">
+              <div>
+                <p className="text-[11px] font-semibold uppercase tracking-[0.2em] text-[var(--color-text-soft)]">Conectividade</p>
+                <p className="mt-3 text-lg font-semibold text-[var(--color-text)]">Socket + API</p>
+                <p className="mt-2 text-sm leading-6 text-[var(--color-text-muted)]">Fallback automático entre WebSocket e polling para manter a operação visível.</p>
               </div>
-            ))}
-          </div>
-
-          {/* Disco detalhado */}
-          <div
-            className="rounded-xl p-4"
-            style={{ background: 'var(--bg-card)', border: '1px solid var(--border-default)' }}
-          >
-            <p className="zeus-section-label mb-3">Disco</p>
-            {[
-              { label: 'Total', value: formatBytes(diskTotal) },
-              { label: 'Utilizado', value: formatBytes(diskUsed) },
-              { label: 'Livre', value: formatBytes(diskTotal - diskUsed) },
-            ].map(({ label, value }) => (
-              <div key={label} className="flex items-center justify-between py-1.5" style={{ borderBottom: '1px solid var(--border-subtle)' }}>
-                <span className="text-xs" style={{ color: 'var(--text-muted)' }}>{label}</span>
-                <span className="text-xs font-medium mono" style={{ color: 'var(--text-primary)' }}>{value}</span>
+              <RadioTower size={20} className="text-[var(--color-brand)]" />
+            </div>
+          </Card>
+          <Card className="p-5">
+            <div className="flex items-center justify-between gap-3">
+              <div>
+                <p className="text-[11px] font-semibold uppercase tracking-[0.2em] text-[var(--color-text-soft)]">Host</p>
+                <p className="mt-3 text-lg font-semibold text-[var(--color-text)]">{metrics?.system?.platform || 'Linux'}</p>
+                <p className="mt-2 text-sm leading-6 text-[var(--color-text-muted)]">{metrics?.system?.arch || 'x64'} · {metrics?.system?.hostname || 'hostname indisponível'}</p>
               </div>
-            ))}
-          </div>
+              <ServerCog size={20} className="text-[var(--color-brand)]" />
+            </div>
+          </Card>
+          <Card className="p-5">
+            <div className="flex items-center justify-between gap-3">
+              <div>
+                <p className="text-[11px] font-semibold uppercase tracking-[0.2em] text-[var(--color-text-soft)]">Estado operacional</p>
+                <p className="mt-3 text-lg font-semibold text-[var(--color-text)]">{isLive ? 'Operação monitorada' : 'Sem stream ao vivo'}</p>
+                <p className="mt-2 text-sm leading-6 text-[var(--color-text-muted)]">A plataforma continua coletando dados mesmo sem conexão persistente.</p>
+              </div>
+              <Activity size={20} className="text-[var(--color-brand)]" />
+            </div>
+          </Card>
         </div>
       </div>
-
     </div>
   )
 }

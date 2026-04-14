@@ -1,5 +1,4 @@
 import type { ReactNode } from 'react'
-
 import PageHeader from '../components/layout/PageHeader'
 import Card from '../components/ui/Card'
 
@@ -7,15 +6,14 @@ type ConsoleModulePageProps = {
   title: string
   subtitle: string
   children: ReactNode
+  showHeader?: boolean
 }
 
-const ConsoleModulePage = ({ title, subtitle, children }: ConsoleModulePageProps) => {
+const ConsoleModulePage = ({ title, subtitle, children, showHeader = true }: ConsoleModulePageProps) => {
   return (
-    <div className="space-y-8">
-      <PageHeader title={title} subtitle={subtitle} />
-      <Card className="overflow-hidden border-white/8 bg-[#0f1522]/92 p-0">
-        {children}
-      </Card>
+    <div className={showHeader ? 'space-y-8' : 'space-y-0'}>
+      {showHeader ? <PageHeader title={title} subtitle={subtitle} /> : null}
+      {showHeader ? <Card className="zeus-module-scope overflow-hidden p-0">{children}</Card> : children}
     </div>
   )
 }

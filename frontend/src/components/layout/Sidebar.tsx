@@ -1,11 +1,17 @@
-import { Activity, Boxes, Files, FileText, Globe, Route, SearchCheck, Terminal, X } from 'lucide-react'
-import logoName from '../../assets/images/logoname.webp'
+import { Activity, Boxes, Files, FileText, Globe, Layers3, Route, SearchCheck, Terminal, X } from 'lucide-react'
+import logoNameDark from '../../assets/images/logoname.webp'
+import logoNameLight from '../../assets/images/logoname_w.webp'
+import { useTheme } from '../../app/providers/theme-provider'
+import Card from '../ui/Card'
 import SidebarSection from './SidebarSection'
 
 const sections = [
   {
     label: 'Operação',
-    items: [{ to: '/', label: 'Dashboard', icon: Activity, end: true }],
+    items: [
+      { to: '/', label: 'Dashboard', icon: Activity, end: true },
+      { to: '/stacks', label: 'Infra Canvas', icon: Layers3 },
+    ],
   },
   {
     label: 'Infra Canvas',
@@ -32,33 +38,39 @@ type SidebarContentProps = {
   showClose?: boolean
 }
 
-const SidebarContent = ({ onNavigate, showClose = false }: SidebarContentProps) => (
-  <>
-    <div className="mb-8 flex items-center justify-between gap-3 px-2">
-      <img src={logoName} alt="Zeus AI Cloud OS" className="h-9 w-auto object-contain" />
-      {showClose ? (
-        <button
-          type="button"
-          onClick={onNavigate}
-          className="flex h-9 w-9 items-center justify-center rounded-xl border border-white/10 bg-white/[0.04] text-slate-300 lg:hidden"
-        >
-          <X size={16} />
-        </button>
-      ) : null}
-    </div>
+const SidebarContent = ({ onNavigate, showClose = false }: SidebarContentProps) => {
+  const { theme } = useTheme()
+  const logo = theme === 'light' ? logoNameDark : logoNameLight
 
-    <div className="flex-1 space-y-8 overflow-y-auto pr-1">
-      {sections.map((section) => (
-        <SidebarSection key={section.label} label={section.label} items={section.items} onNavigate={onNavigate} />
-      ))}
-    </div>
+  return (
+    <>
+      <div className="mb-8 flex items-center justify-between gap-3 px-2">
+        <img src={logo} alt="Zeus AI Cloud OS" className="zeus-logo-glow h-10 w-auto object-contain" />
+        {showClose ? (
+          <button
+            type="button"
+            onClick={onNavigate}
+            className="flex h-10 w-10 items-center justify-center rounded-[14px] border bg-[var(--color-surface)] text-[var(--color-text-muted)] lg:hidden"
+            style={{ borderColor: 'var(--color-border)' }}
+          >
+            <X size={16} />
+          </button>
+        ) : null}
+      </div>
 
-    <div className="mt-6 rounded-2xl border border-white/8 bg-white/[0.03] px-4 py-3">
-      <p className="text-xs font-medium text-slate-300">Zeus AI Cloud OS</p>
-      <p className="mt-1 text-xs leading-5 text-slate-500">Console operacional para infraestrutura, aplicações e governança.</p>
-    </div>
-  </>
-)
+      <div className="flex-1 space-y-8 overflow-y-auto pr-1">
+        {sections.map((section) => (
+          <SidebarSection key={section.label} label={section.label} items={section.items} onNavigate={onNavigate} />
+        ))}
+      </div>
+
+      <Card variant="muted" className="mt-6 px-4 py-4">
+        <p className="text-xs font-semibold uppercase tracking-[0.18em] text-[var(--color-text-soft)]">ZEUS AI CLOUD OS</p>
+        <p className="mt-2 text-sm leading-6 text-[var(--color-text-muted)]">Console operacional para infraestrutura, aplicações, observabilidade e governança.</p>
+      </Card>
+    </>
+  )
+}
 
 type SidebarProps = {
   mobileOpen: boolean
@@ -68,17 +80,18 @@ type SidebarProps = {
 const Sidebar = ({ mobileOpen, onCloseMobile }: SidebarProps) => {
   return (
     <>
-      <aside className="sticky top-0 hidden h-screen w-[272px] shrink-0 border-r border-white/8 bg-[#0b0f1a] px-4 py-5 lg:flex lg:flex-col">
+      <aside className="zeus-sidebar sticky top-0 hidden h-screen shrink-0 px-4 py-5 lg:flex lg:flex-col">
         <SidebarContent />
       </aside>
 
       <div
-        className={`fixed inset-0 z-40 bg-slate-950/70 backdrop-blur-sm transition-opacity lg:hidden ${mobileOpen ? 'opacity-100' : 'pointer-events-none opacity-0'}`}
+        className={`fixed inset-0 z-40 transition-opacity lg:hidden ${mobileOpen ? 'opacity-100' : 'pointer-events-none opacity-0'}`}
+        style={{ background: 'var(--color-overlay)' }}
         onClick={onCloseMobile}
       />
 
       <aside
-        className={`fixed inset-y-0 left-0 z-50 flex w-[272px] flex-col border-r border-white/8 bg-[#0b0f1a] px-4 py-5 shadow-[24px_0_80px_rgba(0,0,0,0.45)] transition-transform duration-300 lg:hidden ${mobileOpen ? 'translate-x-0' : '-translate-x-full'}`}
+        className={`zeus-sidebar fixed inset-y-0 left-0 z-50 flex w-[280px] flex-col px-4 py-5 shadow-[0_24px_80px_rgba(0,0,0,0.4)] transition-transform duration-300 lg:hidden ${mobileOpen ? 'translate-x-0' : '-translate-x-full'}`}
       >
         <SidebarContent onNavigate={onCloseMobile} showClose />
       </aside>

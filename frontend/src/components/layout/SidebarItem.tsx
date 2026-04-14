@@ -11,18 +11,24 @@ type SidebarItemProps = {
 
 const SidebarItem = ({ to, label, icon: Icon, onClick, end }: SidebarItemProps) => {
   return (
-    <NavLink to={to} end={end} onClick={onClick} className="group relative flex items-center gap-3 rounded-2xl px-3 py-2.5 text-sm transition-all duration-200">
+    <NavLink to={to} end={end} onClick={onClick} className="group relative flex items-center gap-3 rounded-[18px] px-3 py-2.5 text-sm transition-all duration-[var(--duration-fast)] ease-[var(--ease-standard)]">
       {({ isActive }) => (
         <>
           <span
-            className={`absolute left-0 top-1/2 h-7 w-[3px] -translate-y-1/2 rounded-full transition-all ${isActive ? 'bg-blue-400 shadow-[0_0_12px_rgba(96,165,250,0.7)]' : 'bg-transparent'}`}
+            className="absolute left-0 top-1/2 h-8 w-[3px] -translate-y-1/2 rounded-full transition-all"
+            style={{ background: isActive ? 'var(--sidebar-active-accent)' : 'transparent', boxShadow: isActive ? '0 0 12px color-mix(in srgb, var(--sidebar-active-accent) 42%, transparent)' : 'none' }}
           />
           <span
-            className={`flex h-9 w-9 items-center justify-center rounded-xl border transition-all ${isActive ? 'border-blue-400/25 bg-blue-500/12 text-blue-200' : 'border-white/5 bg-white/[0.03] text-slate-400 group-hover:border-white/10 group-hover:bg-white/[0.05] group-hover:text-white'}`}
+            className="flex h-10 w-10 items-center justify-center rounded-[14px] border transition-all"
+            style={{
+              borderColor: isActive ? 'color-mix(in srgb, var(--color-brand) 30%, transparent)' : 'var(--color-border-subtle)',
+              background: isActive ? 'var(--sidebar-active)' : 'var(--sidebar-hover)',
+              color: isActive ? 'var(--color-text)' : 'var(--sidebar-text)',
+            }}
           >
             <Icon size={16} />
           </span>
-          <span className={`${isActive ? 'text-white' : 'text-slate-300 group-hover:text-white'}`}>{label}</span>
+          <span className="flex-1 truncate" style={{ color: isActive ? 'var(--color-text)' : 'var(--sidebar-text)', fontWeight: isActive ? 600 : 500 }}>{label}</span>
         </>
       )}
     </NavLink>

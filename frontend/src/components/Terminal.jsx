@@ -23,6 +23,11 @@ const formatPrompt = (cwd) => {
   return `\x1b[1;34mcloud\x1b[0m@\x1b[1;34mpainel\x1b[0m:\x1b[1;32m${display}\x1b[0m$ `
 }
 const HISTORY_KEY = 'cloudpainel_terminal_history'
+const TERMINAL_FONT_SIZE = 14
+const TERMINAL_LINE_HEIGHT = 1.18
+const TERMINAL_FONT_FAMILY = '"JetBrains Mono", ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", "Courier New", monospace'
+const TERMINAL_SAFE_PADDING_X = 20
+const TERMINAL_SAFE_PADDING_Y = 20
 const COMMAND_HINTS = [
   'ls',
   'll',
@@ -78,14 +83,23 @@ const formatStatus = (status) => {
 
 const measureCharSize = (container) => {
   const span = document.createElement('span')
-  span.textContent = 'W'
-  span.style.fontFamily = '"JetBrains Mono", ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", "Courier New", monospace'
-  span.style.fontSize = '14px'
+  span.textContent = 'WWWWWWWWWW'
+  span.style.position = 'absolute'
+  span.style.top = '-9999px'
+  span.style.left = '-9999px'
+  span.style.fontFamily = TERMINAL_FONT_FAMILY
+  span.style.fontSize = `${TERMINAL_FONT_SIZE}px`
+  span.style.lineHeight = String(TERMINAL_LINE_HEIGHT)
+  span.style.letterSpacing = '0px'
   span.style.visibility = 'hidden'
+  span.style.whiteSpace = 'pre'
   container.appendChild(span)
   const rect = span.getBoundingClientRect()
   span.remove()
-  return { width: rect.width || 8, height: rect.height || 16 }
+  return {
+    width: (rect.width / 10) || 8.4,
+    height: rect.height || (TERMINAL_FONT_SIZE * TERMINAL_LINE_HEIGHT)
+  }
 }
 
 const fitTerminal = (terminal, container) => {
@@ -93,9 +107,11 @@ const fitTerminal = (terminal, container) => {
     return
   }
   const { width, height } = container.getBoundingClientRect()
+  const safeWidth = Math.max(0, width - TERMINAL_SAFE_PADDING_X)
+  const safeHeight = Math.max(0, height - TERMINAL_SAFE_PADDING_Y)
   const charSize = measureCharSize(container)
-  const cols = Math.max(20, Math.floor(width / charSize.width))
-  const rows = Math.max(8, Math.floor(height / charSize.height))
+  const cols = Math.max(20, Math.floor(safeWidth / charSize.width))
+  const rows = Math.max(8, Math.floor(safeHeight / charSize.height))
   terminal.resize(cols, rows)
 }
 
@@ -142,10 +158,11 @@ const Terminal = () => {
       }
 
       const term = new XTerm({
-        fontSize: 14,
+        fontSize: TERMINAL_FONT_SIZE,
+        lineHeight: TERMINAL_LINE_HEIGHT,
+        letterSpacing: 0,
         cursorBlink: true,
-        fontFamily:
-          '"JetBrains Mono", ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", "Courier New", monospace',
+        fontFamily: TERMINAL_FONT_FAMILY,
         theme: {
           background: '#0b1120',
           foreground: '#e2e8f0',
@@ -592,7 +609,7 @@ const Terminal = () => {
           >
             <div
               ref={setContainerRef(tab.id)}
-              className="h-80 min-h-[16rem] w-full resize-y overflow-auto rounded-2xl border border-slate-700 bg-[#07101f] text-slate-100 shadow-inner shadow-black/30"
+              className="provir-terminal-shell h-80 min-h-[16rem] w-full resize-y overflow-hidden rounded-2xl border border-slate-700 bg-[#07101f] text-slate-100 shadow-inner shadow-black/30"
             />
             <button
               className="absolute right-3 top-3 hidden items-center gap-2 rounded-xl border border-slate-700 bg-slate-950/90 px-3 py-1 text-[11px] text-slate-200 shadow-lg transition group-hover:flex"

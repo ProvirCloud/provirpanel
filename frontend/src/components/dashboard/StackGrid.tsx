@@ -1,4 +1,5 @@
 import type { Stack } from '../../types/stack'
+import EmptyState from '../ui/EmptyState'
 import StackCard from './StackCard'
 
 type StackGridProps = {
@@ -7,11 +8,7 @@ type StackGridProps = {
 
 const StackGrid = ({ stacks }: StackGridProps) => {
   if (!stacks.length) {
-    return (
-      <div className="rounded-3xl border border-dashed border-white/10 bg-white/[0.02] px-6 py-16 text-center text-slate-400">
-        Nenhuma stack encontrada.
-      </div>
-    )
+    return <EmptyState title="Nenhuma stack encontrada" description="Assim que novas stacks forem criadas, elas aparecerão aqui com status, serviços e ações operacionais." />
   }
 
   return (

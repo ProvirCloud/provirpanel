@@ -10,7 +10,7 @@ type ActionButtonProps = {
 
 const ActionButton = ({ label, icon: Icon, variant = 'secondary', onClick }: ActionButtonProps) => {
   return (
-    <Button variant={variant} onClick={onClick} leadingIcon={Icon ? <Icon size={15} /> : undefined} className="min-w-[112px]">
+    <Button variant={variant} onClick={onClick} leadingIcon={Icon ? <Icon size={15} /> : undefined} size="sm" className="min-w-[116px]">
       {label}
     </Button>
   )

@@ -1,5 +1,4 @@
 import type { ReactNode } from 'react'
-
 import Card from './Card'
 
 type SectionContainerProps = {
@@ -15,11 +14,11 @@ const SectionContainer = ({ title, subtitle, children, actions, className = '' }
     <Card className={`p-6 lg:p-7 ${className}`.trim()}>
       {(title || subtitle || actions) && (
         <div className="mb-6 flex flex-col gap-4 lg:flex-row lg:items-start lg:justify-between">
-          <div className="space-y-1">
-            {title && <h2 className="text-lg font-semibold text-white">{title}</h2>}
-            {subtitle && <p className="text-sm leading-6 text-slate-400">{subtitle}</p>}
+          <div className="space-y-1.5">
+            {title ? <h2 className="text-lg font-semibold text-[var(--color-text)]">{title}</h2> : null}
+            {subtitle ? <p className="text-sm leading-6 text-[var(--color-text-muted)]">{subtitle}</p> : null}
           </div>
-          {actions && <div className="flex items-center gap-2">{actions}</div>}
+          {actions ? <div className="flex flex-wrap items-center gap-2">{actions}</div> : null}
         </div>
       )}
       {children}

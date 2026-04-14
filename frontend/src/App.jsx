@@ -1,5 +1,5 @@
-import { BrowserRouter, Routes, Route, Navigate } from 'react-router-dom'
-import { useCallback, useEffect, useState } from 'react'
+import { BrowserRouter, Navigate, Route, Routes } from 'react-router-dom'
+import { Suspense, useCallback, useEffect, useState } from 'react'
 import LoginPage from './pages/LoginPage.jsx'
 import MainLayout from './pages/MainLayout.jsx'
 import Dashboard from './components/Dashboard.jsx'
@@ -15,22 +15,48 @@ import SecurityAuditPanel from './components/SecurityAuditPanel.jsx'
 import NginxPanel from './components/NginxPanel.jsx'
 import NginxVisualManager from './components/NginxVisualManager.jsx'
 import StacksPanel from './components/StacksPanel.jsx'
+import ConsoleModulePage from './pages/ConsoleModulePage'
 import api from './services/api.js'
+
+const RouteLoader = () => (
+  <div className="zeus-panel px-6 py-16 text-center text-[var(--color-text-muted)]">Carregando módulo...</div>
+)
+
+const ProtectedRoute = ({ loading, authenticated, children }) => {
+  if (loading) {
+    return <div className="zeus-shell flex min-h-screen items-center justify-center text-[var(--color-text-muted)]">Validando sessão...</div>
+  }
+  if (!authenticated) return <Navigate to="/login" replace />
+  return children
+}
+
+const PublicRoute = ({ loading, authenticated, children }) => {
+  if (loading) {
+    return <div className="zeus-shell flex min-h-screen items-center justify-center text-[var(--color-text-muted)]">Validando sessão...</div>
+  }
+  if (authenticated) return <Navigate to="/" replace />
+  return children
+}
+
+const ModulePage = ({ title, subtitle, children, showHeader = true }) => (
+  <Suspense fallback={<RouteLoader />}>
+    <ConsoleModulePage title={title} subtitle={subtitle} showHeader={showHeader}>
+      {children}
+    </ConsoleModulePage>
+  </Suspense>
+)
 
 const App = () => {
   const [authState, setAuthState] = useState({ loading: true, authenticated: false })
 
   const refreshAuth = useCallback(() => {
     let active = true
-    api
-      .get('/auth/me')
-      .then(() => {
-        if (active) setAuthState({ loading: false, authenticated: true })
-      })
-      .catch(() => {
-        localStorage.removeItem('provirpanel-token')
-        if (active) setAuthState({ loading: false, authenticated: false })
-      })
+    api.get('/auth/me').then(() => {
+      if (active) setAuthState({ loading: false, authenticated: true })
+    }).catch(() => {
+      localStorage.removeItem('provirpanel-token')
+      if (active) setAuthState({ loading: false, authenticated: false })
+    })
     return () => {
       active = false
     }
@@ -54,38 +80,8 @@ const App = () => {
       }
     }
     window.addEventListener('provirpanel-auth', handler)
-    return () => {
-      window.removeEventListener('provirpanel-auth', handler)
-    }
+    return () => window.removeEventListener('provirpanel-auth', handler)
   }, [refreshAuth])
-
-  const ProtectedRoute = ({ children }) => {
-    if (authState.loading) {
-      return (
-        <div className="zeus-shell flex min-h-screen items-center justify-center text-slate-700">
-          Validando sessao...
-        </div>
-      )
-    }
-    if (!authState.authenticated) {
-      return <Navigate to="/login" replace />
-    }
-    return children
-  }
-
-  const PublicRoute = ({ children }) => {
-    if (authState.loading) {
-      return (
-        <div className="zeus-shell flex min-h-screen items-center justify-center text-slate-700">
-          Validando sessao...
-        </div>
-      )
-    }
-    if (authState.authenticated) {
-      return <Navigate to="/" replace />
-    }
-    return children
-  }
 
   return (
     <BrowserRouter basename="/admin">
@@ -93,7 +89,7 @@ const App = () => {
         <Route
           path="/login"
           element={
-            <PublicRoute>
+            <PublicRoute loading={authState.loading} authenticated={authState.authenticated}>
               <LoginPage />
             </PublicRoute>
           }
@@ -101,24 +97,24 @@ const App = () => {
         <Route
           path="/"
           element={
-            <ProtectedRoute>
+            <ProtectedRoute loading={authState.loading} authenticated={authState.authenticated}>
               <MainLayout />
             </ProtectedRoute>
           }
         >
           <Route index element={<Dashboard />} />
           <Route path="stacks" element={<StacksPanel />} />
-          <Route path="terminal" element={<Terminal />} />
-          <Route path="docker" element={<DockerPanel />} />
-          <Route path="nginx" element={<NginxVisualManager />} />
-          <Route path="nginx-legacy" element={<NginxPanel />} />
-          <Route path="domains" element={<DomainsPanel />} />
-          <Route path="files" element={<FileManager />} />
-          <Route path="users" element={<UsersPanel />} />
-          <Route path="email" element={<EmailPanel />} />
-          <Route path="gateway" element={<ProvirGateway />} />
-          <Route path="security" element={<SecurityAuditPanel />} />
-          <Route path="logs" element={<LogsPanel />} />
+          <Route path="terminal" element={<ModulePage showHeader={false} title="Terminal" subtitle="Acesso operacional aos ambientes conectados"><Terminal /></ModulePage>} />
+          <Route path="docker" element={<ModulePage showHeader={false} title="Docker" subtitle="Serviços, containers e topologias dos ambientes"><DockerPanel /></ModulePage>} />
+          <Route path="nginx" element={<ModulePage showHeader={false} title="Nginx Manager" subtitle="Rotas, proxy e publicação de aplicações"><NginxVisualManager /></ModulePage>} />
+          <Route path="nginx-legacy" element={<ModulePage showHeader={false} title="Nginx Legacy" subtitle="Gestão avançada do ambiente Nginx"><NginxPanel /></ModulePage>} />
+          <Route path="domains" element={<ModulePage showHeader={false} title="Rotas" subtitle="Domínios e mapeamento de acessos"><DomainsPanel /></ModulePage>} />
+          <Route path="files" element={<ModulePage showHeader={false} title="Arquivos" subtitle="Storage, uploads e gestão de artefatos"><FileManager /></ModulePage>} />
+          <Route path="users" element={<ModulePage showHeader={false} title="Usuários" subtitle="Acessos e administração do workspace"><UsersPanel /></ModulePage>} />
+          <Route path="email" element={<ModulePage showHeader={false} title="E-mail" subtitle="Fluxos de comunicação e entrega transacional"><EmailPanel /></ModulePage>} />
+          <Route path="gateway" element={<ModulePage showHeader={false} title="Gateway" subtitle="Integrações, APIs e orquestração de borda"><ProvirGateway /></ModulePage>} />
+          <Route path="security" element={<ModulePage showHeader={false} title="Auditoria" subtitle="Governança, trilhas críticas e segurança"><SecurityAuditPanel /></ModulePage>} />
+          <Route path="logs" element={<ModulePage showHeader={false} title="Logs" subtitle="Observabilidade, eventos e troubleshooting"><LogsPanel /></ModulePage>} />
         </Route>
         <Route path="*" element={<Navigate to="/" replace />} />
       </Routes>

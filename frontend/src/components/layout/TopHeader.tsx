@@ -1,5 +1,5 @@
 import { Menu } from 'lucide-react'
-import ThemeToggle from './ThemeToggle'
+import ThemeToggle from '../ui/ThemeToggle'
 import UserMenu from './UserMenu'
 
 type TopHeaderProps = {
@@ -15,18 +15,19 @@ type TopHeaderProps = {
 
 const TopHeader = ({ title, context, username, onOpenSidebar, onLogout, onChangePassword, onCreateUser, onManageMfa }: TopHeaderProps) => {
   return (
-    <header className="sticky top-0 z-10 flex h-16 items-center justify-between border-b border-white/8 bg-[#0b0f1a]/85 px-4 backdrop-blur-xl sm:px-6 lg:px-8">
+    <header className="zeus-topbar flex h-16 items-center justify-between px-4 sm:px-6 lg:px-8">
       <div className="flex min-w-0 items-center gap-3">
         <button
           type="button"
           onClick={onOpenSidebar}
-          className="flex h-10 w-10 items-center justify-center rounded-xl border border-white/10 bg-white/[0.04] text-slate-300 lg:hidden"
+          className="flex h-10 w-10 items-center justify-center rounded-[14px] border lg:hidden"
+          style={{ borderColor: 'var(--color-border)', background: 'var(--color-surface)', color: 'var(--color-text-muted)' }}
         >
           <Menu size={18} />
         </button>
         <div className="min-w-0">
-          <p className="truncate text-sm font-semibold text-white">{title}</p>
-          {context ? <p className="truncate text-xs text-slate-500">{context}</p> : null}
+          <p className="truncate text-sm font-semibold text-[var(--color-text)]">{title}</p>
+          {context ? <p className="truncate text-xs text-[var(--color-text-soft)]">{context}</p> : null}
         </div>
       </div>
 

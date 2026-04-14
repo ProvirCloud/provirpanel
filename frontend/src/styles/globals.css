@@ -1,0 +1,404 @@
+@import './tokens/themes.css';
+
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+@font-face {
+  font-family: 'Objektiv Mk1 Trial';
+  src: url('../assets/fonts/ObjektivMk1Trial-Light-C58fVFyY.woff2') format('woff2');
+  font-weight: 300;
+  font-style: normal;
+  font-display: swap;
+}
+
+@font-face {
+  font-family: 'Objektiv Mk1 Trial';
+  src: url('../assets/fonts/ObjektivMk1Trial-Regular-Z38qA-2S.woff2') format('woff2');
+  font-weight: 400;
+  font-style: normal;
+  font-display: swap;
+}
+
+@font-face {
+  font-family: 'Objektiv Mk1 Trial';
+  src: url('../assets/fonts/ObjektivMk1Trial-Bold-CcOJhIwO.woff2') format('woff2');
+  font-weight: 700;
+  font-style: normal;
+  font-display: swap;
+}
+
+@font-face {
+  font-family: 'Objektiv Mk1 Trial';
+  src: url('../assets/fonts/ObjektivMk1Trial-XBold-ClQ3OiM-.woff2') format('woff2');
+  font-weight: 800;
+  font-style: normal;
+  font-display: swap;
+}
+
+@layer base {
+  * {
+    box-sizing: border-box;
+    border-color: var(--color-border-subtle);
+  }
+
+  html {
+    font-size: 14px;
+  }
+
+  html,
+  body,
+  #root {
+    min-height: 100%;
+  }
+
+  body {
+    margin: 0;
+    font-family: var(--font-sans);
+    background:
+      radial-gradient(circle at 16% 18%, rgba(79, 144, 255, 0.16), transparent 24%),
+      radial-gradient(circle at 84% 12%, rgba(47, 192, 255, 0.12), transparent 18%),
+      radial-gradient(circle at 60% 82%, rgba(37, 99, 235, 0.14), transparent 26%),
+      linear-gradient(180deg, var(--color-bg) 0%, var(--color-bg-subtle) 100%);
+    color: var(--color-text);
+    -webkit-font-smoothing: antialiased;
+    -moz-osx-font-smoothing: grayscale;
+  }
+
+  body::before {
+    content: '';
+    position: fixed;
+    inset: 0;
+    pointer-events: none;
+    z-index: -1;
+    opacity: 0.28;
+    background-image:
+      linear-gradient(rgba(109, 155, 221, 0.045) 1px, transparent 1px),
+      linear-gradient(90deg, rgba(109, 155, 221, 0.045) 1px, transparent 1px);
+    background-size: 44px 44px;
+  }
+
+  a {
+    color: inherit;
+    text-decoration: none;
+  }
+
+  button,
+  input,
+  select,
+  textarea {
+    font: inherit;
+  }
+
+  ::selection {
+    background: var(--color-brand-soft);
+  }
+
+  ::-webkit-scrollbar {
+    width: 10px;
+    height: 10px;
+  }
+
+  ::-webkit-scrollbar-track {
+    background: transparent;
+  }
+
+  ::-webkit-scrollbar-thumb {
+    background: color-mix(in srgb, var(--color-text-soft) 40%, transparent);
+    border-radius: 999px;
+    border: 2px solid transparent;
+    background-clip: padding-box;
+  }
+}
+
+@layer components {
+  .zeus-shell {
+    min-height: 100vh;
+    background: transparent;
+  }
+
+  .zeus-app-shell {
+    min-height: 100vh;
+    display: grid;
+    grid-template-columns: 1fr;
+  }
+
+  @media (min-width: 1024px) {
+    .zeus-app-shell {
+      grid-template-columns: 280px minmax(0, 1fr);
+    }
+  }
+
+  .zeus-logo-glow {
+    filter: drop-shadow(0 18px 36px rgba(47, 192, 255, 0.16));
+  }
+
+  .zeus-panel {
+    background: var(--card-bg);
+    border: 1px solid var(--color-border);
+    border-radius: var(--radius-2xl);
+    box-shadow: var(--shadow-md);
+    backdrop-filter: blur(18px);
+  }
+
+  .zeus-panel-elevated {
+    background: var(--card-bg-elevated);
+    border: 1px solid color-mix(in srgb, var(--color-border) 120%, transparent);
+    border-radius: var(--radius-2xl);
+    box-shadow: var(--shadow-lg);
+    backdrop-filter: blur(20px);
+  }
+
+  .zeus-panel-muted {
+    background: var(--card-bg-muted);
+    border: 1px solid var(--color-border-subtle);
+    border-radius: var(--radius-xl);
+  }
+
+  .zeus-eyebrow {
+    font-size: var(--text-xs);
+    font-weight: var(--weight-semibold);
+    letter-spacing: 0.24em;
+    text-transform: uppercase;
+    color: var(--color-text-soft);
+  }
+
+  .zeus-heading-title {
+    font-size: clamp(2rem, 4vw, 3.65rem);
+    line-height: var(--leading-tight);
+    letter-spacing: -0.05em;
+    font-weight: var(--weight-bold);
+    color: var(--color-text);
+  }
+
+  .zeus-heading-subtitle {
+    font-size: var(--text-md);
+    line-height: var(--leading-relaxed);
+    color: var(--color-text-muted);
+  }
+
+  .zeus-surface-grid {
+    background-image:
+      linear-gradient(rgba(255,255,255,0.04) 1px, transparent 1px),
+      linear-gradient(90deg, rgba(255,255,255,0.04) 1px, transparent 1px);
+    background-size: 28px 28px;
+  }
+
+  [data-theme='light'] .zeus-surface-grid {
+    background-image:
+      linear-gradient(rgba(17, 33, 56, 0.04) 1px, transparent 1px),
+      linear-gradient(90deg, rgba(17, 33, 56, 0.04) 1px, transparent 1px);
+  }
+
+  .zeus-input,
+  .zeus-select,
+  .zeus-textarea {
+    width: 100%;
+    border-radius: var(--radius-lg);
+    border: 1px solid var(--input-border);
+    background: var(--input-bg);
+    color: var(--input-text);
+    padding: 0.9rem 1rem;
+    outline: none;
+    transition:
+      border-color var(--duration-fast) var(--ease-standard),
+      box-shadow var(--duration-fast) var(--ease-standard),
+      background-color var(--duration-fast) var(--ease-standard);
+    box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.05);
+  }
+
+  .zeus-input::placeholder,
+  .zeus-textarea::placeholder {
+    color: var(--input-placeholder);
+  }
+
+  .zeus-input:focus,
+  .zeus-select:focus,
+  .zeus-textarea:focus {
+    border-color: color-mix(in srgb, var(--color-brand) 72%, white 8%);
+    box-shadow: 0 0 0 4px var(--color-focus-ring);
+  }
+
+  .zeus-input[aria-invalid='true'],
+  .zeus-textarea[aria-invalid='true'] {
+    border-color: color-mix(in srgb, var(--color-danger) 70%, white 8%);
+    box-shadow: 0 0 0 4px rgba(239, 68, 68, 0.14);
+  }
+
+  .zeus-btn {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    gap: 0.5rem;
+    border-radius: var(--radius-lg);
+    padding: 0.78rem 1rem;
+    font-size: var(--text-sm);
+    font-weight: var(--weight-semibold);
+    transition:
+      transform var(--duration-fast) var(--ease-standard),
+      background var(--duration-fast) var(--ease-standard),
+      border-color var(--duration-fast) var(--ease-standard),
+      color var(--duration-fast) var(--ease-standard),
+      box-shadow var(--duration-fast) var(--ease-standard);
+  }
+
+  .zeus-btn:hover {
+    transform: translateY(-1px);
+  }
+
+  .zeus-btn:disabled {
+    opacity: 0.55;
+    cursor: not-allowed;
+    transform: none;
+  }
+
+  .zeus-btn-primary {
+    background: var(--button-primary-bg);
+    color: var(--button-primary-text);
+    border: 1px solid color-mix(in srgb, var(--color-brand) 50%, transparent);
+    box-shadow: 0 18px 40px color-mix(in srgb, var(--color-brand) 24%, transparent);
+  }
+
+  .provir-terminal-shell {
+    padding: 10px 12px;
+  }
+
+  .provir-terminal-shell .xterm {
+    height: 100%;
+  }
+
+  .provir-terminal-shell .xterm-viewport {
+    overflow-y: auto !important;
+    overscroll-behavior: contain;
+  }
+
+  .provir-terminal-shell .xterm-screen canvas {
+    image-rendering: auto;
+  }
+
+  .zeus-btn-secondary {
+    background: var(--button-secondary-bg);
+    color: var(--button-secondary-text);
+    border: 1px solid var(--color-border);
+  }
+
+  .zeus-btn-ghost {
+    background: var(--button-ghost-bg);
+    color: var(--color-text-muted);
+    border: 1px solid transparent;
+  }
+
+  .zeus-btn-danger {
+    background: var(--button-danger-bg);
+    color: var(--color-danger);
+    border: 1px solid color-mix(in srgb, var(--color-danger) 24%, transparent);
+  }
+
+  .zeus-badge {
+    display: inline-flex;
+    align-items: center;
+    gap: 0.35rem;
+    border-radius: var(--radius-pill);
+    border: 1px solid var(--color-border);
+    padding: 0.38rem 0.68rem;
+    font-size: 0.72rem;
+    font-weight: var(--weight-semibold);
+    letter-spacing: 0.02em;
+    background: var(--color-surface-2);
+    color: var(--color-text-muted);
+  }
+
+  .zeus-sidebar {
+    background: var(--sidebar-bg);
+    border-right: 1px solid var(--color-divider);
+    backdrop-filter: blur(20px);
+  }
+
+  .zeus-topbar {
+    position: sticky;
+    top: 0;
+    z-index: 20;
+    backdrop-filter: blur(18px);
+    background: var(--header-bg);
+    border-bottom: 1px solid var(--color-divider);
+  }
+
+  .zeus-module-scope {
+    color: var(--color-text);
+  }
+
+  .zeus-module-scope .bg-slate-950,
+  .zeus-module-scope .bg-slate-900,
+  .zeus-module-scope .bg-slate-900\/90,
+  .zeus-module-scope .bg-slate-900\/95,
+  .zeus-module-scope .bg-slate-900\/80,
+  .zeus-module-scope .bg-slate-800,
+  .zeus-module-scope .bg-slate-800\/50,
+  .zeus-module-scope .bg-slate-800\/60,
+  .zeus-module-scope .bg-slate-800\/70,
+  .zeus-module-scope .bg-slate-800\/80,
+  .zeus-module-scope .bg-slate-700\/30,
+  .zeus-module-scope .bg-slate-700\/50 {
+    background: var(--card-bg) !important;
+  }
+
+  .zeus-module-scope .border-slate-800,
+  .zeus-module-scope .border-slate-700,
+  .zeus-module-scope .border-slate-700\/60,
+  .zeus-module-scope .border-slate-600,
+  .zeus-module-scope .border-white\/10,
+  .zeus-module-scope .border-white\/8 {
+    border-color: var(--color-border) !important;
+  }
+
+  .zeus-module-scope .text-slate-100,
+  .zeus-module-scope .text-slate-200,
+  .zeus-module-scope .text-white {
+    color: var(--color-text) !important;
+  }
+
+  .zeus-module-scope .text-slate-300,
+  .zeus-module-scope .text-slate-400,
+  .zeus-module-scope .text-slate-500,
+  .zeus-module-scope .text-slate-600 {
+    color: var(--color-text-muted) !important;
+  }
+
+  .zeus-module-scope .bg-blue-500,
+  .zeus-module-scope .bg-blue-600,
+  .zeus-module-scope .bg-blue-500\/10,
+  .zeus-module-scope .bg-blue-500\/12,
+  .zeus-module-scope .bg-blue-500\/15 {
+    background: var(--color-brand-soft) !important;
+  }
+
+  .zeus-module-scope .text-blue-300,
+  .zeus-module-scope .text-blue-400,
+  .zeus-module-scope .text-blue-200 {
+    color: var(--color-brand) !important;
+  }
+
+  .zeus-module-scope .text-emerald-300,
+  .zeus-module-scope .text-emerald-400,
+  .zeus-module-scope .text-green-400 {
+    color: var(--color-success) !important;
+  }
+
+  .zeus-module-scope .text-rose-300,
+  .zeus-module-scope .text-red-400,
+  .zeus-module-scope .text-red-300 {
+    color: var(--color-danger) !important;
+  }
+
+  .zeus-module-scope .text-yellow-400,
+  .zeus-module-scope .text-amber-300,
+  .zeus-module-scope .text-amber-400 {
+    color: var(--color-warning) !important;
+  }
+
+  .zeus-module-scope .rounded-2xl,
+  .zeus-module-scope .rounded-xl,
+  .zeus-module-scope .rounded-3xl {
+    box-shadow: var(--shadow-sm);
+  }
+}

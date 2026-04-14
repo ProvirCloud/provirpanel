@@ -14,13 +14,14 @@ type AppShellProps = {
 }
 
 const routeMeta: Record<string, { title: string; context: string }> = {
-  '/': { title: 'Infrastructure Canvas', context: 'Ambientes Docker agrupados de serviços e aplicações' },
+  '/': { title: 'Dashboard', context: 'Monitoramento em tempo real de infraestrutura, aplicações e serviços' },
   '/stacks': { title: 'Infrastructure Canvas', context: 'Ambientes Docker agrupados de serviços e aplicações' },
-  '/docker': { title: 'Docker', context: 'Serviços, containers e runtimes em operação' },
+  '/docker': { title: 'Docker', context: 'Serviços, runtimes e topologias dos ambientes' },
   '/terminal': { title: 'Terminal', context: 'Acesso operacional aos ambientes conectados' },
   '/files': { title: 'Arquivos', context: 'Storage, uploads e gestão de artefatos' },
   '/logs': { title: 'Logs', context: 'Observabilidade, eventos e troubleshooting' },
   '/nginx': { title: 'Nginx Manager', context: 'Rotas, proxy e publicação de aplicações' },
+  '/nginx-legacy': { title: 'Nginx Legacy', context: 'Gestão avançada do ambiente Nginx' },
   '/domains': { title: 'Rotas', context: 'Domínios e mapeamento de acessos' },
   '/gateway': { title: 'Gateway', context: 'Integrações, APIs e orquestração de borda' },
   '/security': { title: 'Auditoria', context: 'Governança, trilhas críticas e segurança' },
@@ -32,12 +33,12 @@ const AppShell = ({ username, onLogout, onChangePassword, onCreateUser, onManage
   const location = useLocation()
   const [sidebarOpen, setSidebarOpen] = useState(false)
 
-  const meta = useMemo(() => routeMeta[location.pathname] || { title: 'Zeus AI Cloud OS', context: 'Console operacional da plataforma' }, [location.pathname])
+  const meta = useMemo(() => routeMeta[location.pathname] || { title: 'ZEUS AI CLOUD OS', context: 'Console operacional da plataforma' }, [location.pathname])
 
   return (
-    <div className="flex min-h-screen bg-[#090d16] text-white">
+    <div className="zeus-app-shell text-[var(--color-text)]">
       <Sidebar mobileOpen={sidebarOpen} onCloseMobile={() => setSidebarOpen(false)} />
-      <div className="flex min-w-0 flex-1 flex-col">
+      <div className="min-w-0">
         <TopHeader
           title={meta.title}
           context={meta.context}
@@ -48,7 +49,7 @@ const AppShell = ({ username, onLogout, onChangePassword, onCreateUser, onManage
           onCreateUser={onCreateUser}
           onManageMfa={onManageMfa}
         />
-        <main className="flex-1 overflow-y-auto bg-[#090d16] px-4 py-6 sm:px-6 lg:px-8 lg:py-8">
+        <main className="px-4 py-6 sm:px-6 lg:px-8 lg:py-8">
           <div className="mx-auto w-full max-w-[1440px]">{children}</div>
         </main>
       </div>

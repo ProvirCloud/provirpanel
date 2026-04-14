@@ -1,28 +1,50 @@
 import type { ButtonHTMLAttributes, ReactNode } from 'react'
 
 type Variant = 'primary' | 'secondary' | 'ghost' | 'danger'
+type Size = 'sm' | 'md' | 'lg'
 
 type ButtonProps = ButtonHTMLAttributes<HTMLButtonElement> & {
   children: ReactNode
   variant?: Variant
+  size?: Size
   leadingIcon?: ReactNode
+  trailingIcon?: ReactNode
+  loading?: boolean
 }
 
 const variantClassName: Record<Variant, string> = {
-  primary: 'border border-blue-400/30 bg-gradient-to-r from-blue-600 via-indigo-500 to-violet-500 text-white shadow-[0_14px_32px_rgba(76,99,255,0.32)] hover:brightness-110',
-  secondary: 'border border-white/10 bg-white/[0.04] text-slate-100 hover:border-white/20 hover:bg-white/[0.08]',
-  ghost: 'border border-transparent bg-transparent text-slate-300 hover:bg-white/[0.05] hover:text-white',
-  danger: 'border border-rose-500/20 bg-rose-500/8 text-rose-200 hover:border-rose-400/30 hover:bg-rose-500/12',
+  primary: 'zeus-btn zeus-btn-primary',
+  secondary: 'zeus-btn zeus-btn-secondary',
+  ghost: 'zeus-btn zeus-btn-ghost',
+  danger: 'zeus-btn zeus-btn-danger',
 }
 
-const Button = ({ children, variant = 'secondary', leadingIcon, className = '', ...props }: ButtonProps) => {
+const sizeClassName: Record<Size, string> = {
+  sm: 'min-h-[36px] px-3 py-2 text-xs',
+  md: 'min-h-[42px] px-4 py-2.5 text-sm',
+  lg: 'min-h-[48px] px-5 py-3 text-sm',
+}
+
+const Button = ({
+  children,
+  variant = 'secondary',
+  size = 'md',
+  leadingIcon,
+  trailingIcon,
+  loading = false,
+  className = '',
+  disabled,
+  ...props
+}: ButtonProps) => {
   return (
     <button
       {...props}
-      className={`inline-flex items-center justify-center gap-2 rounded-xl px-4 py-2.5 text-sm font-medium transition-all duration-200 disabled:cursor-not-allowed disabled:opacity-60 ${variantClassName[variant]} ${className}`.trim()}
+      disabled={disabled || loading}
+      className={`${variantClassName[variant]} ${sizeClassName[size]} ${className}`.trim()}
     >
-      {leadingIcon}
+      {loading ? <span className="h-4 w-4 animate-spin rounded-full border-2 border-current border-t-transparent" /> : leadingIcon}
       <span>{children}</span>
+      {!loading ? trailingIcon : null}
     </button>
   )
 }

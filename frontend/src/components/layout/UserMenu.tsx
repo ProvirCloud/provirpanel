@@ -1,5 +1,6 @@
 import { ChevronDown, KeyRound, LogOut, Shield, UserPlus } from 'lucide-react'
 import { useEffect, useRef, useState } from 'react'
+import Avatar from '../ui/Avatar'
 
 type UserMenuProps = {
   username: string
@@ -32,22 +33,21 @@ const UserMenu = ({ username, onLogout, onChangePassword, onCreateUser, onManage
       <button
         type="button"
         onClick={() => setOpen((value) => !value)}
-        className="inline-flex h-10 items-center gap-3 rounded-xl border border-white/10 bg-white/[0.04] px-3 text-sm text-slate-200 transition-all hover:border-white/20 hover:bg-white/[0.06]"
+        className="inline-flex h-11 items-center gap-3 rounded-[16px] border px-3 text-sm transition-all"
+        style={{ borderColor: 'var(--color-border)', background: 'var(--color-surface)', color: 'var(--color-text)' }}
       >
-        <span className="flex h-7 w-7 items-center justify-center rounded-lg bg-gradient-to-br from-blue-500 to-violet-500 text-xs font-semibold text-white">
-          {username.charAt(0).toUpperCase()}
-        </span>
+        <Avatar name={username} className="h-8 w-8 text-xs" />
         <span className="hidden sm:inline">{username}</span>
-        <ChevronDown size={14} className="text-slate-400" />
+        <ChevronDown size={14} className="text-[var(--color-text-soft)]" />
       </button>
 
-      {open && (
-        <div className="absolute right-0 top-full z-30 mt-2 w-56 rounded-2xl border border-white/10 bg-[#0f1522] p-2 shadow-[0_20px_50px_rgba(0,0,0,0.38)]">
+      {open ? (
+        <div className="absolute right-0 top-full z-30 mt-2 w-56 rounded-[20px] border p-2 shadow-[var(--shadow-md)]" style={{ borderColor: 'var(--color-border)', background: 'var(--card-bg-elevated)' }}>
           <div className="px-3 py-2">
-            <p className="text-xs font-semibold text-white">{username}</p>
-            <p className="mt-1 text-xs text-slate-500">Administrador</p>
+            <p className="text-xs font-semibold text-[var(--color-text)]">{username}</p>
+            <p className="mt-1 text-xs text-[var(--color-text-soft)]">Administrador</p>
           </div>
-          <div className="my-1 h-px bg-white/8" />
+          <div className="my-1 h-px bg-[var(--color-divider)]" />
           <div className="space-y-1">
             {items.map(({ label, icon: Icon, action }) => (
               <button
@@ -57,27 +57,29 @@ const UserMenu = ({ username, onLogout, onChangePassword, onCreateUser, onManage
                   setOpen(false)
                   action()
                 }}
-                className="flex w-full items-center gap-3 rounded-xl px-3 py-2.5 text-sm text-slate-300 transition-all hover:bg-white/[0.05] hover:text-white"
+                className="flex w-full items-center gap-3 rounded-[14px] px-3 py-2.5 text-sm transition-all hover:bg-[var(--color-hover)]"
+                style={{ color: 'var(--color-text-muted)' }}
               >
-                <Icon size={15} className="text-slate-400" />
+                <Icon size={15} />
                 <span>{label}</span>
               </button>
             ))}
           </div>
-          <div className="my-1 h-px bg-white/8" />
+          <div className="my-1 h-px bg-[var(--color-divider)]" />
           <button
             type="button"
             onClick={() => {
               setOpen(false)
               onLogout()
             }}
-            className="flex w-full items-center gap-3 rounded-xl px-3 py-2.5 text-sm text-rose-300 transition-all hover:bg-rose-500/10"
+            className="flex w-full items-center gap-3 rounded-[14px] px-3 py-2.5 text-sm transition-all"
+            style={{ color: 'var(--color-danger)' }}
           >
             <LogOut size={15} />
             <span>Sair</span>
           </button>
         </div>
-      )}
+      ) : null}
     </div>
   )
 }

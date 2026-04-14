@@ -1,15 +1,21 @@
-import type { ReactNode } from 'react'
+import type { HTMLAttributes, ReactNode } from 'react'
 
-type CardProps = {
+type Variant = 'default' | 'elevated' | 'muted'
+
+type CardProps = HTMLAttributes<HTMLDivElement> & {
   children: ReactNode
-  className?: string
+  variant?: Variant
 }
 
-const Card = ({ children, className = '' }: CardProps) => {
+const variantClassName: Record<Variant, string> = {
+  default: 'zeus-panel',
+  elevated: 'zeus-panel-elevated',
+  muted: 'zeus-panel-muted',
+}
+
+const Card = ({ children, variant = 'default', className = '', ...props }: CardProps) => {
   return (
-    <div
-      className={`rounded-3xl border border-white/10 bg-[#101522]/90 shadow-[0_18px_50px_rgba(0,0,0,0.28)] ${className}`.trim()}
-    >
+    <div {...props} className={`${variantClassName[variant]} ${className}`.trim()}>
       {children}
     </div>
   )
