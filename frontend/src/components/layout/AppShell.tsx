@@ -50,7 +50,9 @@ const AppShell = ({ username, onLogout, onChangePassword, onCreateUser, onManage
           onManageMfa={onManageMfa}
         />
         <main className="px-4 py-6 sm:px-6 lg:px-8 lg:py-8">
-          <div className="mx-auto w-full max-w-[1440px]">{children}</div>
+          <div className="mx-auto w-full max-w-[1440px]">
+            <div className="zeus-content-canvas">{children}</div>
+          </div>
         </main>
       </div>
     </div>

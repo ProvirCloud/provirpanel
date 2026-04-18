@@ -2,7 +2,7 @@ import { useState, useEffect } from 'react'
 import { UserPlus, Edit, Trash2, Shield, User } from 'lucide-react'
 import api from '../services/api.js'
 
-const UsersPanel = () => {
+const UsersPanel = ({ showPageIntro = true }) => {
   const [users, setUsers] = useState([])
   const [loading, setLoading] = useState(true)
   const [showModal, setShowModal] = useState(false)
@@ -85,11 +85,13 @@ const UsersPanel = () => {
 
   return (
     <div className="space-y-6">
-      <div className="flex items-center justify-between">
-        <div>
-          <p className="text-xs uppercase tracking-[0.3em] text-slate-400">Usuários</p>
-          <h2 className="text-2xl font-semibold text-white">Gestão de usuários</h2>
-        </div>
+      <div className={`flex flex-wrap gap-3 ${showPageIntro ? 'items-center justify-between' : 'items-center justify-end'}`}>
+        {showPageIntro ? (
+          <div>
+            <p className="text-xs uppercase tracking-[0.3em] text-slate-400">Usuários</p>
+            <h2 className="text-2xl font-semibold text-white">Gestão de usuários</h2>
+          </div>
+        ) : null}
         <button
           onClick={() => openModal()}
           className="flex items-center gap-2 rounded-xl bg-blue-500 px-4 py-2 text-sm font-semibold text-slate-950 transition hover:bg-blue-400"

@@ -11,7 +11,7 @@ type SectionContainerProps = {
 
 const SectionContainer = ({ title, subtitle, children, actions, className = '' }: SectionContainerProps) => {
   return (
-    <Card className={`p-6 lg:p-7 ${className}`.trim()}>
+    <Card variant="elevated" className={`p-6 lg:p-7 ${className}`.trim()}>
       {(title || subtitle || actions) && (
         <div className="mb-6 flex flex-col gap-4 lg:flex-row lg:items-start lg:justify-between">
           <div className="space-y-1.5">

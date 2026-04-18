@@ -6,11 +6,12 @@ type ActionButtonProps = {
   icon?: LucideIcon
   variant?: 'primary' | 'secondary' | 'ghost' | 'danger'
   onClick?: () => void
+  disabled?: boolean
 }
 
-const ActionButton = ({ label, icon: Icon, variant = 'secondary', onClick }: ActionButtonProps) => {
+const ActionButton = ({ label, icon: Icon, variant = 'secondary', onClick, disabled = false }: ActionButtonProps) => {
   return (
-    <Button variant={variant} onClick={onClick} leadingIcon={Icon ? <Icon size={15} /> : undefined} size="sm" className="min-w-[116px]">
+    <Button variant={variant} onClick={onClick} disabled={disabled} leadingIcon={Icon ? <Icon size={15} /> : undefined} size="sm" className="min-w-[116px]">
       {label}
     </Button>
   )

@@ -14,8 +14,9 @@ import ProvirGateway from './components/ProvirGateway.jsx'
 import SecurityAuditPanel from './components/SecurityAuditPanel.jsx'
 import NginxPanel from './components/NginxPanel.jsx'
 import NginxVisualManager from './components/NginxVisualManager.jsx'
-import StacksPanel from './components/StacksPanel.jsx'
 import ConsoleModulePage from './pages/ConsoleModulePage'
+import InfrastructureCanvasPage from './pages/InfrastructureCanvasPage'
+import StacksPanel from './components/StacksPanel.jsx'
 import api from './services/api.js'
 
 const RouteLoader = () => (
@@ -103,18 +104,19 @@ const App = () => {
           }
         >
           <Route index element={<Dashboard />} />
-          <Route path="stacks" element={<StacksPanel />} />
-          <Route path="terminal" element={<ModulePage showHeader={false} title="Terminal" subtitle="Acesso operacional aos ambientes conectados"><Terminal /></ModulePage>} />
-          <Route path="docker" element={<ModulePage showHeader={false} title="Container Service" subtitle="Serviços, containers e topologias dos ambientes"><DockerPanel /></ModulePage>} />
-          <Route path="nginx" element={<ModulePage showHeader={false} title="Nginx Manager" subtitle="Rotas, proxy e publicação de aplicações"><NginxVisualManager /></ModulePage>} />
+          <Route path="stacks" element={<InfrastructureCanvasPage />} />
+          <Route path="stacks/canvas" element={<ModulePage showHeader={false} title="Infrastructure Canvas" subtitle="Editor visual de stacks"><StacksPanel /></ModulePage>} />
+          <Route path="terminal" element={<ModulePage title="Terminal" subtitle="Acesso operacional aos ambientes conectados"><Terminal showPageIntro={false} /></ModulePage>} />
+          <Route path="docker" element={<ModulePage title="Container Service" subtitle="Serviços, containers e topologias dos ambientes"><DockerPanel showPageIntro={false} /></ModulePage>} />
+          <Route path="nginx" element={<ModulePage title="Nginx Manager" subtitle="Rotas, proxy e publicação de aplicações"><NginxVisualManager showPageIntro={false} /></ModulePage>} />
           <Route path="nginx-legacy" element={<ModulePage showHeader={false} title="Nginx Legacy" subtitle="Gestão avançada do ambiente Nginx"><NginxPanel /></ModulePage>} />
-          <Route path="domains" element={<ModulePage showHeader={false} title="Rotas" subtitle="Domínios e mapeamento de acessos"><DomainsPanel /></ModulePage>} />
-          <Route path="files" element={<ModulePage showHeader={false} title="Arquivos" subtitle="Storage, uploads e gestão de artefatos"><FileManager /></ModulePage>} />
-          <Route path="users" element={<ModulePage showHeader={false} title="Usuários" subtitle="Acessos e administração do workspace"><UsersPanel /></ModulePage>} />
-          <Route path="email" element={<ModulePage showHeader={false} title="E-mail" subtitle="Fluxos de comunicação e entrega transacional"><EmailPanel /></ModulePage>} />
-          <Route path="gateway" element={<ModulePage showHeader={false} title="Gateway" subtitle="Integrações, APIs e orquestração de borda"><ProvirGateway /></ModulePage>} />
-          <Route path="security" element={<ModulePage showHeader={false} title="Auditoria" subtitle="Governança, trilhas críticas e segurança"><SecurityAuditPanel /></ModulePage>} />
-          <Route path="logs" element={<ModulePage showHeader={false} title="Logs" subtitle="Observabilidade, eventos e troubleshooting"><LogsPanel /></ModulePage>} />
+          <Route path="domains" element={<ModulePage title="Rotas" subtitle="Domínios e mapeamento de acessos"><DomainsPanel showPageIntro={false} /></ModulePage>} />
+          <Route path="files" element={<ModulePage title="Arquivos" subtitle="Storage, uploads e gestão de artefatos"><FileManager showPageIntro={false} /></ModulePage>} />
+          <Route path="users" element={<ModulePage title="Usuários" subtitle="Acessos e administração do workspace"><UsersPanel showPageIntro={false} /></ModulePage>} />
+          <Route path="email" element={<ModulePage title="E-mail" subtitle="Fluxos de comunicação e entrega transacional"><EmailPanel showPageIntro={false} /></ModulePage>} />
+          <Route path="gateway" element={<ModulePage title="Gateway" subtitle="Integrações, APIs e orquestração de borda"><ProvirGateway showPageIntro={false} /></ModulePage>} />
+          <Route path="security" element={<ModulePage title="Auditoria" subtitle="Governança, trilhas críticas e segurança"><SecurityAuditPanel showPageIntro={false} /></ModulePage>} />
+          <Route path="logs" element={<ModulePage title="Logs" subtitle="Observabilidade, eventos e troubleshooting"><LogsPanel showPageIntro={false} /></ModulePage>} />
         </Route>
         <Route path="*" element={<Navigate to="/" replace />} />
       </Routes>

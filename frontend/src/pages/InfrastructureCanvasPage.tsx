@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useState } from 'react'
 import { Layers3, Sparkles } from 'lucide-react'
+import { useNavigate } from 'react-router-dom'
 import api from '../services/api.js'
 import MetricsRow from '../components/dashboard/MetricsRow'
 import StackGrid from '../components/dashboard/StackGrid'
@@ -50,35 +51,108 @@ const mapStack = (stack: BackendStack): Stack => {
 }
 
 const InfrastructureCanvasPage = () => {
+  const navigate = useNavigate()
   const [stacks, setStacks] = useState<Stack[]>(mockStacks)
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState('')
+  const [notice, setNotice] = useState('')
+  const [busyAction, setBusyAction] = useState<string | null>(null)
+
+  const loadStacks = async () => {
+    setLoading(true)
+    setError('')
+    try {
+      const response = await api.get('/stacks')
+      const nextStacks = Array.isArray(response.data) && response.data.length ? response.data.map(mapStack) : mockStacks
+      setStacks(nextStacks)
+    } catch {
+      setError('Não foi possível carregar as stacks do backend. Exibindo cenário de referência da plataforma.')
+      setStacks(mockStacks)
+    } finally {
+      setLoading(false)
+    }
+  }
 
   useEffect(() => {
     let active = true
 
-    const loadStacks = async () => {
-      setLoading(true)
-      setError('')
-      try {
-        const response = await api.get('/stacks')
-        if (!active) return
-        const nextStacks = Array.isArray(response.data) && response.data.length ? response.data.map(mapStack) : mockStacks
-        setStacks(nextStacks)
-      } catch {
-        if (!active) return
-        setError('Não foi possível carregar as stacks do backend. Exibindo cenário de referência da plataforma.')
-        setStacks(mockStacks)
-      } finally {
-        if (active) setLoading(false)
-      }
-    }
-
-    loadStacks()
+    loadStacks().catch(() => undefined)
     return () => {
       active = false
     }
   }, [])
+
+  const runStackStream = async (stackId: string, action: 'start' | 'stop') => {
+    const token = localStorage.getItem('provirpanel-token')
+    const response = await fetch(`/api/stacks/${stackId}/${action}`, {
+      method: 'POST',
+      credentials: 'include',
+      headers: token ? { Authorization: `Bearer ${token}` } : undefined,
+    })
+
+    if (!response.ok) {
+      throw new Error(`Falha ao ${action === 'start' ? 'iniciar' : 'parar'} a stack`)
+    }
+
+    await response.text()
+  }
+
+  const handleSync = async (stack: Stack) => {
+    setBusyAction(`${stack.id}:sync`)
+    setNotice('')
+    try {
+      await api.post(`/stacks/${stack.id}/sync`)
+      await loadStacks()
+      setNotice(`Stack "${stack.name}" sincronizada.`)
+    } catch {
+      setError(`Não foi possível sincronizar "${stack.name}".`)
+    } finally {
+      setBusyAction(null)
+    }
+  }
+
+  const handleStart = async (stack: Stack) => {
+    const action = stack.status === 'running' ? 'stop' : 'start'
+    setBusyAction(`${stack.id}:start`)
+    setNotice('')
+    try {
+      await runStackStream(stack.id, action)
+      await loadStacks()
+      setNotice(`Stack "${stack.name}" ${action === 'start' ? 'iniciada' : 'parada'}.`)
+    } catch {
+      setError(`Não foi possível ${action === 'start' ? 'iniciar' : 'parar'} "${stack.name}".`)
+    } finally {
+      setBusyAction(null)
+    }
+  }
+
+  const handleDelete = async (stack: Stack) => {
+    if (!window.confirm(`Remover a stack "${stack.name}"?`)) return
+
+    setBusyAction(`${stack.id}:delete`)
+    setNotice('')
+    try {
+      await api.delete(`/stacks/${stack.id}`)
+      await loadStacks()
+      setNotice(`Stack "${stack.name}" removida.`)
+    } catch {
+      setError(`Não foi possível remover "${stack.name}".`)
+    } finally {
+      setBusyAction(null)
+    }
+  }
+
+  const handleOpenCanvas = (stack: Stack) => {
+    navigate('/stacks/canvas', { state: { selectedStackId: stack.id } })
+  }
+
+  const handleCreateStack = () => {
+    navigate('/stacks/canvas', { state: { openModal: 'create' } })
+  }
+
+  const handleOpenBlueprints = () => {
+    navigate('/stacks/canvas', { state: { openModal: 'blueprint' } })
+  }
 
   const metrics = useMemo(() => [
     { label: 'Total de Stacks', value: stacks.length },
@@ -94,8 +168,8 @@ const InfrastructureCanvasPage = () => {
         subtitle="Ambientes Docker agrupados de serviços e aplicações. Visualize o estado operacional de cada stack com contexto, prioridade e ações rápidas."
         actions={(
           <>
-            <Button variant="secondary" leadingIcon={<Sparkles size={15} />}>Blueprints</Button>
-            <Button variant="primary" leadingIcon={<Layers3 size={15} />}>Nova Stack</Button>
+            <Button variant="secondary" leadingIcon={<Sparkles size={15} />} onClick={handleOpenBlueprints}>Blueprints</Button>
+            <Button variant="primary" leadingIcon={<Layers3 size={15} />} onClick={handleCreateStack}>Nova Stack</Button>
           </>
         )}
       />
@@ -111,11 +185,24 @@ const InfrastructureCanvasPage = () => {
             Carregando stacks do ambiente...
           </div>
         ) : stacks.length ? (
-          <StackGrid stacks={stacks} />
+          <StackGrid
+            stacks={stacks}
+            onSync={handleSync}
+            onStart={handleStart}
+            onOpenCanvas={handleOpenCanvas}
+            onDelete={handleDelete}
+            busyAction={busyAction}
+          />
         ) : (
           <EmptyState title="Nenhuma stack encontrada" description="Assim que novas stacks forem criadas, elas aparecerão aqui com status, serviços e ações operacionais." />
         )}
       </SectionContainer>
+
+      {notice ? (
+        <div className="rounded-[20px] border px-4 py-3 text-sm" style={{ borderColor: 'var(--color-success)', background: 'var(--color-success-soft)', color: 'var(--color-success)' }}>
+          {notice}
+        </div>
+      ) : null}
 
       {error ? (
         <div className="rounded-[20px] border px-4 py-3 text-sm" style={{ borderColor: 'var(--color-warning)', background: 'var(--color-warning-soft)', color: 'var(--color-warning)' }}>

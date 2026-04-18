@@ -122,7 +122,7 @@ const writePrompt = (terminal, cwd, newLine = true) => {
   terminal.write(formatPrompt(cwd))
 }
 
-const Terminal = () => {
+const Terminal = ({ showPageIntro = true }) => {
   const [tabs, setTabs] = useState(() => [
     { id: generateUUID(), title: 'Terminal 1', status: 'disconnected' }
   ])
@@ -525,11 +525,13 @@ const Terminal = () => {
 
   return (
     <div className="space-y-4">
-      <div className="flex flex-wrap items-center justify-between gap-3">
-        <div>
-          <p className="zeus-kicker text-xs font-semibold uppercase">Terminal</p>
-          <h2 className="text-2xl font-semibold" style={{ color: 'var(--text-primary)' }}>Sessao interativa</h2>
-        </div>
+      <div className={`flex flex-wrap gap-3 ${showPageIntro ? 'items-center justify-between' : 'items-center justify-end'}`}>
+        {showPageIntro ? (
+          <div>
+            <p className="zeus-kicker text-xs font-semibold uppercase">Terminal</p>
+            <h2 className="text-2xl font-semibold" style={{ color: 'var(--text-primary)' }}>Sessao interativa</h2>
+          </div>
+        ) : null}
         <div className="flex items-center gap-2">
           <button
             className="flex items-center gap-2 rounded-lg border px-3 py-2 text-xs transition" style={{ background: 'var(--bg-elevated)', borderColor: 'var(--border-default)', color: 'var(--text-secondary)' }} onMouseEnter={e => { e.currentTarget.style.borderColor = 'var(--accent)'; e.currentTarget.style.color = 'var(--text-primary)' }} onMouseLeave={e => { e.currentTarget.style.borderColor = 'var(--border-default)'; e.currentTarget.style.color = 'var(--text-secondary)' }}

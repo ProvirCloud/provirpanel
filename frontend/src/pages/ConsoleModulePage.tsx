@@ -13,7 +13,11 @@ const ConsoleModulePage = ({ title, subtitle, children, showHeader = true }: Con
   return (
     <div className={showHeader ? 'space-y-8' : 'space-y-0'}>
       {showHeader ? <PageHeader title={title} subtitle={subtitle} /> : null}
-      {showHeader ? <Card className="zeus-module-scope overflow-hidden p-0">{children}</Card> : children}
+      {showHeader ? (
+        <Card className="zeus-module-scope overflow-hidden p-3 sm:p-4 lg:p-5">{children}</Card>
+      ) : (
+        <div className="zeus-module-scope">{children}</div>
+      )}
     </div>
   )
 }

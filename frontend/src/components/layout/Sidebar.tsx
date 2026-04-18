@@ -64,7 +64,7 @@ const SidebarContent = ({ onNavigate, showClose = false }: SidebarContentProps) 
         ))}
       </div>
 
-      <Card variant="muted" className="mt-6 px-4 py-4">
+      <Card variant="default" className="mt-6 px-4 py-4">
         <p className="text-xs font-semibold uppercase tracking-[0.18em] text-[var(--color-text-soft)]">ZEUS AI CLOUD OS</p>
         <p className="mt-2 text-sm leading-6 text-[var(--color-text-muted)]">Console operacional para infraestrutura, aplicações, observabilidade e governança.</p>
       </Card>

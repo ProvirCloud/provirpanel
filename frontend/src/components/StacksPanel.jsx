@@ -1,4 +1,5 @@
 import { useEffect, useRef, useState, useCallback, useMemo } from 'react'
+import { useLocation, useNavigate } from 'react-router-dom'
 import {
   Plus, Play, Square, RefreshCw, Trash2, Copy,
   Globe, Code2, Database, Zap, List, Activity,
@@ -8,6 +9,7 @@ import {
   Maximize2, Minimize2, LogOut
 } from 'lucide-react'
 import api from '../services/api.js'
+import { useTheme } from '../app/providers/theme-provider'
 
 // ─── Constantes ───────────────────────────────────────────────────────────────
 
@@ -261,6 +263,8 @@ const TopologyDiagram = ({
   onConnectServices, onDisconnectEdge,
   tierConfigs, onTierConfigClick
 }) => {
+  const { theme } = useTheme()
+  const isLight = theme === 'light'
   const services = stack.services || []
   const wrapRef  = useRef(null)
   const nodeEls  = useRef({})   // { serviceId: DOM element }
@@ -382,10 +386,11 @@ const TopologyDiagram = ({
       style={{
         position: 'relative',
         borderRadius: 20,
-        border: '1px solid rgba(255,255,255,0.08)',
-        background: '#04080f',
+        border: isLight ? '1px solid var(--color-canvas-border)' : '1px solid rgba(255,255,255,0.08)',
+        background: isLight ? 'var(--color-canvas)' : '#04080f',
         overflow: 'hidden',
-        minHeight: 320
+        minHeight: 320,
+        boxShadow: isLight ? 'var(--shadow-sm)' : 'none'
       }}
     >
       {/* ── SVG overlay: edges + wire — rendered BEHIND the node cards ── */}
@@ -484,8 +489,8 @@ const TopologyDiagram = ({
           {tierMap['entry-point']?.length > 0 && (
             <div style={{
               display: 'flex', alignItems: 'center',
-              borderBottom: '1px solid rgba(255,255,255,0.05)',
-              background: 'rgba(16,185,129,0.04)'
+              borderBottom: isLight ? '1px solid var(--color-divider)' : '1px solid rgba(255,255,255,0.05)',
+              background: isLight ? 'rgba(16,185,129,0.08)' : 'rgba(16,185,129,0.04)'
             }}>
               {/* Label */}
               <div style={{
@@ -526,8 +531,9 @@ const TopologyDiagram = ({
                 key={tier.key}
                 style={{
                   display: 'flex',
-                  borderBottom: isLast ? 'none' : '1px solid rgba(255,255,255,0.05)',
-                  minHeight: TIER_H
+                  borderBottom: isLast ? 'none' : (isLight ? '1px solid var(--color-divider)' : '1px solid rgba(255,255,255,0.05)'),
+                  minHeight: TIER_H,
+                  background: isLight ? 'rgba(255,255,255,0.68)' : 'transparent'
                 }}
               >
                 {/* ── Left label strip ── */}
@@ -555,12 +561,12 @@ const TopologyDiagram = ({
                       border: `1px solid ${cfg.color}30`, borderRadius: 4, padding: '1px 6px'
                     }}>{svcs.length} nó{svcs.length !== 1 ? 's' : ''}</span>
                     {tierConfigs?.[tier.key]?.domain && (
-                      <span style={{ fontSize: 8, color: '#7dd3fc', background: 'rgba(56,189,248,0.08)', border: '1px solid rgba(56,189,248,0.18)', borderRadius: 4, padding: '1px 5px', maxWidth: 80, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }} title={tierConfigs[tier.key].domain}>
+                      <span style={{ fontSize: 8, color: isLight ? '#0f4c81' : '#7dd3fc', background: isLight ? 'rgba(56,189,248,0.14)' : 'rgba(56,189,248,0.08)', border: '1px solid rgba(56,189,248,0.18)', borderRadius: 4, padding: '1px 5px', maxWidth: 80, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }} title={tierConfigs[tier.key].domain}>
                         🌐 {tierConfigs[tier.key].domain}
                       </span>
                     )}
                     {tierConfigs?.[tier.key]?.env?.length > 0 && (
-                      <span style={{ fontSize: 8, color: '#6ee7b7', background: 'rgba(52,211,153,0.08)', border: '1px solid rgba(52,211,153,0.18)', borderRadius: 4, padding: '1px 5px' }}>
+                      <span style={{ fontSize: 8, color: isLight ? '#0f6b57' : '#6ee7b7', background: isLight ? 'rgba(52,211,153,0.14)' : 'rgba(52,211,153,0.08)', border: '1px solid rgba(52,211,153,0.18)', borderRadius: 4, padding: '1px 5px' }}>
                         {tierConfigs[tier.key].env.length} env
                       </span>
                     )}
@@ -632,16 +638,26 @@ const TopologyDiagram = ({
                           onClick={() => onServiceClick(svc)}
                           style={{
                             height: NODE_H, borderRadius: 14, cursor: 'pointer',
-                            background: isSelected
-                              ? `linear-gradient(135deg, ${cfg.color}16 0%, rgba(6,12,26,0.98) 100%)`
-                              : 'linear-gradient(135deg, rgba(10,20,42,0.98) 0%, rgba(5,10,22,0.99) 100%)',
-                            border: `1px solid ${isSelected ? cfg.color : isTarget ? cfg.color : 'rgba(255,255,255,0.09)'}`,
+                            background: isLight
+                              ? (isSelected
+                                  ? `linear-gradient(135deg, ${cfg.color}14 0%, rgba(255,255,255,0.98) 100%)`
+                                  : 'linear-gradient(135deg, rgba(255,255,255,0.98) 0%, rgba(241,246,255,0.98) 100%)')
+                              : (isSelected
+                                  ? `linear-gradient(135deg, ${cfg.color}16 0%, rgba(6,12,26,0.98) 100%)`
+                                  : 'linear-gradient(135deg, rgba(10,20,42,0.98) 0%, rgba(5,10,22,0.99) 100%)'),
+                            border: `1px solid ${isSelected ? cfg.color : isTarget ? cfg.color : (isLight ? 'rgba(148,163,184,0.35)' : 'rgba(255,255,255,0.09)')}`,
                             borderLeft: `3px solid ${cfg.color}`,
-                            boxShadow: isSelected
-                              ? `0 0 0 1px ${cfg.color}50, 0 8px 32px rgba(0,0,0,0.6), inset 0 1px 0 rgba(255,255,255,0.04)`
-                              : isHov
-                                ? `0 4px 20px rgba(0,0,0,0.55), inset 0 1px 0 rgba(255,255,255,0.03)`
-                                : `0 2px 8px rgba(0,0,0,0.4), inset 0 1px 0 rgba(255,255,255,0.02)`,
+                            boxShadow: isLight
+                              ? (isSelected
+                                  ? `0 0 0 1px ${cfg.color}22, 0 12px 26px rgba(15, 23, 42, 0.08)`
+                                  : isHov
+                                    ? '0 10px 24px rgba(15, 23, 42, 0.1)'
+                                    : '0 4px 12px rgba(15, 23, 42, 0.06)')
+                              : (isSelected
+                                  ? `0 0 0 1px ${cfg.color}50, 0 8px 32px rgba(0,0,0,0.6), inset 0 1px 0 rgba(255,255,255,0.04)`
+                                  : isHov
+                                    ? `0 4px 20px rgba(0,0,0,0.55), inset 0 1px 0 rgba(255,255,255,0.03)`
+                                    : `0 2px 8px rgba(0,0,0,0.4), inset 0 1px 0 rgba(255,255,255,0.02)`),
                             transition: 'box-shadow 0.15s, border-color 0.15s, background 0.15s',
                             display: 'flex', flexDirection: 'column', overflow: 'hidden'
                           }}
@@ -660,13 +676,13 @@ const TopologyDiagram = ({
 
                             <div style={{ minWidth: 0, flex: 1 }}>
                               <p style={{
-                                color: '#f1f5f9', fontSize: 12, fontWeight: 700, margin: 0,
+                                color: isLight ? 'var(--color-text)' : '#f1f5f9', fontSize: 12, fontWeight: 700, margin: 0,
                                 overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap'
                               }}>
                                 {svc.name}
                               </p>
                               <p style={{
-                                color: '#475569', fontSize: 10, margin: '2px 0 0',
+                                color: isLight ? 'var(--color-text-soft)' : '#475569', fontSize: 10, margin: '2px 0 0',
                                 overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap',
                                 fontFamily: 'ui-monospace, monospace'
                               }}>
@@ -697,25 +713,25 @@ const TopologyDiagram = ({
                           }}>
                             {svc.ports?.[0] && (
                               <span style={{
-                                fontSize: 9, color: '#64748b',
-                                background: 'rgba(255,255,255,0.04)',
-                                border: '1px solid rgba(255,255,255,0.08)',
+                                fontSize: 9, color: isLight ? 'var(--color-text-soft)' : '#64748b',
+                                background: isLight ? 'rgba(226,232,240,0.72)' : 'rgba(255,255,255,0.04)',
+                                border: isLight ? '1px solid rgba(148,163,184,0.28)' : '1px solid rgba(255,255,255,0.08)',
                                 borderRadius: 4, padding: '1px 5px',
                                 fontFamily: 'ui-monospace, monospace'
                               }}>:{svc.ports[0].host}</span>
                             )}
                             {Number(svc.resources?.cpuLimit) > 0 && (
-                              <span style={{ fontSize: 9, color: '#7dd3fc', background: 'rgba(56,189,248,0.07)', border: '1px solid rgba(56,189,248,0.14)', borderRadius: 4, padding: '1px 5px' }}>
+                              <span style={{ fontSize: 9, color: isLight ? '#0f4c81' : '#7dd3fc', background: isLight ? 'rgba(56,189,248,0.14)' : 'rgba(56,189,248,0.07)', border: '1px solid rgba(56,189,248,0.14)', borderRadius: 4, padding: '1px 5px' }}>
                                 {svc.resources.cpuLimit} CPU
                               </span>
                             )}
                             {Number(svc.resources?.memoryMb) > 0 && (
-                              <span style={{ fontSize: 9, color: '#c4b5fd', background: 'rgba(167,139,250,0.07)', border: '1px solid rgba(167,139,250,0.14)', borderRadius: 4, padding: '1px 5px' }}>
+                              <span style={{ fontSize: 9, color: isLight ? '#5b3db8' : '#c4b5fd', background: isLight ? 'rgba(167,139,250,0.14)' : 'rgba(167,139,250,0.07)', border: '1px solid rgba(167,139,250,0.14)', borderRadius: 4, padding: '1px 5px' }}>
                                 {svc.resources.memoryMb}MB
                               </span>
                             )}
                             {Number(svc.scaling?.replicas) > 1 && (
-                              <span style={{ fontSize: 9, color: '#6ee7b7', background: 'rgba(52,211,153,0.07)', border: '1px solid rgba(52,211,153,0.14)', borderRadius: 4, padding: '1px 5px' }}>
+                              <span style={{ fontSize: 9, color: isLight ? '#0f6b57' : '#6ee7b7', background: isLight ? 'rgba(52,211,153,0.14)' : 'rgba(52,211,153,0.07)', border: '1px solid rgba(52,211,153,0.14)', borderRadius: 4, padding: '1px 5px' }}>
                                 ×{svc.scaling.replicas}
                               </span>
                             )}
@@ -774,8 +790,8 @@ const TopologyDiagram = ({
           {/* Footer bar */}
           <div style={{
             display: 'flex', alignItems: 'center', justifyContent: 'space-between',
-            borderTop: '1px solid rgba(255,255,255,0.05)',
-            padding: '8px 20px', background: 'rgba(0,0,0,0.25)'
+            borderTop: isLight ? '1px solid var(--color-divider)' : '1px solid rgba(255,255,255,0.05)',
+            padding: '8px 20px', background: isLight ? 'rgba(241,245,255,0.92)' : 'rgba(0,0,0,0.25)'
           }}>
             <p style={{ color: '#1e3a5f', fontSize: 9, margin: 0 }}>
               Hover num nó → arraste a porta inferior (●) para conectar · hover numa aresta para remover
@@ -815,6 +831,8 @@ const DiagramCanvas = ({
   onDeleteService, onBulkDeleteServices,
   tierConfigs, onGroupConfigClick
 }) => {
+  const { theme } = useTheme()
+  const isLight = theme === 'light'
   const services = stack.services || []
   const wrapRef  = useRef(null)
   const posKey   = `diag-pos-${stack.id}`
@@ -1240,8 +1258,8 @@ const DiagramCanvas = ({
 
   // ── Render ────────────────────────────────────────────────────────────────────
   const wrapStyle = fullscreen
-    ? { position: 'fixed', inset: 0, zIndex: 50, borderRadius: 0, border: 'none', background: '#04080f', overflow: 'hidden', cursor: panDrag ? 'grabbing' : drawingGroup ? 'crosshair' : 'default', userSelect: 'none' }
-    : { position: 'relative', borderRadius: 20, border: '1px solid rgba(255,255,255,0.08)', background: '#04080f', overflow: 'hidden', height: 'calc(100vh - 220px)', minHeight: 500, cursor: panDrag ? 'grabbing' : drawingGroup ? 'crosshair' : 'default', userSelect: 'none' }
+    ? { position: 'fixed', inset: 0, zIndex: 50, borderRadius: 0, border: 'none', background: isLight ? 'var(--color-canvas)' : '#04080f', overflow: 'hidden', cursor: panDrag ? 'grabbing' : drawingGroup ? 'crosshair' : 'default', userSelect: 'none' }
+    : { position: 'relative', borderRadius: 20, border: isLight ? '1px solid var(--color-canvas-border)' : '1px solid rgba(255,255,255,0.08)', background: isLight ? 'var(--color-canvas)' : '#04080f', overflow: 'hidden', height: 'calc(100vh - 220px)', minHeight: 500, cursor: panDrag ? 'grabbing' : drawingGroup ? 'crosshair' : 'default', userSelect: 'none', boxShadow: isLight ? 'var(--shadow-sm)' : 'none' }
 
   return (
     <div
@@ -1264,26 +1282,26 @@ const DiagramCanvas = ({
     >
       {/* ── Toolbar ── */}
       <div style={{ position: 'absolute', left: 12, top: 12, zIndex: 30, display: 'flex', gap: 6, alignItems: 'center', flexWrap: 'wrap' }}>
-        <button onClick={autoLayout} style={{ display: 'flex', alignItems: 'center', gap: 5, fontSize: 10, color: '#cbd5e1', background: 'rgba(10,18,36,0.92)', border: '1px solid rgba(255,255,255,0.1)', borderRadius: 10, padding: '5px 10px', cursor: 'pointer', backdropFilter: 'blur(8px)' }}>
+        <button onClick={autoLayout} style={{ display: 'flex', alignItems: 'center', gap: 5, fontSize: 10, color: isLight ? 'var(--color-text)' : '#cbd5e1', background: isLight ? 'rgba(255,255,255,0.92)' : 'rgba(10,18,36,0.92)', border: isLight ? '1px solid var(--color-border)' : '1px solid rgba(255,255,255,0.1)', borderRadius: 10, padding: '5px 10px', cursor: 'pointer', backdropFilter: 'blur(8px)', boxShadow: isLight ? 'var(--shadow-xs)' : 'none' }}>
           <Zap size={10} style={{ color: '#fbbf24' }} /> Auto-layout
         </button>
-        <button onClick={fitView} style={{ fontSize: 10, color: '#94a3b8', background: 'rgba(10,18,36,0.92)', border: '1px solid rgba(255,255,255,0.1)', borderRadius: 10, padding: '5px 10px', cursor: 'pointer', backdropFilter: 'blur(8px)' }}>Fit</button>
+        <button onClick={fitView} style={{ fontSize: 10, color: isLight ? 'var(--color-text-soft)' : '#94a3b8', background: isLight ? 'rgba(255,255,255,0.92)' : 'rgba(10,18,36,0.92)', border: isLight ? '1px solid var(--color-border)' : '1px solid rgba(255,255,255,0.1)', borderRadius: 10, padding: '5px 10px', cursor: 'pointer', backdropFilter: 'blur(8px)', boxShadow: isLight ? 'var(--shadow-xs)' : 'none' }}>Fit</button>
         <button onClick={addGroupCenter} style={{ display: 'flex', alignItems: 'center', gap: 5, fontSize: 10, color: '#c4b5fd', background: 'rgba(139,92,246,0.15)', border: '1px solid rgba(139,92,246,0.4)', borderRadius: 10, padding: '5px 10px', cursor: 'pointer', backdropFilter: 'blur(8px)', fontWeight: 600 }}>
           <Layers size={10} /> + Grupo
         </button>
-        <button onClick={generateAutoGroups} style={{ display: 'flex', alignItems: 'center', gap: 5, fontSize: 10, color: '#6ee7b7', background: 'rgba(16,185,129,0.08)', border: '1px solid rgba(16,185,129,0.25)', borderRadius: 10, padding: '5px 10px', cursor: 'pointer', backdropFilter: 'blur(8px)' }}>
+        <button onClick={generateAutoGroups} style={{ display: 'flex', alignItems: 'center', gap: 5, fontSize: 10, color: isLight ? '#0f766e' : '#6ee7b7', background: isLight ? 'rgba(16,185,129,0.12)' : 'rgba(16,185,129,0.08)', border: '1px solid rgba(16,185,129,0.25)', borderRadius: 10, padding: '5px 10px', cursor: 'pointer', backdropFilter: 'blur(8px)' }}>
           <RefreshCw size={9} /> Camadas
         </button>
-        <div style={{ display: 'flex', background: 'rgba(10,18,36,0.92)', border: '1px solid rgba(255,255,255,0.1)', borderRadius: 10, overflow: 'hidden', backdropFilter: 'blur(8px)' }}>
-          <button onClick={() => setScale((s) => Math.min(3, +(s + 0.1).toFixed(1)))} style={{ padding: '3px 9px', color: '#94a3b8', cursor: 'pointer', fontSize: 15, border: 'none', background: 'none' }}>+</button>
-          <span style={{ padding: '3px 2px', color: '#475569', fontSize: 10, minWidth: 36, textAlign: 'center', lineHeight: '22px' }}>{Math.round(scale * 100)}%</span>
-          <button onClick={() => setScale((s) => Math.max(0.2, +(s - 0.1).toFixed(1)))} style={{ padding: '3px 9px', color: '#94a3b8', cursor: 'pointer', fontSize: 15, border: 'none', background: 'none' }}>−</button>
+        <div style={{ display: 'flex', background: isLight ? 'rgba(255,255,255,0.92)' : 'rgba(10,18,36,0.92)', border: isLight ? '1px solid var(--color-border)' : '1px solid rgba(255,255,255,0.1)', borderRadius: 10, overflow: 'hidden', backdropFilter: 'blur(8px)', boxShadow: isLight ? 'var(--shadow-xs)' : 'none' }}>
+          <button onClick={() => setScale((s) => Math.min(3, +(s + 0.1).toFixed(1)))} style={{ padding: '3px 9px', color: isLight ? 'var(--color-text-soft)' : '#94a3b8', cursor: 'pointer', fontSize: 15, border: 'none', background: 'none' }}>+</button>
+          <span style={{ padding: '3px 2px', color: isLight ? 'var(--color-text-soft)' : '#475569', fontSize: 10, minWidth: 36, textAlign: 'center', lineHeight: '22px' }}>{Math.round(scale * 100)}%</span>
+          <button onClick={() => setScale((s) => Math.max(0.2, +(s - 0.1).toFixed(1)))} style={{ padding: '3px 9px', color: isLight ? 'var(--color-text-soft)' : '#94a3b8', cursor: 'pointer', fontSize: 15, border: 'none', background: 'none' }}>−</button>
         </div>
       </div>
       <div style={{ position: 'absolute', right: 12, top: 12, zIndex: 30, display: 'flex', gap: 6, alignItems: 'center' }}>
         <button onClick={() => onAddService(null)} style={{ fontSize: 10, color: '#93c5fd', background: 'rgba(59,130,246,0.1)', border: '1px solid rgba(59,130,246,0.25)', borderRadius: 10, padding: '5px 14px', cursor: 'pointer', backdropFilter: 'blur(8px)' }}>+ Adicionar Serviço</button>
         <button onClick={() => setFullscreen((f) => !f)} title={fullscreen ? 'Sair da tela cheia' : 'Tela cheia'}
-          style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', width: 30, height: 30, borderRadius: 10, background: 'rgba(10,18,36,0.92)', border: '1px solid rgba(255,255,255,0.12)', cursor: 'pointer', color: '#94a3b8', backdropFilter: 'blur(8px)' }}>
+          style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', width: 30, height: 30, borderRadius: 10, background: isLight ? 'rgba(255,255,255,0.92)' : 'rgba(10,18,36,0.92)', border: isLight ? '1px solid var(--color-border)' : '1px solid rgba(255,255,255,0.12)', cursor: 'pointer', color: isLight ? 'var(--color-text-soft)' : '#94a3b8', backdropFilter: 'blur(8px)', boxShadow: isLight ? 'var(--shadow-xs)' : 'none' }}>
           {fullscreen ? <Minimize2 size={13} /> : <Maximize2 size={13} />}
         </button>
       </div>
@@ -1299,7 +1317,7 @@ const DiagramCanvas = ({
       {/* ── Canvas transform root ── */}
       <div
         data-bg="1"
-        style={{ position: 'absolute', transform: `translate(${pan.x}px,${pan.y}px) scale(${scale})`, transformOrigin: '0 0', width: cW, height: cH, backgroundImage: 'radial-gradient(circle, rgba(148,163,184,0.11) 1px, transparent 1px)', backgroundSize: '32px 32px' }}
+        style={{ position: 'absolute', transform: `translate(${pan.x}px,${pan.y}px) scale(${scale})`, transformOrigin: '0 0', width: cW, height: cH, backgroundImage: isLight ? 'radial-gradient(circle, rgba(148,163,184,0.18) 1px, transparent 1px)' : 'radial-gradient(circle, rgba(148,163,184,0.11) 1px, transparent 1px)', backgroundSize: '32px 32px' }}
       >
         {/* ── Groups + their services (groups have no z-index so children use canvas stacking context) ── */}
         {groups.map((grp) => {
@@ -1311,7 +1329,7 @@ const DiagramCanvas = ({
           return (
             <div key={grp.id} style={{ position: 'absolute', left: grp.x, top: grp.y, width: grp.w, height: dispH, overflow: 'visible' }}>
               {/* Body */}
-              {!isCollapsed && <div style={{ position: 'absolute', inset: 0, border: `1.5px solid ${grp.color}40`, borderRadius: 13, background: `${grp.color}09` }} />}
+              {!isCollapsed && <div style={{ position: 'absolute', inset: 0, border: `1.5px solid ${grp.color}40`, borderRadius: 13, background: isLight ? 'rgba(255,255,255,0.94)' : `${grp.color}09` }} />}
 
               {/* Header */}
               <div
@@ -1337,7 +1355,7 @@ const DiagramCanvas = ({
                 ) : (
                   <span onDoubleClick={(e) => { e.stopPropagation(); setEditingGrp(grp.id) }} style={{ color: '#fff', fontSize: 11, fontWeight: 700, whiteSpace: 'nowrap', flex: 1 }}>{grp.label}</span>
                 )}
-                {grpServices.length > 0 && <span style={{ color: 'rgba(255,255,255,0.6)', fontSize: 9, background: 'rgba(0,0,0,0.2)', borderRadius: 4, padding: '1px 5px' }}>{grpServices.length}</span>}
+                {grpServices.length > 0 && <span style={{ color: isLight ? 'var(--color-text)' : 'rgba(255,255,255,0.6)', fontSize: 9, background: isLight ? 'rgba(255,255,255,0.22)' : 'rgba(0,0,0,0.2)', borderRadius: 4, padding: '1px 5px' }}>{grpServices.length}</span>}
                 <div onClick={(e) => { e.stopPropagation(); const i = GROUP_COLORS.indexOf(grp.color); updateGroup(grp.id, { color: GROUP_COLORS[(i + 1) % GROUP_COLORS.length] }) }} style={{ width: 9, height: 9, borderRadius: '50%', background: 'rgba(255,255,255,0.45)', cursor: 'pointer', flexShrink: 0 }} title="Trocar cor" />
                 {grpRole && onGroupConfigClick && (
                   <button onClick={(e) => { e.stopPropagation(); onGroupConfigClick(grpRole, grp.label) }} style={{ color: 'rgba(255,255,255,0.65)', background: 'none', border: 'none', cursor: 'pointer', padding: 0, lineHeight: 1, display: 'flex', alignItems: 'center' }} title="Configurações do grupo">
@@ -1345,7 +1363,7 @@ const DiagramCanvas = ({
                   </button>
                 )}
                 {tierConfigs?.[grpRole]?.domain && (
-                  <span style={{ fontSize: 8, color: 'rgba(255,255,255,0.75)', background: 'rgba(0,0,0,0.25)', borderRadius: 3, padding: '1px 4px', maxWidth: 80, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{tierConfigs[grpRole].domain}</span>
+                  <span style={{ fontSize: 8, color: isLight ? 'var(--color-text)' : 'rgba(255,255,255,0.75)', background: isLight ? 'rgba(255,255,255,0.22)' : 'rgba(0,0,0,0.25)', borderRadius: 3, padding: '1px 4px', maxWidth: 80, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{tierConfigs[grpRole].domain}</span>
                 )}
                 <button onClick={(e) => { e.stopPropagation(); deleteGroup(grp) }} style={{ color: 'rgba(255,255,255,0.65)', fontSize: 14, background: 'none', border: 'none', cursor: 'pointer', padding: 0, lineHeight: 1, display: 'flex', alignItems: 'center' }} title="Remover grupo"><X size={11} /></button>
               </div>
@@ -1419,10 +1437,10 @@ const DiagramCanvas = ({
                     <div style={{ ...inputPortStyle, top: -DIAG_PR, left: '50%', transform: 'translateX(-50%)' }} {...inputHandlers} />
                     <div style={{ ...inputPortStyle, left: -DIAG_PR, top: '50%', transform: 'translateY(-50%)' }} {...inputHandlers} />
                     <div onMouseDown={(e) => { if (e.button !== 0) return; e.stopPropagation(); const cp = toCanvas(e.clientX, e.clientY); setDragging({ id: svc.id, ox: cp.x - p.x, oy: cp.y - p.y, grpId: grp.id }); onServiceClick(svc) }}
-                      style={{ width: DIAG_NODE, height: DIAG_NODE, borderRadius: 18, overflow: 'hidden', background: isSel ? `linear-gradient(145deg, ${cfg.color}18, rgba(6,12,28,0.98))` : 'linear-gradient(145deg, rgba(9,18,40,0.98), rgba(4,8,20,0.99))', border: `1px solid ${isSel || isTgt ? cfg.color : 'rgba(255,255,255,0.09)'}`, boxShadow: isSel ? `0 0 0 1.5px ${cfg.color}55, 0 12px 36px rgba(0,0,0,0.65)` : isHov ? '0 8px 28px rgba(0,0,0,0.55)' : '0 4px 14px rgba(0,0,0,0.45)', cursor: dragging?.id === svc.id ? 'grabbing' : 'grab', display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', gap: 7, padding: '10px 8px', transition: dragging?.id === svc.id ? 'none' : 'box-shadow 0.15s, border-color 0.15s' }}>
+                      style={{ width: DIAG_NODE, height: DIAG_NODE, borderRadius: 18, overflow: 'hidden', background: isLight ? (isSel ? `linear-gradient(145deg, ${cfg.color}14, rgba(255,255,255,0.98))` : 'linear-gradient(145deg, rgba(255,255,255,0.98), rgba(241,246,255,0.98))') : (isSel ? `linear-gradient(145deg, ${cfg.color}18, rgba(6,12,28,0.98))` : 'linear-gradient(145deg, rgba(9,18,40,0.98), rgba(4,8,20,0.99))'), border: `1px solid ${isSel || isTgt ? cfg.color : (isLight ? 'rgba(148,163,184,0.35)' : 'rgba(255,255,255,0.09)')}`, boxShadow: isLight ? (isSel ? `0 0 0 1.5px ${cfg.color}22, 0 14px 28px rgba(15, 23, 42, 0.08)` : isHov ? '0 10px 22px rgba(15, 23, 42, 0.1)' : '0 4px 12px rgba(15, 23, 42, 0.06)') : (isSel ? `0 0 0 1.5px ${cfg.color}55, 0 12px 36px rgba(0,0,0,0.65)` : isHov ? '0 8px 28px rgba(0,0,0,0.55)' : '0 4px 14px rgba(0,0,0,0.45)'), cursor: dragging?.id === svc.id ? 'grabbing' : 'grab', display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', gap: 7, padding: '10px 8px', transition: dragging?.id === svc.id ? 'none' : 'box-shadow 0.15s, border-color 0.15s' }}>
                       <div style={{ width: 46, height: 46, borderRadius: 13, background: `${cfg.color}1c`, border: `1px solid ${cfg.color}38`, display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0 }}><Icon size={22} style={{ color: cfg.color }} /></div>
                       <div style={{ textAlign: 'center', width: '100%', padding: '0 4px' }}>
-                        <p style={{ color: '#f1f5f9', fontSize: 11, fontWeight: 700, margin: 0, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{svc.name}</p>
+                        <p style={{ color: isLight ? 'var(--color-text)' : '#f1f5f9', fontSize: 11, fontWeight: 700, margin: 0, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{svc.name}</p>
                         <p style={{ color: '#334155', fontSize: 9, margin: '2px 0 0', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', fontFamily: 'ui-monospace,monospace' }}>{svc.image}</p>
                       </div>
                       <div style={{ display: 'flex', alignItems: 'center', gap: 4 }}>
@@ -1525,10 +1543,10 @@ const DiagramCanvas = ({
               <div style={{ ...inputPortStyle, top: -DIAG_PR, left: '50%', transform: 'translateX(-50%)' }} {...inputHandlers} />
               <div style={{ ...inputPortStyle, left: -DIAG_PR, top: '50%', transform: 'translateY(-50%)' }} {...inputHandlers} />
               <div onMouseDown={(e) => { if (e.button !== 0) return; e.stopPropagation(); const cp = toCanvas(e.clientX, e.clientY); setDragging({ id: svc.id, ox: cp.x - p.x, oy: cp.y - p.y }); onServiceClick(svc) }}
-                style={{ width: DIAG_NODE, height: DIAG_NODE, borderRadius: 18, overflow: 'hidden', background: isSel ? `linear-gradient(145deg, ${cfg.color}18, rgba(6,12,28,0.98))` : 'linear-gradient(145deg, rgba(9,18,40,0.98), rgba(4,8,20,0.99))', border: `1px solid ${isSel || isTgt ? cfg.color : 'rgba(255,255,255,0.09)'}`, boxShadow: isSel ? `0 0 0 1.5px ${cfg.color}55, 0 12px 36px rgba(0,0,0,0.65)` : isHov ? '0 8px 28px rgba(0,0,0,0.55)' : '0 4px 14px rgba(0,0,0,0.45)', cursor: dragging?.id === svc.id ? 'grabbing' : 'grab', display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', gap: 7, padding: '10px 8px', transition: dragging?.id === svc.id ? 'none' : 'box-shadow 0.15s, border-color 0.15s' }}>
+                style={{ width: DIAG_NODE, height: DIAG_NODE, borderRadius: 18, overflow: 'hidden', background: isLight ? (isSel ? `linear-gradient(145deg, ${cfg.color}14, rgba(255,255,255,0.98))` : 'linear-gradient(145deg, rgba(255,255,255,0.98), rgba(241,246,255,0.98))') : (isSel ? `linear-gradient(145deg, ${cfg.color}18, rgba(6,12,28,0.98))` : 'linear-gradient(145deg, rgba(9,18,40,0.98), rgba(4,8,20,0.99))'), border: `1px solid ${isSel || isTgt ? cfg.color : (isLight ? 'rgba(148,163,184,0.35)' : 'rgba(255,255,255,0.09)')}`, boxShadow: isLight ? (isSel ? `0 0 0 1.5px ${cfg.color}22, 0 14px 28px rgba(15, 23, 42, 0.08)` : isHov ? '0 10px 22px rgba(15, 23, 42, 0.1)' : '0 4px 12px rgba(15, 23, 42, 0.06)') : (isSel ? `0 0 0 1.5px ${cfg.color}55, 0 12px 36px rgba(0,0,0,0.65)` : isHov ? '0 8px 28px rgba(0,0,0,0.55)' : '0 4px 14px rgba(0,0,0,0.45)'), cursor: dragging?.id === svc.id ? 'grabbing' : 'grab', display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', gap: 7, padding: '10px 8px', transition: dragging?.id === svc.id ? 'none' : 'box-shadow 0.15s, border-color 0.15s' }}>
                 <div style={{ width: 46, height: 46, borderRadius: 13, background: `${cfg.color}1c`, border: `1px solid ${cfg.color}38`, display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0 }}><Icon size={22} style={{ color: cfg.color }} /></div>
                 <div style={{ textAlign: 'center', width: '100%', padding: '0 4px' }}>
-                  <p style={{ color: '#f1f5f9', fontSize: 11, fontWeight: 700, margin: 0, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{svc.name}</p>
+                  <p style={{ color: isLight ? 'var(--color-text)' : '#f1f5f9', fontSize: 11, fontWeight: 700, margin: 0, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{svc.name}</p>
                   <p style={{ color: '#334155', fontSize: 9, margin: '2px 0 0', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', fontFamily: 'ui-monospace,monospace' }}>{svc.image}</p>
                 </div>
                 <div style={{ display: 'flex', alignItems: 'center', gap: 4 }}>
@@ -1563,20 +1581,20 @@ const DiagramCanvas = ({
       {ctxMenu && (() => {
         const menuStyle = {
           position: 'fixed', left: ctxMenu.x, top: ctxMenu.y,
-          background: 'rgba(10,15,30,0.97)', border: '1px solid rgba(255,255,255,0.12)',
-          borderRadius: 12, boxShadow: '0 8px 32px rgba(0,0,0,0.7)',
+          background: isLight ? 'rgba(255,255,255,0.98)' : 'rgba(10,15,30,0.97)', border: isLight ? '1px solid var(--color-border)' : '1px solid rgba(255,255,255,0.12)',
+          borderRadius: 12, boxShadow: isLight ? '0 18px 38px rgba(15, 23, 42, 0.12)' : '0 8px 32px rgba(0,0,0,0.7)',
           zIndex: 9999, minWidth: 186, padding: '4px 0',
           backdropFilter: 'blur(16px)', userSelect: 'none'
         }
         const itemStyle = (danger) => ({
           display: 'flex', alignItems: 'center', gap: 9,
           padding: '7px 14px', fontSize: 12, cursor: 'pointer',
-          color: danger ? '#f87171' : '#cbd5e1',
+          color: danger ? '#f87171' : (isLight ? 'var(--color-text)' : '#cbd5e1'),
           transition: 'background 0.1s'
         })
-        const hover = (e) => { e.currentTarget.style.background = 'rgba(255,255,255,0.06)' }
+        const hover = (e) => { e.currentTarget.style.background = isLight ? 'var(--color-hover)' : 'rgba(255,255,255,0.06)' }
         const unhov = (e) => { e.currentTarget.style.background = 'transparent' }
-        const sep = <div style={{ height: 1, background: 'rgba(255,255,255,0.06)', margin: '4px 0' }} />
+        const sep = <div style={{ height: 1, background: isLight ? 'var(--color-divider)' : 'rgba(255,255,255,0.06)', margin: '4px 0' }} />
 
         const svc = ctxMenu.svcId ? (stack.services || []).find((s) => s.id === ctxMenu.svcId) : null
         const hasGroup = ctxMenu.grpRole !== undefined
@@ -3580,6 +3598,16 @@ const ServiceConfigPanel = ({ service, stack, onSave, onDelete, onClose }) => {
 
 // ─── Modal de Adicionar Serviço ────────────────────────────────────────────────
 
+// helper: infer role from image name
+const inferRoleFromImage = (imageName) => {
+  if (!imageName) return 'runtime'
+  const name = imageName.toLowerCase()
+  for (const [role, hints] of Object.entries(CANVAS_ROLE_HINTS)) {
+    if (hints.some((h) => name.includes(h))) return role
+  }
+  return 'runtime'
+}
+
 const AddServiceModal = ({ onAdd, onClose, stageKey = null }) => {
   const stageHint = stageKey ? STAGE_SERVICE_HINTS[stageKey] : null
   const filteredPresets = stageHint
@@ -3589,112 +3617,218 @@ const AddServiceModal = ({ onAdd, onClose, stageKey = null }) => {
     })
     : PRESET_SERVICES
 
-  const [mode, setMode] = useState(filteredPresets.length ? 'preset' : 'custom') // preset | custom
-  const [preset, setPreset] = useState(null)
+  const [mode, setMode] = useState(filteredPresets.length ? 'preset' : 'server')
+  const [preset, setPreset]   = useState(null)
+  const [serverImg, setServerImg] = useState(null)   // selected server image
+  const [serverImages, setServerImages] = useState([])
+  const [imgLoading, setImgLoading]     = useState(true)
+  const [imgSearch, setImgSearch]       = useState('')
   const [custom, setCustom] = useState({ name: '', role: stageHint?.defaultRole || 'runtime', image: '', tag: 'latest', ports: [], volumes: [], env: [], command: [], dependencies: [] })
+
+  useEffect(() => {
+    setImgLoading(true)
+    api.get('/docker/images').then((r) => {
+      const raw = Array.isArray(r.data?.images) ? r.data.images : (Array.isArray(r.data) ? r.data : [])
+      // flatten RepoTags → one entry per tag
+      const entries = []
+      raw.forEach((img) => {
+        const tags = Array.isArray(img.RepoTags) ? img.RepoTags.filter((t) => t && t !== '<none>:<none>') : []
+        if (tags.length === 0) return
+        tags.forEach((tag) => {
+          const [repo, ver] = tag.split(':')
+          const name = repo.split('/').pop()
+          entries.push({ id: img.Id, repo, name, tag: ver || 'latest', size: img.Size, created: img.Created })
+        })
+      })
+      setServerImages(entries)
+    }).catch(() => {}).finally(() => setImgLoading(false))
+  }, [])
+
+  const filteredImgs = serverImages.filter((img) =>
+    !imgSearch || img.repo.toLowerCase().includes(imgSearch.toLowerCase()) || img.tag.toLowerCase().includes(imgSearch.toLowerCase())
+  )
 
   const handleAdd = () => {
     if (mode === 'preset' && preset) {
       onAdd({ ...preset, env: [], command: [], volumes: [], dependencies: [] })
+    } else if (mode === 'server' && serverImg) {
+      const role = inferRoleFromImage(serverImg.name)
+      onAdd({ name: serverImg.name, image: serverImg.repo, tag: serverImg.tag, role, ports: [], volumes: [], env: [], command: [], dependencies: [] })
     } else if (mode === 'custom' && custom.image) {
       onAdd(custom)
     }
   }
 
+  const canAdd = (mode === 'preset' && preset) || (mode === 'server' && serverImg) || (mode === 'custom' && custom.image)
+
+  const inp = { width: '100%', borderRadius: 10, border: '1px solid rgba(255,255,255,0.09)', background: 'rgba(255,255,255,0.04)', padding: '8px 12px', fontSize: 12, color: '#f1f5f9', outline: 'none', boxSizing: 'border-box' }
+
+  const MODES = [
+    { id: 'server', label: 'Do Servidor' },
+    { id: 'preset', label: 'Predefinido' },
+    { id: 'custom', label: 'Customizado' },
+  ]
+
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 backdrop-blur-sm">
-      <div className="w-full max-w-lg rounded-2xl border border-white/10 bg-slate-900 shadow-2xl">
-        <div className="flex items-center justify-between border-b border-white/8 px-5 py-4">
-          <div>
-            <h3 className="text-sm font-semibold text-white">Adicionar Serviço</h3>
-            {stageHint && (
-              <p className="text-[11px] text-sky-300/85">Função selecionada: {stageHint.label}</p>
-            )}
-          </div>
-          <button onClick={onClose} className="text-slate-400 hover:text-white"><X size={16} /></button>
-        </div>
+    <div style={{ position: 'fixed', inset: 0, zIndex: 50, display: 'flex', alignItems: 'center', justifyContent: 'center', background: 'rgba(0,0,0,0.65)', backdropFilter: 'blur(6px)' }}
+      onMouseDown={(e) => { if (e.target === e.currentTarget) onClose() }}>
+      <div style={{ width: '100%', maxWidth: 520, maxHeight: '88vh', display: 'flex', flexDirection: 'column', margin: '0 16px', borderRadius: 20, border: '1px solid rgba(255,255,255,0.1)', background: 'linear-gradient(160deg,#080f1e,#060c18)', boxShadow: '0 40px 100px rgba(0,0,0,0.8)' }}>
 
-        {/* Tabs */}
-        <div className="flex border-b border-white/8">
-          {[['preset', 'Predefinido'], ['custom', 'Customizado']].map(([v, l]) => (
-            <button key={v} onClick={() => setMode(v)}
-              className={`px-5 py-3 text-xs font-medium transition ${mode === v ? 'border-b-2 border-blue-400 text-blue-300' : 'text-slate-400 hover:text-white'}`}>
-              {l}
+        {/* Header */}
+        <div style={{ padding: '18px 20px 0', borderBottom: '1px solid rgba(255,255,255,0.06)' }}>
+          <div style={{ display: 'flex', alignItems: 'flex-start', justifyContent: 'space-between', marginBottom: 12 }}>
+            <div>
+              <div style={{ fontSize: 14, fontWeight: 700, color: '#f1f5f9' }}>Adicionar Serviço</div>
+              {stageHint && <div style={{ fontSize: 11, color: '#7dd3fc', marginTop: 3 }}>Função: {stageHint.label}</div>}
+            </div>
+            <button onClick={onClose} style={{ background: 'rgba(255,255,255,0.06)', border: '1px solid rgba(255,255,255,0.09)', borderRadius: 8, color: '#64748b', cursor: 'pointer', padding: '5px 7px', lineHeight: 1, display: 'flex' }}>
+              <X size={13} />
             </button>
-          ))}
+          </div>
+          {/* Mode tabs */}
+          <div style={{ display: 'flex', gap: 2 }}>
+            {MODES.map((m) => (
+              <button key={m.id} onClick={() => setMode(m.id)}
+                style={{ padding: '6px 14px', fontSize: 11, fontWeight: mode === m.id ? 600 : 400, color: mode === m.id ? '#fff' : '#475569', background: mode === m.id ? 'rgba(59,130,246,0.18)' : 'transparent', border: mode === m.id ? '1px solid rgba(59,130,246,0.4)' : '1px solid transparent', borderRadius: 8, cursor: 'pointer', transition: 'all 0.15s', marginBottom: 4 }}>
+                {m.label}
+              </button>
+            ))}
+          </div>
         </div>
 
-        <div className="p-5">
+        {/* Body */}
+        <div style={{ flex: 1, overflowY: 'auto', padding: '14px 16px', display: 'flex', flexDirection: 'column', gap: 10 }}>
+
+          {/* DO SERVIDOR */}
+          {mode === 'server' && (<>
+            {/* Search */}
+            <div style={{ position: 'relative' }}>
+              <Eye size={12} style={{ position: 'absolute', left: 10, top: '50%', transform: 'translateY(-50%)', color: '#475569' }} />
+              <input value={imgSearch} onChange={(e) => setImgSearch(e.target.value)}
+                placeholder="Filtrar imagens..."
+                style={{ ...inp, paddingLeft: 30, fontSize: 12 }} />
+            </div>
+
+            {imgLoading ? (
+              <div style={{ textAlign: 'center', padding: '32px 0', fontSize: 12, color: '#334155' }}>Carregando imagens do Docker...</div>
+            ) : filteredImgs.length === 0 ? (
+              <div style={{ textAlign: 'center', padding: '32px 0', fontSize: 12, color: '#334155' }}>
+                {serverImages.length === 0 ? 'Nenhuma imagem encontrada no servidor' : 'Nenhuma imagem corresponde ao filtro'}
+              </div>
+            ) : (
+              <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
+                {filteredImgs.map((img) => {
+                  const role    = inferRoleFromImage(img.name)
+                  const cfg     = SERVICE_ROLES[role] || SERVICE_ROLES.runtime
+                  const RIcon   = cfg.icon
+                  const isSel   = serverImg?.id === img.id && serverImg?.tag === img.tag
+                  const sizeMb  = img.size ? (img.size / (1024 * 1024)).toFixed(0) + ' MB' : ''
+                  return (
+                    <button key={`${img.id}-${img.tag}`} onClick={() => setServerImg(isSel ? null : img)}
+                      style={{ display: 'flex', alignItems: 'center', gap: 10, padding: '10px 12px', borderRadius: 12, cursor: 'pointer', textAlign: 'left', transition: 'all 0.15s',
+                        border: isSel ? `1px solid ${cfg.color}55` : '1px solid rgba(255,255,255,0.07)',
+                        background: isSel ? `${cfg.color}10` : 'rgba(255,255,255,0.03)',
+                      }}>
+                      <div style={{ width: 34, height: 34, borderRadius: 10, background: `${cfg.color}18`, border: `1px solid ${cfg.color}30`, display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0 }}>
+                        <RIcon size={15} style={{ color: cfg.color }} />
+                      </div>
+                      <div style={{ flex: 1, minWidth: 0 }}>
+                        <div style={{ display: 'flex', alignItems: 'center', gap: 6, flexWrap: 'wrap' }}>
+                          <span style={{ fontSize: 12, fontWeight: 600, color: '#f1f5f9' }}>{img.name}</span>
+                          <span style={{ fontSize: 10, padding: '1px 6px', borderRadius: 5, background: `${cfg.color}18`, border: `1px solid ${cfg.color}30`, color: cfg.color }}>{cfg.label}</span>
+                        </div>
+                        <div style={{ fontSize: 11, color: '#475569', fontFamily: 'ui-monospace,monospace', marginTop: 2, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                          {img.repo}:<span style={{ color: '#64748b' }}>{img.tag}</span>
+                        </div>
+                      </div>
+                      <div style={{ textAlign: 'right', flexShrink: 0 }}>
+                        {sizeMb && <div style={{ fontSize: 10, color: '#334155' }}>{sizeMb}</div>}
+                        {isSel && <div style={{ fontSize: 10, color: cfg.color, marginTop: 2, fontWeight: 600 }}>✓ selecionado</div>}
+                      </div>
+                    </button>
+                  )
+                })}
+              </div>
+            )}
+
+            {/* Count */}
+            {!imgLoading && serverImages.length > 0 && (
+              <div style={{ fontSize: 10, color: '#334155', textAlign: 'center' }}>
+                {filteredImgs.length} de {serverImages.length} imagem{serverImages.length !== 1 ? 'ns' : ''}
+              </div>
+            )}
+          </>)}
+
+          {/* PREDEFINIDO */}
           {mode === 'preset' && (
-            <div className="grid grid-cols-3 gap-2">
+            <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3,1fr)', gap: 8 }}>
               {filteredPresets.map((s) => {
-                const cfg = SERVICE_ROLES[s.role] || SERVICE_ROLES.runtime
+                const cfg  = SERVICE_ROLES[s.role] || SERVICE_ROLES.runtime
                 const Icon = cfg.icon
+                const isSel = preset?.name === s.name
                 return (
-                  <button key={s.name} onClick={() => setPreset(s)}
-                    className="flex flex-col items-center gap-2 rounded-2xl border p-3 transition-all"
-                    style={{
-                      borderColor: preset?.name === s.name ? cfg.color : 'rgba(255,255,255,0.1)',
-                      background: preset?.name === s.name ? `${cfg.color}15` : 'rgba(255,255,255,0.03)'
+                  <button key={s.name} onClick={() => setPreset(isSel ? null : s)}
+                    style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 6, padding: '14px 8px', borderRadius: 14, cursor: 'pointer', transition: 'all 0.15s',
+                      border: isSel ? `1px solid ${cfg.color}55` : '1px solid rgba(255,255,255,0.09)',
+                      background: isSel ? `${cfg.color}12` : 'rgba(255,255,255,0.03)',
                     }}>
-                    <div className="flex h-8 w-8 items-center justify-center rounded-xl"
-                      style={{ background: `${cfg.color}22` }}>
+                    <div style={{ width: 34, height: 34, borderRadius: 10, background: `${cfg.color}20`, display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
                       <Icon size={16} style={{ color: cfg.color }} />
                     </div>
-                    <span className="text-[11px] font-medium text-white">{s.name}</span>
-                    <span className="text-[9px] text-slate-500">{s.role}</span>
+                    <span style={{ fontSize: 11, fontWeight: 600, color: '#f1f5f9' }}>{s.name}</span>
+                    <span style={{ fontSize: 9, color: '#475569' }}>{s.tag || 'latest'}</span>
                   </button>
                 )
               })}
               {filteredPresets.length === 0 && (
-                <div className="col-span-3 rounded-xl border border-white/10 bg-white/[0.02] px-3 py-6 text-center text-xs text-slate-400">
-                  Sem preset para esta funcao. Use a aba Customizado para configurar manualmente.
+                <div style={{ gridColumn: '1/-1', textAlign: 'center', padding: '32px 0', fontSize: 12, color: '#334155' }}>
+                  Sem preset para esta função. Use Customizado.
                 </div>
               )}
             </div>
           )}
 
+          {/* CUSTOMIZADO */}
           {mode === 'custom' && (
-            <div className="space-y-3">
-              <div className="grid grid-cols-2 gap-3">
+            <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
+              <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 10 }}>
                 <div>
-                  <label className="mb-1 block text-[10px] uppercase tracking-widest text-slate-400">Nome</label>
+                  <label style={{ display: 'block', fontSize: 10, fontWeight: 600, letterSpacing: '0.08em', textTransform: 'uppercase', color: '#64748b', marginBottom: 6 }}>Nome</label>
                   <input value={custom.name} onChange={(e) => setCustom((c) => ({ ...c, name: e.target.value }))}
-                    className="w-full rounded-xl border border-white/10 bg-white/5 px-3 py-2 text-sm text-white outline-none focus:border-blue-500/50" placeholder="meu-servico" />
+                    style={inp} placeholder="meu-servico" />
                 </div>
                 <div>
-                  <label className="mb-1 block text-[10px] uppercase tracking-widest text-slate-400">Papel</label>
+                  <label style={{ display: 'block', fontSize: 10, fontWeight: 600, letterSpacing: '0.08em', textTransform: 'uppercase', color: '#64748b', marginBottom: 6 }}>Papel</label>
                   <select value={custom.role} onChange={(e) => setCustom((c) => ({ ...c, role: e.target.value }))}
-                    className="w-full rounded-xl border border-white/10 bg-slate-800 px-3 py-2 text-sm text-white outline-none">
+                    style={{ ...inp, background: 'rgba(255,255,255,0.06)', cursor: 'pointer' }}>
                     {Object.entries(SERVICE_ROLES)
                       .filter(([k]) => !stageHint || stageHint.allowedRoles?.includes(k))
-                      .map(([k, v]) => (
-                      <option key={k} value={k}>{v.label}</option>
-                      ))}
+                      .map(([k, v]) => <option key={k} value={k}>{v.label}</option>)}
                   </select>
                 </div>
               </div>
-              <div className="grid grid-cols-2 gap-3">
+              <div style={{ display: 'grid', gridTemplateColumns: '2fr 1fr', gap: 10 }}>
                 <div>
-                  <label className="mb-1 block text-[10px] uppercase tracking-widest text-slate-400">Imagem</label>
+                  <label style={{ display: 'block', fontSize: 10, fontWeight: 600, letterSpacing: '0.08em', textTransform: 'uppercase', color: '#64748b', marginBottom: 6 }}>Imagem</label>
                   <input value={custom.image} onChange={(e) => setCustom((c) => ({ ...c, image: e.target.value }))}
-                    className="w-full rounded-xl border border-white/10 bg-white/5 px-3 py-2 text-sm text-white outline-none focus:border-blue-500/50" placeholder="nginx, node, python..." />
+                    style={{ ...inp, fontFamily: 'ui-monospace,monospace', fontSize: 11 }} placeholder="nginx, node, python..." />
                 </div>
                 <div>
-                  <label className="mb-1 block text-[10px] uppercase tracking-widest text-slate-400">Tag</label>
+                  <label style={{ display: 'block', fontSize: 10, fontWeight: 600, letterSpacing: '0.08em', textTransform: 'uppercase', color: '#64748b', marginBottom: 6 }}>Tag</label>
                   <input value={custom.tag} onChange={(e) => setCustom((c) => ({ ...c, tag: e.target.value }))}
-                    className="w-full rounded-xl border border-white/10 bg-white/5 px-3 py-2 text-sm text-white outline-none" placeholder="latest" />
+                    style={{ ...inp, fontFamily: 'ui-monospace,monospace', fontSize: 11 }} placeholder="latest" />
                 </div>
               </div>
             </div>
           )}
         </div>
 
-        <div className="flex justify-end gap-2 border-t border-white/8 px-5 py-4">
-          <button onClick={onClose} className="rounded-xl border border-white/10 px-4 py-2 text-xs text-slate-300 hover:text-white">Cancelar</button>
-          <button onClick={handleAdd} disabled={mode === 'preset' ? !preset : !custom.image}
-            className="rounded-xl border border-blue-500/30 bg-blue-500/10 px-5 py-2 text-xs text-blue-300 hover:bg-blue-500/20 disabled:opacity-40">
-            Adicionar
+        {/* Footer */}
+        <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', borderTop: '1px solid rgba(255,255,255,0.06)', padding: '12px 16px' }}>
+          <button onClick={onClose} style={{ fontSize: 11, color: '#475569', background: 'none', border: 'none', cursor: 'pointer' }}>Cancelar</button>
+          <button onClick={handleAdd} disabled={!canAdd}
+            style={{ fontSize: 12, fontWeight: 600, color: '#fff', background: canAdd ? 'linear-gradient(135deg,#3b82f6,#6366f1)' : 'rgba(255,255,255,0.06)', border: 'none', borderRadius: 10, padding: '8px 22px', cursor: canAdd ? 'pointer' : 'default', boxShadow: canAdd ? '0 4px 14px rgba(59,130,246,0.4)' : 'none', transition: 'all 0.2s', opacity: canAdd ? 1 : 0.4 }}>
+            Adicionar Serviço
           </button>
         </div>
       </div>
@@ -4063,6 +4197,8 @@ const LaymanHelpModal = ({ model, onClose }) => (
 // ─── Componente Principal ──────────────────────────────────────────────────────
 
 export default function StacksPanel() {
+  const location = useLocation()
+  const navigate = useNavigate()
   const [stacks, setStacks] = useState([])
   const [blueprints, setBlueprints] = useState([])
   const [loading, setLoading] = useState(true)
@@ -4072,7 +4208,8 @@ export default function StacksPanel() {
   const [toasts, setToasts] = useState([])
   const [progressLog, setProgressLog] = useState(null)
   const [canvasMode,  setCanvasMode]  = useState('tiers') // 'tiers' | 'diagram'
-  const [modal, setModal] = useState(null) // 'create' | 'blueprint' | 'add-service' | 'compose' | 'clone' | 'layman-help' | 'stack-config'
+  const [modal, setModal] = useState(null) // 'create' | 'blueprint' | 'add-service' | 'compose' | 'clone' | 'layman-help' | 'stack-config' | 'rename-stack'
+  const [renameForm, setRenameForm] = useState({ name: '', client: '' })
   const [selectedTierConfig, setSelectedTierConfig] = useState(null) // { role, label }
   const [tierConfigs, setTierConfigs] = useState({}) // keyed by role
   const [stackGlobalConfig, setStackGlobalConfig] = useState({})
@@ -4100,6 +4237,22 @@ export default function StacksPanel() {
   }, [addToast])
 
   useEffect(() => { load() }, [load])
+
+  useEffect(() => {
+    const state = location.state || {}
+    if (!stacks.length || (!state.selectedStackId && !state.openModal)) return
+
+    if (state.selectedStackId) {
+      const targetStack = stacks.find((stack) => stack.id === state.selectedStackId)
+      if (targetStack) setSelectedStack(targetStack)
+    }
+
+    if (state.openModal) {
+      setModal(state.openModal)
+    }
+
+    navigate(location.pathname, { replace: true, state: null })
+  }, [location.pathname, location.state, navigate, stacks])
 
   // Mantém selectedStack sincronizado
   useEffect(() => {
@@ -4137,6 +4290,25 @@ export default function StacksPanel() {
       try { await api.put(`/stacks/${selectedStack.id}`, { globalConfig: cfg }) } catch { /* non-critical */ }
     }
   }, [selectedStack])
+
+  const openRename = () => {
+    setRenameForm({ name: selectedStack.name || '', client: selectedStack.client || '' })
+    setModal('rename-stack')
+  }
+
+  const saveRename = async () => {
+    const { name, client } = renameForm
+    if (!name.trim()) return
+    try {
+      const { data } = await api.put(`/stacks/${selectedStack.id}`, { name: name.trim(), client: client.trim() })
+      setStacks((s) => s.map((st) => st.id === selectedStack.id ? { ...st, ...data } : st))
+      setSelectedStack((prev) => ({ ...prev, name: name.trim(), client: client.trim() }))
+      setModal(null)
+      addToast('Stack renomeada com sucesso')
+    } catch {
+      addToast('Erro ao renomear a stack')
+    }
+  }
 
   // ── Ações de Stack ──────────────────────────────────────────────────────────
 
@@ -4383,7 +4555,7 @@ export default function StacksPanel() {
   // ─── Render ─────────────────────────────────────────────────────────────────
 
   return (
-    <div className="flex h-full flex-col gap-4">
+    <div className="zeus-stacks-page flex h-full flex-col gap-4">
       {/* Toasts */}
       <div className="fixed right-4 top-4 z-50 flex flex-col gap-2" style={{ width: 320 }}>
         {toasts.map((t) => <Toast key={t.id} {...t} onClose={() => setToasts((x) => x.filter((y) => y.id !== t.id))} />)}
@@ -4431,6 +4603,70 @@ export default function StacksPanel() {
           onSave={saveStackGlobalConfig}
           onClose={() => setModal(null)}
         />
+      )}
+      {modal === 'rename-stack' && selectedStack && (
+        <div className="zeus-stacks-modal"
+          style={{ position: 'fixed', inset: 0, zIndex: 60, display: 'flex', alignItems: 'center', justifyContent: 'center', background: 'rgba(0,0,0,0.65)', backdropFilter: 'blur(6px)' }}
+          onMouseDown={(e) => { if (e.target === e.currentTarget) setModal(null) }}>
+          <div className="zeus-stacks-modal-card" style={{ width: '100%', maxWidth: 400, margin: '0 16px', borderRadius: 18, border: '1px solid rgba(255,255,255,0.1)', background: 'linear-gradient(160deg,#080f1e,#060c18)', boxShadow: '0 32px 80px rgba(0,0,0,0.8)' }}>
+            {/* Header */}
+            <div style={{ padding: '18px 20px 14px', borderBottom: '1px solid rgba(255,255,255,0.06)', display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
+              <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
+                <div style={{ width: 34, height: 34, borderRadius: 10, background: 'rgba(99,102,241,0.15)', border: '1px solid rgba(99,102,241,0.3)', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
+                  <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="#818cf8" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M11 4H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7"/><path d="M18.5 2.5a2.121 2.121 0 0 1 3 3L12 15l-4 1 1-4 9.5-9.5z"/></svg>
+                </div>
+                <div>
+                  <div style={{ fontSize: 13, fontWeight: 700, color: '#f1f5f9' }}>Renomear Stack</div>
+                  <div style={{ fontSize: 10, color: '#475569', marginTop: 2 }}>Altere o nome e cliente da stack</div>
+                </div>
+              </div>
+              <button onClick={() => setModal(null)} style={{ background: 'rgba(255,255,255,0.06)', border: '1px solid rgba(255,255,255,0.09)', borderRadius: 7, color: '#64748b', cursor: 'pointer', padding: '4px 6px', lineHeight: 1, display: 'flex' }}>
+                <X size={13} />
+              </button>
+            </div>
+
+            {/* Body */}
+            <div style={{ padding: '18px 20px', display: 'flex', flexDirection: 'column', gap: 12 }}>
+              <div>
+                <label style={{ display: 'block', fontSize: 10, fontWeight: 600, letterSpacing: '0.08em', textTransform: 'uppercase', color: '#64748b', marginBottom: 6 }}>Nome da Stack</label>
+                <input
+                  autoFocus
+                  value={renameForm.name}
+                  onChange={(e) => setRenameForm((f) => ({ ...f, name: e.target.value }))}
+                  onKeyDown={(e) => e.key === 'Enter' && saveRename()}
+                  placeholder="Minha Stack"
+                  style={{ width: '100%', borderRadius: 10, border: '1px solid rgba(255,255,255,0.09)', background: 'rgba(255,255,255,0.04)', padding: '9px 12px', fontSize: 13, color: '#f1f5f9', outline: 'none', boxSizing: 'border-box', fontWeight: 500 }}
+                />
+              </div>
+              <div>
+                <label style={{ display: 'block', fontSize: 10, fontWeight: 600, letterSpacing: '0.08em', textTransform: 'uppercase', color: '#64748b', marginBottom: 6 }}>Cliente / Projeto</label>
+                <input
+                  value={renameForm.client}
+                  onChange={(e) => setRenameForm((f) => ({ ...f, client: e.target.value }))}
+                  onKeyDown={(e) => e.key === 'Enter' && saveRename()}
+                  placeholder="Nome do cliente ou projeto"
+                  style={{ width: '100%', borderRadius: 10, border: '1px solid rgba(255,255,255,0.09)', background: 'rgba(255,255,255,0.04)', padding: '9px 12px', fontSize: 12, color: '#f1f5f9', outline: 'none', boxSizing: 'border-box' }}
+                />
+              </div>
+              {/* Preview */}
+              {renameForm.name && (
+                <div style={{ borderRadius: 10, border: '1px solid rgba(99,102,241,0.18)', background: 'rgba(99,102,241,0.05)', padding: '10px 12px' }}>
+                  <div style={{ fontSize: 13, fontWeight: 700, color: '#f1f5f9' }}>{renameForm.name}</div>
+                  {renameForm.client && <div style={{ fontSize: 11, color: '#475569', marginTop: 3 }}>{renameForm.client}</div>}
+                </div>
+              )}
+            </div>
+
+            {/* Footer */}
+            <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', borderTop: '1px solid rgba(255,255,255,0.06)', padding: '12px 20px' }}>
+              <button onClick={() => setModal(null)} style={{ fontSize: 11, color: '#475569', background: 'none', border: 'none', cursor: 'pointer' }}>Cancelar</button>
+              <button onClick={saveRename} disabled={!renameForm.name.trim()}
+                style={{ fontSize: 12, fontWeight: 600, color: '#fff', background: renameForm.name.trim() ? 'linear-gradient(135deg,#6366f1,#8b5cf6)' : 'rgba(255,255,255,0.06)', border: 'none', borderRadius: 10, padding: '8px 20px', cursor: renameForm.name.trim() ? 'pointer' : 'default', boxShadow: renameForm.name.trim() ? '0 4px 14px rgba(99,102,241,0.4)' : 'none', transition: 'all 0.2s', opacity: renameForm.name.trim() ? 1 : 0.4 }}>
+                Salvar
+              </button>
+            </div>
+          </div>
+        </div>
       )}
 
       {/* Modal de Criar Stack */}
@@ -4646,6 +4882,10 @@ export default function StacksPanel() {
                   <span className={`inline-flex items-center rounded-lg border px-2 py-0.5 text-[10px] font-medium ${envBadge(selectedStack.environment)}`}>
                     {ENVIRONMENTS.find((e) => e.value === selectedStack.environment)?.label}
                   </span>
+                  <button onClick={openRename} title="Renomear stack"
+                    className="flex items-center justify-center rounded-lg border border-white/10 bg-white/[0.03] p-1 text-slate-500 transition hover:border-white/20 hover:text-slate-300">
+                    <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M11 4H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7"/><path d="M18.5 2.5a2.121 2.121 0 0 1 3 3L12 15l-4 1 1-4 9.5-9.5z"/></svg>
+                  </button>
                 </div>
                 {selectedStack.client && <p className="text-[11px] text-slate-400">{selectedStack.client}</p>}
               </div>

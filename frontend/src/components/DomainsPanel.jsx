@@ -2,7 +2,7 @@ import { useEffect, useState } from 'react'
 import { Route, Plus, Trash2, ExternalLink, Settings } from 'lucide-react'
 import api from '../services/api.js'
 
-const DomainsPanel = () => {
+const DomainsPanel = ({ showPageIntro = true }) => {
   const [routes, setRoutes] = useState([])
   const [services, setServices] = useState([])
   const [showCreateModal, setShowCreateModal] = useState(false)
@@ -78,11 +78,13 @@ const DomainsPanel = () => {
 
   return (
     <div className="space-y-6">
-      <div className="flex items-center justify-between">
-        <div>
-          <h1 className="text-2xl font-bold text-white">Gestão de Rotas</h1>
-          <p className="text-slate-400">Configure paths para seus serviços em {config.baseUrl}</p>
-        </div>
+      <div className={`flex flex-wrap gap-3 ${showPageIntro ? 'items-center justify-between' : 'items-center justify-end'}`}>
+        {showPageIntro ? (
+          <div>
+            <h1 className="text-2xl font-bold text-white">Gestão de Rotas</h1>
+            <p className="text-slate-400">Configure paths para seus serviços em {config.baseUrl}</p>
+          </div>
+        ) : null}
         <div className="flex gap-3">
           <button
             onClick={() => setShowConfigModal(true)}

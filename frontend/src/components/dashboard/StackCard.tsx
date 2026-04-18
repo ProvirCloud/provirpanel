@@ -6,11 +6,19 @@ import ActionButton from './ActionButton'
 
 type StackCardProps = {
   stack: Stack
+  onSync?: (stack: Stack) => void
+  onStart?: (stack: Stack) => void
+  onOpenCanvas?: (stack: Stack) => void
+  onDelete?: (stack: Stack) => void
+  busyAction?: string | null
 }
 
-const StackCard = ({ stack }: StackCardProps) => {
+const StackCard = ({ stack, onSync, onStart, onOpenCanvas, onDelete, busyAction }: StackCardProps) => {
+  const isRunning = stack.status === 'running'
+  const actionKey = `${stack.id}:`
+
   return (
-    <Card className="p-6 transition-all duration-[var(--duration-fast)] ease-[var(--ease-standard)] hover:-translate-y-0.5 hover:border-[var(--color-brand)]/30">
+    <Card variant="elevated" className="p-6 transition-all duration-[var(--duration-fast)] ease-[var(--ease-standard)] hover:-translate-y-0.5 hover:border-[var(--color-brand)]/30">
       <div className="flex items-start justify-between gap-4">
         <div>
           <h3 className="text-lg font-semibold text-[var(--color-text)]">{stack.name}</h3>
@@ -21,7 +29,7 @@ const StackCard = ({ stack }: StackCardProps) => {
 
       <div className="mt-5 flex flex-wrap items-center gap-2">
         {stack.services.map((service) => (
-          <span key={service} className="rounded-full border px-3 py-1.5 text-xs" style={{ borderColor: 'var(--color-border)', background: 'var(--color-panel-muted)', color: 'var(--color-text-muted)' }}>
+          <span key={service} className="rounded-full border px-3 py-1.5 text-xs" style={{ borderColor: 'var(--color-border)', background: 'var(--color-canvas-subtle)', color: 'var(--color-text-muted)' }}>
             {service}
           </span>
         ))}
@@ -34,10 +42,10 @@ const StackCard = ({ stack }: StackCardProps) => {
       </div>
 
       <div className="mt-6 flex flex-wrap gap-3">
-        <ActionButton label="Sync" icon={RefreshCw} />
-        <ActionButton label="Start" icon={Play} />
-        <ActionButton label="Abrir Canvas" icon={LayoutPanelTop} variant="primary" />
-        <ActionButton label="Delete" icon={Trash2} variant="danger" />
+        <ActionButton label="Sync" icon={RefreshCw} onClick={() => onSync?.(stack)} disabled={busyAction === `${actionKey}sync`} />
+        <ActionButton label={isRunning ? 'Stop' : 'Start'} icon={Play} onClick={() => onStart?.(stack)} disabled={busyAction === `${actionKey}start`} />
+        <ActionButton label="Abrir Canvas" icon={LayoutPanelTop} variant="primary" onClick={() => onOpenCanvas?.(stack)} />
+        <ActionButton label="Delete" icon={Trash2} variant="danger" onClick={() => onDelete?.(stack)} disabled={busyAction === `${actionKey}delete`} />
       </div>
     </Card>
   )

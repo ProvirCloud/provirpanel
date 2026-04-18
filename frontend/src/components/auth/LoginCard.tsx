@@ -13,12 +13,21 @@ type LoginCardProps = {
 
 const LoginCard = ({ title, subtitle, children }: LoginCardProps) => {
   const { theme } = useTheme()
-  const logo = theme === 'light' ? logoDark : logoLight
+  const logo = theme === 'light' ? logoLight : logoDark
+  const cardStyle: CSSProperties = theme === 'light'
+    ? {
+        background: 'var(--color-surface-elevated)',
+        boxShadow: '0 24px 56px rgba(30, 69, 128, 0.08), 0 2px 0 rgba(255,255,255,0.9) inset',
+      }
+    : {
+        background: 'color-mix(in srgb, var(--card-bg-elevated) 84%, transparent)',
+        backdropFilter: 'blur(24px)',
+      }
 
   return (
     <section className="order-1 lg:order-2">
       <div className="mx-auto w-full max-w-[440px]">
-        <Card className="overflow-hidden p-5 sm:p-8" style={{ background: 'color-mix(in srgb, var(--card-bg-elevated) 84%, transparent)', backdropFilter: 'blur(24px)' } as CSSProperties}>
+        <Card className="overflow-hidden p-5 sm:p-8" style={cardStyle}>
           <div className="mb-8 lg:hidden">
             <img src={logo} alt="Zeus AI Cloud OS" className="mx-auto h-12 w-auto object-contain sm:h-14" />
           </div>

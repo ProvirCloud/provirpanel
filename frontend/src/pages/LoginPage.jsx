@@ -84,7 +84,7 @@ const LoginPage = () => {
           <LoginHero />
           <LoginCard
             title={mfaSetupRequired ? 'Configurar MFA' : mfaRequired ? 'Verificação MFA' : 'Acesse o Zeus Cloud'}
-            subtitle={mfaRequired ? 'Insira o código do autenticador para continuar.' : 'Acesso ao seu AI Cloud OS — controle total da sua infraestrutura, aplicações e dados.'}
+            subtitle={mfaRequired ? 'Insira o código do autenticador para continuar.' : ''}
           >
             <LoginForm
               username={username}
