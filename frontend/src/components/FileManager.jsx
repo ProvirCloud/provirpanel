@@ -31,7 +31,7 @@ const iconFor = (name, isDir) => {
   return FileText
 }
 
-const FileManager = () => {
+const FileManager = ({ showPageIntro = true }) => {
   const [tree, setTree] = useState([])
   const [items, setItems] = useState([])
   const [path, setPath] = useState('/')
@@ -400,11 +400,13 @@ const FileManager = () => {
 
   return (
     <div className="space-y-6">
-      <div className="flex flex-wrap items-center justify-between gap-4">
-        <div>
-          <p className="text-xs uppercase tracking-[0.3em] text-slate-400">Storage</p>
-          <h2 className="text-2xl font-semibold text-white">Gerenciador de arquivos</h2>
-        </div>
+      <div className={`flex flex-wrap gap-4 ${showPageIntro ? 'items-center justify-between' : 'items-center justify-end'}`}>
+        {showPageIntro ? (
+          <div>
+            <p className="text-xs uppercase tracking-[0.3em] text-slate-400">Storage</p>
+            <h2 className="text-2xl font-semibold text-white">Gerenciador de arquivos</h2>
+          </div>
+        ) : null}
         <div className="flex items-center gap-2">
           <button
             className="flex items-center gap-2 rounded-xl border border-slate-800 bg-slate-900/60 px-3 py-2 text-xs text-slate-200 transition hover:border-blue-500/60"

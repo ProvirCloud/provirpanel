@@ -6,6 +6,9 @@
   "scripts": {
     "start": "node backend/src/server.js",
     "dev": "nodemon backend/src/server.js",
+    "frontend:dev": "npm --prefix frontend run dev -- --host",
+    "backend:dev": "nodemon backend/src/server.js",
+    "dev:full": "concurrently -k -n backend,frontend -c cyan,magenta \"npm run backend:dev\" \"npm run frontend:dev\"",
     "pm2:start": "pm2 start backend/src/server.js --name provirpanel",
     "prisma:generate": "prisma generate --schema backend/prisma/schema.prisma",
     "prisma:migrate": "prisma migrate deploy --schema backend/prisma/schema.prisma",
@@ -33,6 +36,7 @@
     "tar-fs": "^3.0.4"
   },
   "devDependencies": {
+    "concurrently": "^9.2.1",
     "prisma": "^5.22.0"
   }
 }

@@ -23,6 +23,11 @@ const formatPrompt = (cwd) => {
   return `\x1b[1;34mcloud\x1b[0m@\x1b[1;34mpainel\x1b[0m:\x1b[1;32m${display}\x1b[0m$ `
 }
 const HISTORY_KEY = 'cloudpainel_terminal_history'
+const TERMINAL_FONT_SIZE = 14
+const TERMINAL_LINE_HEIGHT = 1.18
+const TERMINAL_FONT_FAMILY = '"JetBrains Mono", ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", "Courier New", monospace'
+const TERMINAL_SAFE_PADDING_X = 20
+const TERMINAL_SAFE_PADDING_Y = 20
 const COMMAND_HINTS = [
   'ls',
   'll',
@@ -78,14 +83,23 @@ const formatStatus = (status) => {
 
 const measureCharSize = (container) => {
   const span = document.createElement('span')
-  span.textContent = 'W'
-  span.style.fontFamily = '"JetBrains Mono", ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", "Courier New", monospace'
-  span.style.fontSize = '14px'
+  span.textContent = 'WWWWWWWWWW'
+  span.style.position = 'absolute'
+  span.style.top = '-9999px'
+  span.style.left = '-9999px'
+  span.style.fontFamily = TERMINAL_FONT_FAMILY
+  span.style.fontSize = `${TERMINAL_FONT_SIZE}px`
+  span.style.lineHeight = String(TERMINAL_LINE_HEIGHT)
+  span.style.letterSpacing = '0px'
   span.style.visibility = 'hidden'
+  span.style.whiteSpace = 'pre'
   container.appendChild(span)
   const rect = span.getBoundingClientRect()
   span.remove()
-  return { width: rect.width || 8, height: rect.height || 16 }
+  return {
+    width: (rect.width / 10) || 8.4,
+    height: rect.height || (TERMINAL_FONT_SIZE * TERMINAL_LINE_HEIGHT)
+  }
 }
 
 const fitTerminal = (terminal, container) => {
@@ -93,9 +107,11 @@ const fitTerminal = (terminal, container) => {
     return
   }
   const { width, height } = container.getBoundingClientRect()
+  const safeWidth = Math.max(0, width - TERMINAL_SAFE_PADDING_X)
+  const safeHeight = Math.max(0, height - TERMINAL_SAFE_PADDING_Y)
   const charSize = measureCharSize(container)
-  const cols = Math.max(20, Math.floor(width / charSize.width))
-  const rows = Math.max(8, Math.floor(height / charSize.height))
+  const cols = Math.max(20, Math.floor(safeWidth / charSize.width))
+  const rows = Math.max(8, Math.floor(safeHeight / charSize.height))
   terminal.resize(cols, rows)
 }
 
@@ -106,7 +122,7 @@ const writePrompt = (terminal, cwd, newLine = true) => {
   terminal.write(formatPrompt(cwd))
 }
 
-const Terminal = () => {
+const Terminal = ({ showPageIntro = true }) => {
   const [tabs, setTabs] = useState(() => [
     { id: generateUUID(), title: 'Terminal 1', status: 'disconnected' }
   ])
@@ -142,10 +158,11 @@ const Terminal = () => {
       }
 
       const term = new XTerm({
-        fontSize: 14,
+        fontSize: TERMINAL_FONT_SIZE,
+        lineHeight: TERMINAL_LINE_HEIGHT,
+        letterSpacing: 0,
         cursorBlink: true,
-        fontFamily:
-          '"JetBrains Mono", ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", "Courier New", monospace',
+        fontFamily: TERMINAL_FONT_FAMILY,
         theme: {
           background: '#0b1120',
           foreground: '#e2e8f0',
@@ -508,28 +525,30 @@ const Terminal = () => {
 
   return (
     <div className="space-y-4">
-      <div className="flex flex-wrap items-center justify-between gap-3">
-        <div>
-          <p className="zeus-kicker text-xs font-semibold uppercase">Terminal</p>
-          <h2 className="text-2xl font-semibold text-slate-900">Sessao interativa</h2>
-        </div>
+      <div className={`flex flex-wrap gap-3 ${showPageIntro ? 'items-center justify-between' : 'items-center justify-end'}`}>
+        {showPageIntro ? (
+          <div>
+            <p className="zeus-kicker text-xs font-semibold uppercase">Terminal</p>
+            <h2 className="text-2xl font-semibold" style={{ color: 'var(--text-primary)' }}>Sessao interativa</h2>
+          </div>
+        ) : null}
         <div className="flex items-center gap-2">
           <button
-            className="flex items-center gap-2 rounded-2xl border border-blue-100 bg-white px-3 py-2 text-xs text-slate-700 transition hover:border-blue-400"
+            className="flex items-center gap-2 rounded-lg border px-3 py-2 text-xs transition" style={{ background: 'var(--bg-elevated)', borderColor: 'var(--border-default)', color: 'var(--text-secondary)' }} onMouseEnter={e => { e.currentTarget.style.borderColor = 'var(--accent)'; e.currentTarget.style.color = 'var(--text-primary)' }} onMouseLeave={e => { e.currentTarget.style.borderColor = 'var(--border-default)'; e.currentTarget.style.color = 'var(--text-secondary)' }}
             onClick={copyLastOutput}
           >
             <Copy className="h-4 w-4" />
             Copiar resultado
           </button>
           <button
-            className="flex items-center gap-2 rounded-2xl border border-blue-100 bg-white px-3 py-2 text-xs text-slate-700 transition hover:border-blue-400"
+            className="flex items-center gap-2 rounded-lg border px-3 py-2 text-xs transition" style={{ background: 'var(--bg-elevated)', borderColor: 'var(--border-default)', color: 'var(--text-secondary)' }} onMouseEnter={e => { e.currentTarget.style.borderColor = 'var(--accent)'; e.currentTarget.style.color = 'var(--text-primary)' }} onMouseLeave={e => { e.currentTarget.style.borderColor = 'var(--border-default)'; e.currentTarget.style.color = 'var(--text-secondary)' }}
             onClick={clearTerminal}
           >
             <Trash2 className="h-4 w-4" />
             Limpar
           </button>
           <button
-            className="flex items-center gap-2 rounded-2xl border border-blue-100 bg-white px-3 py-2 text-xs text-slate-700 transition hover:border-blue-400"
+            className="flex items-center gap-2 rounded-lg border px-3 py-2 text-xs transition" style={{ background: 'var(--bg-elevated)', borderColor: 'var(--border-default)', color: 'var(--text-secondary)' }} onMouseEnter={e => { e.currentTarget.style.borderColor = 'var(--accent)'; e.currentTarget.style.color = 'var(--text-primary)' }} onMouseLeave={e => { e.currentTarget.style.borderColor = 'var(--border-default)'; e.currentTarget.style.color = 'var(--text-secondary)' }}
             onClick={resetConnection}
           >
             <RefreshCw className="h-4 w-4" />
@@ -550,20 +569,21 @@ const Terminal = () => {
           <button
             key={tab.id}
             onClick={() => setActiveId(tab.id)}
-            className={`flex items-center gap-2 rounded-full border px-4 py-2 text-xs transition ${
-              activeId === tab.id
-                ? 'border-blue-300 bg-blue-50 text-blue-800'
-                : 'border-blue-100 bg-white text-slate-600 hover:border-blue-300'
-            }`}
+            className="flex items-center gap-2 rounded-full border px-4 py-2 text-xs transition"
+            style={activeId === tab.id
+              ? { background: 'var(--accent-dim)', borderColor: 'rgba(77,126,247,0.35)', color: 'var(--accent)' }
+              : { background: 'var(--bg-elevated)', borderColor: 'var(--border-default)', color: 'var(--text-secondary)' }
+            }
           >
             <TerminalIcon className="h-3.5 w-3.5" />
             {tab.title}
-            <span className="rounded-full bg-slate-100 px-2 py-0.5 text-[10px] text-slate-600">
+            <span className="rounded-full px-2 py-0.5 text-[10px]" style={{ background: 'var(--bg-card)', color: 'var(--text-muted)' }}>
               {formatStatus(tab.status)}
             </span>
             {tabs.length > 1 && (
               <span
-                className="ml-1 text-slate-400 hover:text-rose-500"
+                className="ml-1 hover:text-rose-400"
+                style={{ color: 'var(--text-muted)' }}
                 onClick={(event) => {
                   event.stopPropagation()
                   closeTab(tab.id)
@@ -591,7 +611,7 @@ const Terminal = () => {
           >
             <div
               ref={setContainerRef(tab.id)}
-              className="h-80 min-h-[16rem] w-full resize-y overflow-auto rounded-2xl border border-slate-700 bg-[#07101f] text-slate-100 shadow-inner shadow-black/30"
+              className="provir-terminal-shell h-80 min-h-[16rem] w-full resize-y overflow-hidden rounded-2xl border border-slate-700 bg-[#07101f] text-slate-100 shadow-inner shadow-black/30"
             />
             <button
               className="absolute right-3 top-3 hidden items-center gap-2 rounded-xl border border-slate-700 bg-slate-950/90 px-3 py-1 text-[11px] text-slate-200 shadow-lg transition group-hover:flex"

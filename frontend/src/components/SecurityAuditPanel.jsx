@@ -23,7 +23,7 @@ const formatDate = (value) => {
   return date.toLocaleString('pt-BR')
 }
 
-const SecurityAuditPanel = () => {
+const SecurityAuditPanel = ({ showPageIntro = true }) => {
   const [url, setUrl] = useState('')
   const [result, setResult] = useState(null)
   const [loading, setLoading] = useState(false)
@@ -130,11 +130,13 @@ const SecurityAuditPanel = () => {
 
   return (
     <div className="space-y-6">
-      <div className="flex items-center justify-between">
-        <div>
-          <p className="text-xs uppercase tracking-[0.3em] text-slate-400">Seguranca</p>
-          <h2 className="text-2xl font-semibold text-white">Auditoria do ambiente</h2>
-        </div>
+      <div className={`flex flex-wrap gap-3 ${showPageIntro ? 'items-center justify-between' : 'items-center justify-end'}`}>
+        {showPageIntro ? (
+          <div>
+            <p className="text-xs uppercase tracking-[0.3em] text-slate-400">Seguranca</p>
+            <h2 className="text-2xl font-semibold text-white">Auditoria do ambiente</h2>
+          </div>
+        ) : null}
         <button
           className="rounded-xl bg-emerald-500 px-4 py-2 text-sm font-semibold text-slate-950"
           onClick={runAudit}

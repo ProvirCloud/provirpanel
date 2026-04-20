@@ -1,8 +1,30 @@
 import { Outlet, useNavigate } from 'react-router-dom'
 import { useEffect, useState } from 'react'
-import Navbar from '../components/Navbar.jsx'
-import Sidebar from '../components/Sidebar.jsx'
+import AppShell from '../components/layout/AppShell'
+import Button from '../components/ui/Button'
+import Card from '../components/ui/Card'
+import Input from '../components/ui/Input'
 import api from '../services/api.js'
+
+const Field = ({ label, children }) => (
+  <label className="block space-y-2">
+    <span className="text-sm font-medium text-[var(--color-text)]">{label}</span>
+    {children}
+  </label>
+)
+
+const Modal = ({ title, subtitle, children, footer }) => (
+  <div className="fixed inset-0 z-40 flex items-center justify-center p-4" style={{ background: 'var(--color-overlay)' }}>
+    <Card variant="elevated" className="w-full max-w-md p-6">
+      <div className="mb-5">
+        <h3 className="text-lg font-semibold text-[var(--color-text)]">{title}</h3>
+        {subtitle ? <p className="mt-1 text-sm text-[var(--color-text-muted)]">{subtitle}</p> : null}
+      </div>
+      <div className="space-y-4">{children}</div>
+      {footer ? <div className="mt-6 flex flex-wrap justify-end gap-2">{footer}</div> : null}
+    </Card>
+  </div>
+)
 
 const MainLayout = () => {
   const navigate = useNavigate()
@@ -12,35 +34,23 @@ const MainLayout = () => {
   const [mfaEnabled, setMfaEnabled] = useState(false)
   const [mfaSetup, setMfaSetup] = useState(null)
   const [mfaCode, setMfaCode] = useState('')
-  const [passwordForm, setPasswordForm] = useState({
-    currentPassword: '',
-    newPassword: ''
-  })
-  const [createForm, setCreateForm] = useState({
-    username: '',
-    password: '',
-    role: 'dev'
-  })
+  const [passwordForm, setPasswordForm] = useState({ currentPassword: '', newPassword: '' })
+  const [createForm, setCreateForm] = useState({ username: '', password: '', role: 'dev' })
   const [message, setMessage] = useState('')
   const [username, setUsername] = useState('admin')
 
   useEffect(() => {
-    api
-      .get('/auth/me')
-      .then((response) => {
-        if (response.data?.user?.username) {
-          setUsername(response.data.user.username)
-        }
-      })
-      .catch(() => {
-        setUsername('admin')
-      })
+    api.get('/auth/me').then((response) => {
+      if (response.data?.user?.username) setUsername(response.data.user.username)
+    }).catch(() => {
+      setUsername('admin')
+    })
   }, [])
 
   const handleLogout = async () => {
     try {
       await api.post('/auth/logout')
-    } catch (err) {
+    } catch {
       // ignore
     }
     try {
@@ -50,12 +60,10 @@ const MainLayout = () => {
         const keys = await caches.keys()
         await Promise.all(keys.map((key) => caches.delete(key)))
       }
-    } catch (err) {
-      // ignore cache cleanup failures
+    } catch {
+      // ignore
     }
-    window.dispatchEvent(new CustomEvent('provirpanel-auth', {
-      detail: { authenticated: false }
-    }))
+    window.dispatchEvent(new CustomEvent('provirpanel-auth', { detail: { authenticated: false } }))
     navigate('/login', { replace: true })
   }
 
@@ -67,7 +75,7 @@ const MainLayout = () => {
     try {
       const response = await api.get('/auth/mfa/status')
       setMfaEnabled(!!response.data?.enabled)
-    } catch (err) {
+    } catch {
       setMessage('Erro ao carregar status MFA')
     }
   }
@@ -77,10 +85,10 @@ const MainLayout = () => {
     setMessage('')
     try {
       await api.post('/auth/change-password', passwordForm)
-      setMessage('Senha atualizada')
+      setMessage('Senha atualizada com sucesso')
       setShowPasswordModal(false)
       setPasswordForm({ currentPassword: '', newPassword: '' })
-    } catch (err) {
+    } catch {
       setMessage('Erro ao atualizar senha')
     }
   }
@@ -90,241 +98,158 @@ const MainLayout = () => {
     setMessage('')
     try {
       await api.post('/auth/users', createForm)
-      setMessage('Usuario criado')
+      setMessage('Usuário criado com sucesso')
       setShowCreateModal(false)
       setCreateForm({ username: '', password: '', role: 'dev' })
-    } catch (err) {
-      setMessage('Erro ao criar usuario')
+    } catch {
+      setMessage('Erro ao criar usuário')
     }
   }
 
   return (
-    <div className="zeus-shell px-4 py-4 lg:px-5">
-      <Navbar
-        onLogout={handleLogout}
-        onChangePassword={() => setShowPasswordModal(true)}
-        onCreateUser={() => setShowCreateModal(true)}
-        onManageMfa={openMfaModal}
-        username={username}
-      />
-      <div className="mt-4 flex gap-4">
-        <Sidebar />
-        <main className="zeus-content min-w-0 flex-1 pb-8">
-          <Outlet />
-        </main>
-      </div>
+    <AppShell
+      username={username}
+      onLogout={handleLogout}
+      onChangePassword={() => { setMessage(''); setShowPasswordModal(true) }}
+      onCreateUser={() => { setMessage(''); setShowCreateModal(true) }}
+      onManageMfa={openMfaModal}
+    >
+      <Outlet />
 
-      {(showPasswordModal || showCreateModal || showMfaModal) && (
-        <div className="fixed inset-0 z-40 flex items-center justify-center bg-black/60 p-4">
-          <div className="zeus-panel w-full max-w-md rounded-[1.8rem] p-6 text-slate-800">
-            {showPasswordModal && (
-              <>
-                <h3 className="text-lg font-semibold text-slate-900">Alterar senha</h3>
-                <form className="mt-4 space-y-3" onSubmit={submitPassword}>
-                  <input
-                    className="w-full rounded-2xl border border-blue-100 bg-white px-4 py-3 text-sm text-slate-900"
-                    type="password"
-                    placeholder="Senha atual"
-                    value={passwordForm.currentPassword}
-                    onChange={(event) =>
-                      setPasswordForm((prev) => ({
-                        ...prev,
-                        currentPassword: event.target.value
-                      }))
+      {showPasswordModal ? (
+        <Modal
+          title="Alterar senha"
+          subtitle="Atualize a credencial de acesso administrativo."
+          footer={(
+            <>
+              <Button variant="secondary" type="button" onClick={() => setShowPasswordModal(false)}>Cancelar</Button>
+              <Button variant="primary" onClick={submitPassword}>Salvar senha</Button>
+            </>
+          )}
+        >
+          <Field label="Senha atual">
+            <Input type="password" placeholder="••••••••" value={passwordForm.currentPassword} onChange={(event) => setPasswordForm((prev) => ({ ...prev, currentPassword: event.target.value }))} />
+          </Field>
+          <Field label="Nova senha">
+            <Input type="password" placeholder="••••••••" value={passwordForm.newPassword} onChange={(event) => setPasswordForm((prev) => ({ ...prev, newPassword: event.target.value }))} />
+          </Field>
+          {message ? <p className="text-sm text-[var(--color-text-muted)]">{message}</p> : null}
+        </Modal>
+      ) : null}
+
+      {showCreateModal ? (
+        <Modal
+          title="Criar usuário"
+          subtitle="Provisionar um novo acesso ao Zeus Cloud."
+          footer={(
+            <>
+              <Button variant="secondary" type="button" onClick={() => setShowCreateModal(false)}>Cancelar</Button>
+              <Button variant="primary" onClick={submitCreateUser}>Criar usuário</Button>
+            </>
+          )}
+        >
+          <Field label="Usuário">
+            <Input placeholder="nome-do-usuario" value={createForm.username} onChange={(event) => setCreateForm((prev) => ({ ...prev, username: event.target.value }))} />
+          </Field>
+          <Field label="Senha">
+            <Input type="password" placeholder="••••••••" value={createForm.password} onChange={(event) => setCreateForm((prev) => ({ ...prev, password: event.target.value }))} />
+          </Field>
+          <Field label="Perfil">
+            <select className="zeus-select" value={createForm.role} onChange={(event) => setCreateForm((prev) => ({ ...prev, role: event.target.value }))}>
+              <option value="admin">Admin</option>
+              <option value="dev">Dev</option>
+              <option value="viewer">Viewer</option>
+            </select>
+          </Field>
+          {message ? <p className="text-sm text-[var(--color-text-muted)]">{message}</p> : null}
+        </Modal>
+      ) : null}
+
+      {showMfaModal ? (
+        <Modal
+          title="Autenticação em dois fatores"
+          subtitle="Use Google Authenticator, Microsoft Authenticator ou Authy."
+          footer={<Button variant="secondary" type="button" onClick={() => setShowMfaModal(false)}>Fechar</Button>}
+        >
+          {mfaEnabled ? (
+            <>
+              <div className="rounded-[18px] border px-4 py-3 text-sm" style={{ borderColor: 'color-mix(in srgb, var(--color-success) 30%, transparent)', background: 'var(--color-success-soft)', color: 'var(--color-success)' }}>
+                MFA ativo na conta.
+              </div>
+              <Field label="Código MFA para desativar">
+                <Input placeholder="000000" value={mfaCode} onChange={(event) => setMfaCode(event.target.value)} />
+              </Field>
+              <Button
+                variant="danger"
+                className="w-full"
+                onClick={async () => {
+                  setMessage('')
+                  try {
+                    await api.post('/auth/mfa/disable', { token: mfaCode })
+                    setMfaEnabled(false)
+                    setMfaCode('')
+                    setMessage('MFA desativado')
+                  } catch {
+                    setMessage('Erro ao desativar MFA')
+                  }
+                }}
+              >
+                Desativar MFA
+              </Button>
+            </>
+          ) : (
+            <>
+              {!mfaSetup ? (
+                <Button
+                  variant="primary"
+                  className="w-full"
+                  onClick={async () => {
+                    setMessage('')
+                    try {
+                      const response = await api.post('/auth/mfa/setup')
+                      setMfaSetup(response.data)
+                    } catch {
+                      setMessage('Erro ao iniciar MFA')
                     }
-                  />
-                  <input
-                    className="w-full rounded-2xl border border-blue-100 bg-white px-4 py-3 text-sm text-slate-900"
-                    type="password"
-                    placeholder="Nova senha"
-                    value={passwordForm.newPassword}
-                    onChange={(event) =>
-                      setPasswordForm((prev) => ({
-                        ...prev,
-                        newPassword: event.target.value
-                      }))
-                    }
-                  />
-                  <div className="flex gap-2">
-                    <button className="rounded-2xl bg-[linear-gradient(135deg,_#16366f,_#3b82f6)] px-4 py-2.5 text-xs font-semibold text-white">
-                      Salvar
-                    </button>
-                    <button
-                      type="button"
-                      className="rounded-2xl border border-blue-100 bg-white px-4 py-2.5 text-xs text-slate-700"
-                      onClick={() => setShowPasswordModal(false)}
-                    >
-                      Cancelar
-                    </button>
+                  }}
+                >
+                  Gerar QR Code
+                </Button>
+              ) : (
+                <>
+                  {mfaSetup.qr ? <div className="flex justify-center rounded-[20px] border bg-white p-3" style={{ borderColor: 'var(--color-border)' }}><img src={mfaSetup.qr} alt="QR Code MFA" className="h-40 w-40" /></div> : null}
+                  <div className="rounded-[18px] border px-4 py-3" style={{ borderColor: 'var(--color-border)', background: 'var(--color-panel-muted)' }}>
+                    <p className="mb-1 text-xs text-[var(--color-text-soft)]">Código manual</p>
+                    <p className="break-all font-mono text-sm text-[var(--color-brand)]">{mfaSetup.secret}</p>
                   </div>
-                </form>
-              </>
-            )}
-
-            {showCreateModal && (
-              <>
-                <h3 className="text-lg font-semibold text-slate-900">Criar usuario</h3>
-                <form className="mt-4 space-y-3" onSubmit={submitCreateUser}>
-                  <input
-                    className="w-full rounded-2xl border border-blue-100 bg-white px-4 py-3 text-sm text-slate-900"
-                    placeholder="Usuario"
-                    value={createForm.username}
-                    onChange={(event) =>
-                      setCreateForm((prev) => ({ ...prev, username: event.target.value }))
-                    }
-                  />
-                  <input
-                    className="w-full rounded-2xl border border-blue-100 bg-white px-4 py-3 text-sm text-slate-900"
-                    type="password"
-                    placeholder="Senha"
-                    value={createForm.password}
-                    onChange={(event) =>
-                      setCreateForm((prev) => ({ ...prev, password: event.target.value }))
-                    }
-                  />
-                  <select
-                    className="w-full rounded-2xl border border-blue-100 bg-white px-4 py-3 text-sm text-slate-900"
-                    value={createForm.role}
-                    onChange={(event) =>
-                      setCreateForm((prev) => ({ ...prev, role: event.target.value }))
-                    }
+                  <Field label="Código do autenticador">
+                    <Input placeholder="000000" value={mfaCode} onChange={(event) => setMfaCode(event.target.value)} />
+                  </Field>
+                  <Button
+                    variant="primary"
+                    onClick={async () => {
+                      setMessage('')
+                      try {
+                        await api.post('/auth/mfa/enable', { token: mfaCode })
+                        setMfaEnabled(true)
+                        setMfaCode('')
+                        setMfaSetup(null)
+                        setMessage('MFA ativado')
+                      } catch {
+                        setMessage('Código MFA inválido')
+                      }
+                    }}
                   >
-                    <option value="admin">Admin</option>
-                    <option value="dev">Dev</option>
-                    <option value="viewer">Viewer</option>
-                  </select>
-                  <div className="flex gap-2">
-                    <button className="rounded-2xl bg-[linear-gradient(135deg,_#16366f,_#3b82f6)] px-4 py-2.5 text-xs font-semibold text-white">
-                      Criar
-                    </button>
-                    <button
-                      type="button"
-                      className="rounded-2xl border border-blue-100 bg-white px-4 py-2.5 text-xs text-slate-700"
-                      onClick={() => setShowCreateModal(false)}
-                    >
-                      Cancelar
-                    </button>
-                  </div>
-                </form>
-              </>
-            )}
-
-            {showMfaModal && (
-              <>
-                <h3 className="text-lg font-semibold text-slate-900">MFA (Authenticator)</h3>
-                <p className="mt-1 text-xs text-slate-500">
-                  Conecte seu aplicativo (Google/Microsoft Authenticator) para proteger a conta.
-                </p>
-                {mfaEnabled ? (
-                  <div className="mt-4 space-y-3">
-                    <p className="text-sm text-emerald-300">MFA ativo</p>
-                    <input
-                      className="w-full rounded-2xl border border-blue-100 bg-white px-4 py-3 text-sm text-slate-900"
-                      placeholder="Codigo MFA"
-                      value={mfaCode}
-                      onChange={(event) => setMfaCode(event.target.value)}
-                    />
-                    <div className="flex gap-2">
-                      <button
-                        className="rounded-2xl bg-rose-500 px-4 py-2.5 text-xs font-semibold text-white"
-                        onClick={async () => {
-                          setMessage('')
-                          try {
-                            await api.post('/auth/mfa/disable', { token: mfaCode })
-                            setMfaEnabled(false)
-                            setMfaCode('')
-                            setMessage('MFA desativado')
-                          } catch (err) {
-                            setMessage('Erro ao desativar MFA')
-                          }
-                        }}
-                      >
-                        Desativar MFA
-                      </button>
-                      <button
-                        type="button"
-                        className="rounded-2xl border border-blue-100 bg-white px-4 py-2.5 text-xs text-slate-700"
-                        onClick={() => setShowMfaModal(false)}
-                      >
-                        Fechar
-                      </button>
-                    </div>
-                  </div>
-                ) : (
-                  <div className="mt-4 space-y-3">
-                    {!mfaSetup && (
-                      <button
-                        className="rounded-2xl bg-[linear-gradient(135deg,_#16366f,_#3b82f6)] px-4 py-2.5 text-xs font-semibold text-white"
-                        onClick={async () => {
-                          setMessage('')
-                          try {
-                            const response = await api.post('/auth/mfa/setup')
-                            setMfaSetup(response.data)
-                          } catch (err) {
-                            setMessage('Erro ao iniciar MFA')
-                          }
-                        }}
-                      >
-                        Gerar QR Code
-                      </button>
-                    )}
-                    {mfaSetup && (
-                      <div className="space-y-3">
-                        {mfaSetup.qr && (
-                          <img src={mfaSetup.qr} alt="QR Code MFA" className="mx-auto h-40 w-40 rounded-xl bg-white p-2" />
-                        )}
-                        <div className="rounded-2xl border border-blue-100 bg-white px-3 py-3 text-xs text-slate-700">
-                          Codigo manual: <span className="font-mono text-emerald-300">{mfaSetup.secret}</span>
-                        </div>
-                        <input
-                          className="w-full rounded-2xl border border-blue-100 bg-white px-4 py-3 text-sm text-slate-900"
-                          placeholder="Codigo MFA"
-                          value={mfaCode}
-                          onChange={(event) => setMfaCode(event.target.value)}
-                        />
-                        <div className="flex gap-2">
-                          <button
-                            className="rounded-2xl bg-emerald-500 px-4 py-2.5 text-xs font-semibold text-slate-950"
-                            onClick={async () => {
-                              setMessage('')
-                              try {
-                                await api.post('/auth/mfa/enable', { token: mfaCode })
-                                setMfaEnabled(true)
-                                setMfaCode('')
-                                setMfaSetup(null)
-                                setMessage('MFA ativado')
-                              } catch (err) {
-                                setMessage('Codigo MFA invalido')
-                              }
-                            }}
-                          >
-                            Ativar MFA
-                          </button>
-                          <button
-                            type="button"
-                            className="rounded-2xl border border-blue-100 bg-white px-4 py-2.5 text-xs text-slate-700"
-                            onClick={() => setShowMfaModal(false)}
-                          >
-                            Cancelar
-                          </button>
-                        </div>
-                      </div>
-                    )}
-                  </div>
-                )}
-                {message && <p className="mt-3 text-xs text-slate-600">{message}</p>}
-              </>
-            )}
-          </div>
-        </div>
-      )}
-
-      {message && (
-        <div className="zeus-panel fixed right-6 top-24 rounded-2xl px-4 py-3 text-xs text-slate-700">
-          {message}
-        </div>
-      )}
-    </div>
+                    Ativar MFA
+                  </Button>
+                </>
+              )}
+            </>
+          )}
+          {message ? <p className="text-sm text-[var(--color-text-muted)]">{message}</p> : null}
+        </Modal>
+      ) : null}
+    </AppShell>
   )
 }
 

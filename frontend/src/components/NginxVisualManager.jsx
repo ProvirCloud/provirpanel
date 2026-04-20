@@ -3414,7 +3414,7 @@ const SSLPanel = ({ serverId, onNotify }) => {
 }
 
 // ==================== MAIN COMPONENT ====================
-const NginxVisualManager = () => {
+const NginxVisualManager = ({ showPageIntro = true }) => {
   const [servers, setServers] = useState([])
   const [selectedServer, setSelectedServer] = useState(null)
   const [status, setStatus] = useState(null)
@@ -3662,16 +3662,18 @@ const NginxVisualManager = () => {
   return (
     <div className="h-full w-full max-w-full flex flex-col space-y-4">
       {/* Header */}
-      <div className="flex items-center justify-between">
-        <div>
-          <h2 className="text-2xl font-semibold text-white flex items-center gap-2">
-            <Server className="h-6 w-6" />
-            Nginx Visual Manager
-          </h2>
-          <p className="text-sm text-slate-400 mt-1">
-            Gerenciamento visual de virtual hosts, métricas e SSL
-          </p>
-        </div>
+      <div className={`flex flex-wrap gap-3 ${showPageIntro ? 'items-center justify-between' : 'items-center justify-end'}`}>
+        {showPageIntro ? (
+          <div>
+            <h2 className="text-2xl font-semibold text-white flex items-center gap-2">
+              <Server className="h-6 w-6" />
+              Nginx Visual Manager
+            </h2>
+            <p className="text-sm text-slate-400 mt-1">
+              Gerenciamento visual de virtual hosts, métricas e SSL
+            </p>
+          </div>
+        ) : null}
         <div className="flex gap-2 items-center">
           {status?.running ? (
             <div className="flex items-center gap-2 rounded-xl bg-emerald-500/10 px-4 py-2 text-emerald-300">

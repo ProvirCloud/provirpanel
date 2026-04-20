@@ -7,7 +7,7 @@ import {
 } from 'lucide-react'
 import api from '../services/api.js'
 
-const LogsPanel = () => {
+const LogsPanel = ({ showPageIntro = true }) => {
   const [logs, setLogs] = useState([])
   const [filteredLogs, setFilteredLogs] = useState([])
   const [stats, setStats] = useState(null)
@@ -263,13 +263,15 @@ const LogsPanel = () => {
   }
 
   return (
-    <div className="space-y-4">
+    <div className="zeus-logs-page space-y-4">
       {/* Header */}
-      <div className="flex items-center justify-between">
-        <div>
-          <p className="text-xs uppercase tracking-[0.3em] text-slate-400">Sistema</p>
-          <h2 className="text-2xl font-semibold text-white">Logs Avançados</h2>
-        </div>
+      <div className={`flex flex-wrap gap-3 ${showPageIntro ? 'items-center justify-between' : 'items-center justify-end'}`}>
+        {showPageIntro ? (
+          <div>
+            <p className="text-xs uppercase tracking-[0.3em] text-slate-400">Sistema</p>
+            <h2 className="text-2xl font-semibold text-white">Logs Avançados</h2>
+          </div>
+        ) : null}
         <div className="flex items-center gap-2">
           <label className="flex items-center gap-2 text-sm text-slate-300">
             <input
