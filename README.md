@@ -14,6 +14,7 @@ Inclui autenticação JWT, terminal web, métricas em tempo real, Docker manager
 - Metrics collector (CPU/RAM/DISCO/Processos) em tempo real
 - Storage manager com upload/download/preview/editor/rename/move
 - CI/CD basico com git pull/build/restart e rollback
+- Cloudflare control plane para DNS, Email Routing, firewall e WAF
 
 ### Frontend (React + Vite)
 - Login/rotas protegidas
@@ -127,6 +128,20 @@ Notas:
 - macOS usa socket local do Postgres: `DATABASE_URL=postgres://user@/cloudpainel`
 - Linux comum usa TCP: `postgres://user:pass@localhost:5432/cloudpainel`
 - `TERMINAL_OS_USER` define o usuario do SO para comandos admin no terminal
+- `CLOUDFLARE_API_TOKEN` deve ter permissoes de DNS, WAF, Zone Settings, Email Routing Rules e Firewall Access Rules
+
+## Cloudflare como edge padrao
+
+O modulo `/domains` agora opera o Cloudflare como camada padrao para todos os clientes:
+- sincronizacao de zonas da conta
+- baseline Zeus para SSL, HTTPS, posture de seguranca e regras padrao
+- gestao de DNS por zona
+- Email Routing com visualizacao dos registros obrigatorios
+- Access Rules para firewall
+- WAF custom rules via Ruleset Engine
+
+Persistencia local:
+- `backend/data/cloudflare-config.json`
 
 ## Rodando localmente
 

@@ -33,7 +33,7 @@ const sections = [
     label: 'Infraestrutura',
     items: [
       { to: '/nginx',   label: 'Nginx Manager', icon: Server },
-      { to: '/domains', label: 'Rotas',         icon: Globe },
+      { to: '/domains', label: 'Cloudflare',    icon: Globe },
       { to: '/gateway', label: 'Gateway',        icon: Route },
       { to: '/security',label: 'Auditoria',     icon: Shield },
     ]

@@ -8,7 +8,7 @@ const fs = require('fs');
 const path = require('path');
 const net = require('net');
 const os = require('os');
-const { execFile } = require('child_process');
+const { execFile, execSync } = require('child_process');
 const multer = require('multer');
 
 const router = express.Router();
@@ -18,6 +18,32 @@ const serviceLogsPath = path.join(__dirname, '..', 'logs', 'service-updates.log'
 fs.mkdirSync(path.dirname(serviceLogsPath), { recursive: true });
 const jwtSecret = process.env.JWT_SECRET || 'change-me';
 const cookieName = process.env.AUTH_COOKIE_NAME || 'provirpanel_token';
+const CONTAINER_VOLUME_PERMISSIONS = {
+  'postgres-db': {
+    uid: 999,
+    gid: 999,
+    mode: '700',
+    label: 'PostgreSQL'
+  },
+  pgadmin: {
+    uid: 5050,
+    gid: 5050,
+    mode: '777',
+    label: 'pgAdmin'
+  }
+};
+
+const applyContainerVolumePermissions = (templateId, hostPath, progress) => {
+  const permission = CONTAINER_VOLUME_PERMISSIONS[templateId];
+  if (!permission || !hostPath) return;
+
+  execSync(`chown -R ${permission.uid}:${permission.gid} "${hostPath}"`, { stdio: 'ignore' });
+  execSync(`chmod -R ${permission.mode} "${hostPath}"`, { stdio: 'ignore' });
+  if (progress) {
+    progress.push(`✅ Permissões ${permission.label} ajustadas`);
+  }
+};
+
 let dockerBaseDir =
   process.env.DOCKER_VOLUME_BASE ||
   (process.env.CLOUDPAINEL_PROJECTS_DIR
@@ -1445,13 +1471,9 @@ router.post('/services', async (req, res, next) => {
           progress.push(`📂 Criando diretório: ${m.hostPath}`);
           fs.mkdirSync(path.resolve(m.hostPath), { recursive: true });
           
-          // Fix PostgreSQL permissions
-          if (templateId === 'postgres-db') {
+          if (CONTAINER_VOLUME_PERMISSIONS[templateId]) {
             try {
-              const { execSync } = require('child_process');
-              execSync(`chown -R 999:999 "${m.hostPath}"`, { stdio: 'ignore' });
-              execSync(`chmod -R 700 "${m.hostPath}"`, { stdio: 'ignore' });
-              progress.push(`✅ Permissões PostgreSQL ajustadas`);
+              applyContainerVolumePermissions(templateId, m.hostPath, progress);
             } catch (err) {
               progress.push(`⚠️ Aviso: ${err.message}`);
             }
@@ -1630,6 +1652,14 @@ router.post('/services', async (req, res, next) => {
         }
         progress.push(`✅ Usando porta ${pgAdminPort} para pgAdmin`);
         
+        const pgAdminVolumePath = path.join(dockerBaseDir, `${name}-pgadmin`);
+        fs.mkdirSync(pgAdminVolumePath, { recursive: true });
+        try {
+          applyContainerVolumePermissions('pgadmin', pgAdminVolumePath, progress);
+        } catch (err) {
+          progress.push(`⚠️ Aviso ao ajustar volume do pgAdmin: ${err.message}`);
+        }
+
         const pgAdminPortBinding = bindLocalOnly
           ? { HostPort: String(pgAdminPort), HostIp: '127.0.0.1' }
           : { HostPort: String(pgAdminPort) };
@@ -1641,12 +1671,12 @@ router.post('/services', async (req, res, next) => {
             templateId: 'pgadmin',
             parentService: serviceId
           }),
-          User: 'root',
           HostConfig: {
             NetworkMode: networkName,
             PortBindings: {
               '80/tcp': [pgAdminPortBinding]
-            }
+            },
+            Binds: [`${pgAdminVolumePath}:/var/lib/pgadmin`]
           },
           Env: [
             'PGADMIN_DEFAULT_EMAIL=admin@admin.com',
@@ -1667,7 +1697,12 @@ router.post('/services', async (req, res, next) => {
           containerId: pgAdminContainer.Id,
           hostPort: pgAdminPort,
           containerPort: 80,
-          volumes: [],
+          volumes: [
+            {
+              hostPath: pgAdminVolumePath,
+              containerPath: '/var/lib/pgadmin'
+            }
+          ],
           networkName,
           bindLocalOnly,
           url: `http://localhost:${pgAdminPort}`,
