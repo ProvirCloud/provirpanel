@@ -697,7 +697,7 @@ class NginxServerManager {
       if (server.ssl_type !== 'none') {
         config += `    add_header Strict-Transport-Security "max-age=31536000; includeSubDomains; preload" always;\n`;
       }
-      config += `    add_header Content-Security-Policy "default-src 'self' https: data:; img-src 'self' https: data:; style-src 'self' 'unsafe-inline' https:; script-src 'self' 'unsafe-inline' https:; connect-src 'self' https: wss:; frame-ancestors 'self';" always;\n`;
+      config += `    add_header Content-Security-Policy "default-src 'self' https: data:; img-src 'self' https: data: blob:; style-src 'self' 'unsafe-inline' https:; script-src 'self' 'unsafe-inline' https:; connect-src 'self' https: wss:; media-src 'self' https: data: blob:; frame-src 'self' https: blob:; frame-ancestors 'self';" always;\n`;
     }
 
     if (server.server_type === 'static') {

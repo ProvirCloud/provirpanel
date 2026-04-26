@@ -48,7 +48,20 @@ const appendNodeLog = (message) => {
   fs.appendFile(appLogsPath, `${JSON.stringify(entry)}\n`, () => {});
 };
 
-app.use(helmet());
+app.use(helmet({
+  contentSecurityPolicy: {
+    directives: {
+      defaultSrc: ["'self'", 'https:', 'data:'],
+      imgSrc: ["'self'", 'https:', 'data:', 'blob:'],
+      styleSrc: ["'self'", "'unsafe-inline'", 'https:'],
+      scriptSrc: ["'self'", "'unsafe-inline'", 'https:'],
+      connectSrc: ["'self'", 'https:', 'wss:'],
+      mediaSrc: ["'self'", 'https:', 'data:', 'blob:'],
+      frameSrc: ["'self'", 'https:', 'blob:'],
+      frameAncestors: ["'self'"]
+    }
+  }
+}));
 app.use(cors({
   origin: process.env.CORS_ORIGIN || true,
   credentials: true
