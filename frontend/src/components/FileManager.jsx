@@ -1,4 +1,5 @@
 import { useEffect, useRef, useState } from 'react'
+import { createPortal } from 'react-dom'
 import {
   Folder,
   FileText,
@@ -54,6 +55,13 @@ const formatProviderStatus = (status) => {
   if (status === 'active') return 'Ativo'
   if (status === 'planned') return 'Planejado'
   return status || 'n/a'
+}
+
+const renderInPortal = (content) => {
+  if (typeof document === 'undefined') {
+    return content
+  }
+  return createPortal(content, document.body)
 }
 
 const FileManager = ({ showPageIntro = true }) => {
@@ -802,7 +810,7 @@ const FileManager = ({ showPageIntro = true }) => {
         </div>
       )}
 
-      {menuItem && (
+      {menuItem && renderInPortal(
         <div className="fixed inset-0 z-40 flex items-center justify-center bg-black/60 p-4">
           <div className="w-full max-w-sm rounded-2xl border border-slate-800 bg-slate-900/90 p-5">
             <h3 className="text-sm font-semibold text-slate-100">{menuItem.name}</h3>
@@ -857,7 +865,7 @@ const FileManager = ({ showPageIntro = true }) => {
         </div>
       )}
 
-      {showEnvironmentModal && (
+      {showEnvironmentModal && renderInPortal(
         <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/70 p-4">
           <div className="w-full max-w-4xl rounded-3xl border border-slate-800 bg-slate-950 p-6">
             <div className="mb-5 flex items-center justify-between">
@@ -994,7 +1002,7 @@ const FileManager = ({ showPageIntro = true }) => {
         </div>
       )}
 
-      {showCopyModal && selected && (
+      {showCopyModal && selected && renderInPortal(
         <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/70 p-4">
           <div className="w-full max-w-lg rounded-3xl border border-slate-800 bg-slate-950 p-6">
             <h3 className="text-lg font-semibold text-white">Copiar entre ambientes</h3>
@@ -1035,7 +1043,7 @@ const FileManager = ({ showPageIntro = true }) => {
         </div>
       )}
 
-      {toast && (
+      {toast && renderInPortal(
         <div className="fixed right-6 top-24 rounded-xl border border-blue-500/40 bg-blue-500/10 px-4 py-3 text-xs text-blue-200">
           {toast}
         </div>
