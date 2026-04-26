@@ -14,6 +14,7 @@ import ProvirGateway from './components/ProvirGateway.jsx'
 import SecurityAuditPanel from './components/SecurityAuditPanel.jsx'
 import NginxPanel from './components/NginxPanel.jsx'
 import NginxVisualManager from './components/NginxVisualManager.jsx'
+import NginxCanvasPage from './pages/NginxCanvasPage'
 import ConsoleModulePage from './pages/ConsoleModulePage'
 import InfrastructureCanvasPage from './pages/InfrastructureCanvasPage'
 import StacksPanel from './components/StacksPanel.jsx'
@@ -108,7 +109,8 @@ const App = () => {
           <Route path="stacks/canvas" element={<ModulePage showHeader={false} title="Infrastructure Canvas" subtitle="Editor visual de stacks"><StacksPanel /></ModulePage>} />
           <Route path="terminal" element={<ModulePage title="Terminal" subtitle="Acesso operacional aos ambientes conectados"><Terminal showPageIntro={false} /></ModulePage>} />
           <Route path="docker" element={<ModulePage title="Container Service" subtitle="Serviços, containers e topologias dos ambientes"><DockerPanel showPageIntro={false} /></ModulePage>} />
-          <Route path="nginx" element={<ModulePage title="Nginx Manager" subtitle="Rotas, proxy e publicação de aplicações"><NginxVisualManager showPageIntro={false} /></ModulePage>} />
+          <Route path="nginx" element={<NginxCanvasPage />} />
+          <Route path="nginx-advanced" element={<ModulePage title="Nginx Manager" subtitle="Rotas, proxy e publicação de aplicações"><NginxVisualManager showPageIntro={false} /></ModulePage>} />
           <Route path="nginx-legacy" element={<ModulePage showHeader={false} title="Nginx Legacy" subtitle="Gestão avançada do ambiente Nginx"><NginxPanel /></ModulePage>} />
           <Route path="domains" element={<ModulePage title="Cloudflare" subtitle="Domínios, e-mail, firewall e WAF com baseline Zeus"><DomainsPanel showPageIntro={false} /></ModulePage>} />
           <Route path="files" element={<ModulePage title="Arquivos" subtitle="Storage, uploads e gestão de artefatos"><FileManager showPageIntro={false} /></ModulePage>} />
