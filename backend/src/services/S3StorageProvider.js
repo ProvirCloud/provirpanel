@@ -159,8 +159,8 @@ class S3StorageProvider {
   }
 
   async listProjects() {
-    const rootItems = await this.listFiles('/');
-    const directories = rootItems.filter((item) => item.isDir);
+    const rootListing = await this.listFiles('/', { pageSize: MAX_PAGE_SIZE });
+    const directories = (rootListing.items || []).filter((item) => item.isDir);
     if (directories.length > 0) {
       return directories.map((item) => ({
         name: item.name,
