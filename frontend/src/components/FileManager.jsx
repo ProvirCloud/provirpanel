@@ -16,6 +16,10 @@ import {
   Database,
   Save,
   X,
+  Server,
+  Cloud,
+  Files,
+  Globe,
 } from 'lucide-react'
 import Editor from '@monaco-editor/react'
 import api from '../services/api.js'
@@ -67,6 +71,51 @@ const renderInPortal = (content) => {
 
 const getProviderMeta = (catalog, providerId) => catalog.find((provider) => provider.id === providerId) || null
 
+const providerVisuals = {
+  local: {
+    icon: Server,
+    iconClassName: 'text-cyan-200',
+    shellClassName: 'border-cyan-400/30 bg-cyan-500/10',
+  },
+  onedrive: {
+    icon: Cloud,
+    iconClassName: 'text-sky-200',
+    shellClassName: 'border-sky-400/30 bg-sky-500/10',
+  },
+  sharepoint: {
+    icon: Files,
+    iconClassName: 'text-emerald-200',
+    shellClassName: 'border-emerald-400/30 bg-emerald-500/10',
+  },
+  azureBlob: {
+    icon: Database,
+    iconClassName: 'text-blue-200',
+    shellClassName: 'border-blue-400/30 bg-blue-500/10',
+  },
+  ftp: {
+    icon: Globe,
+    iconClassName: 'text-amber-100',
+    shellClassName: 'border-amber-400/30 bg-amber-500/10',
+  },
+}
+
+const ProviderBadge = ({ providerId, className = '' }) => {
+  const visual = providerVisuals[providerId]
+  if (providerId === 's3') {
+    return (
+      <span className={`inline-flex h-9 w-9 items-center justify-center rounded-xl border border-amber-400/30 bg-amber-500/10 text-[11px] font-semibold tracking-[0.18em] text-amber-100 ${className}`}>
+        S3
+      </span>
+    )
+  }
+  const Icon = visual?.icon || Database
+  return (
+    <span className={`inline-flex h-9 w-9 items-center justify-center rounded-xl border ${visual?.shellClassName || 'border-slate-700 bg-slate-800/80'} ${className}`}>
+      <Icon className={`h-4 w-4 ${visual?.iconClassName || 'text-slate-200'}`} />
+    </span>
+  )
+}
+
 const FileManager = ({ showPageIntro = true }) => {
   const [providerCatalog, setProviderCatalog] = useState([])
   const [environments, setEnvironments] = useState([])
@@ -102,6 +151,10 @@ const FileManager = ({ showPageIntro = true }) => {
   const [unsupportedEnvironmentMessage, setUnsupportedEnvironmentMessage] = useState('')
   const uploadRef = useRef(null)
   const socketRef = useRef(null)
+  const treeRequestRef = useRef(0)
+  const itemsRequestRef = useRef(0)
+  const statsRequestRef = useRef(0)
+  const previewRequestRef = useRef(0)
 
   const selectedEnvironment = environments.find((environment) => environment.id === selectedEnvironmentId) || null
   const selectedProviderMeta = providerCatalog.find((provider) => provider.id === environmentForm.provider)
@@ -140,7 +193,9 @@ const FileManager = ({ showPageIntro = true }) => {
   }
 
   const loadTree = async (environmentId) => {
+    const requestId = ++treeRequestRef.current
     const response = await api.get('/storage/tree', requestConfig(environmentId))
+    if (requestId !== treeRequestRef.current || environmentId !== selectedEnvironmentId) return
     setTree(response.data.tree || [])
     if (Array.isArray(response.data.environments) && response.data.environments.length > 0) {
       setEnvironments(response.data.environments)
@@ -148,6 +203,7 @@ const FileManager = ({ showPageIntro = true }) => {
   }
 
   const loadItems = async (environmentId, targetPath, options = {}) => {
+    const requestId = ++itemsRequestRef.current
     setLoading(true)
     try {
       const previousPageToken = pagination.currentPageToken
@@ -160,6 +216,7 @@ const FileManager = ({ showPageIntro = true }) => {
           pageToken: nextPageToken || undefined,
         },
       })
+      if (requestId !== itemsRequestRef.current || environmentId !== selectedEnvironmentId) return
       setItems(response.data.items || [])
       setPath(targetPath)
       setPagination({
@@ -179,21 +236,29 @@ const FileManager = ({ showPageIntro = true }) => {
       setPreview(null)
       setPreviewUrl('')
     } catch (err) {
-      setToast(err.response?.data?.message || 'Erro ao carregar arquivos')
+      if (requestId === itemsRequestRef.current) {
+        setToast(err.response?.data?.message || 'Erro ao carregar arquivos')
+      }
     } finally {
-      setLoading(false)
+      if (requestId === itemsRequestRef.current) {
+        setLoading(false)
+      }
     }
   }
 
   const loadStats = async (environmentId) => {
+    const requestId = ++statsRequestRef.current
     try {
       const response = await api.get('/storage/stats', requestConfig(environmentId))
+      if (requestId !== statsRequestRef.current || environmentId !== selectedEnvironmentId) return
       setUsage({
         used: response.data?.stats?.used || 0,
         total: response.data?.stats?.total || 0,
       })
     } catch {
-      setUsage({ used: 0, total: 0 })
+      if (requestId === statsRequestRef.current) {
+        setUsage({ used: 0, total: 0 })
+      }
     }
   }
 
@@ -221,6 +286,16 @@ const FileManager = ({ showPageIntro = true }) => {
       return
     }
     setUnsupportedEnvironmentMessage('')
+    setTree([])
+    setItems([])
+    setPath(targetPath)
+    setSelected(null)
+    setPreview(null)
+    setPreviewUrl('')
+    setPreviewType('')
+    setEditorFile(null)
+    setPagination({ pageSize: PAGE_SIZE, nextPageToken: null, hasMore: false, currentPageToken: null })
+    setPageHistory([])
     await Promise.all([
       loadTree(environmentId),
       loadItems(environmentId, targetPath, { resetPagination: true }),
@@ -291,8 +366,8 @@ const FileManager = ({ showPageIntro = true }) => {
     if (item.isImage) {
       setPreview(item)
       setPreviewUrl('')
-      setEditorFile(null)
       setPreviewType('image')
+      setEditorFile(null)
       return
     }
 
@@ -302,16 +377,19 @@ const FileManager = ({ showPageIntro = true }) => {
     const ext = item.name.startsWith('.') ? item.name.slice(1).toLowerCase() : item.name.split('.').pop().toLowerCase()
     if (ext === 'pdf') {
       setPreview(item)
+      setEditorFile(null)
       setPreviewType('pdf')
       return
     }
     if (['mp3', 'wav', 'ogg', 'flac'].includes(ext)) {
       setPreview(item)
+      setEditorFile(null)
       setPreviewType('audio')
       return
     }
     if (['mp4', 'webm', 'avi', 'mkv'].includes(ext)) {
       setPreview(item)
+      setEditorFile(null)
       setPreviewType('video')
       return
     }
@@ -386,6 +464,7 @@ const FileManager = ({ showPageIntro = true }) => {
   useEffect(() => {
     let active = true
     if (!preview?.path || !selectedEnvironmentId) return undefined
+    const requestId = ++previewRequestRef.current
     const endpoint =
       previewType === 'pdf'
         ? '/storage/pdf'
@@ -398,7 +477,7 @@ const FileManager = ({ showPageIntro = true }) => {
         responseType: 'arraybuffer',
       })
       .then((response) => {
-        if (!active) return
+        if (!active || requestId !== previewRequestRef.current) return
         const mime =
           previewType === 'pdf'
             ? 'application/pdf'
@@ -406,11 +485,17 @@ const FileManager = ({ showPageIntro = true }) => {
         const url = URL.createObjectURL(new Blob([response.data], { type: mime }))
         setPreviewUrl(url)
       })
-      .catch(() => {
-        if (active) setPreviewUrl('')
+      .catch((err) => {
+        if (active && requestId === previewRequestRef.current) {
+          setPreviewUrl('')
+          setToast(err.response?.data?.message || 'Erro ao carregar preview')
+        }
       })
     return () => {
       active = false
+      if (requestId === previewRequestRef.current) {
+        previewRequestRef.current += 1
+      }
       if (previewUrl) URL.revokeObjectURL(previewUrl)
     }
   }, [preview, previewType, selectedEnvironmentId])
@@ -685,9 +770,12 @@ const FileManager = ({ showPageIntro = true }) => {
               }`}
               onClick={() => setSelectedEnvironmentId(environment.id)}
             >
-              <div className="text-left">
-                <p className="font-medium">{environment.name}</p>
-                <p className="text-[10px] uppercase tracking-[0.2em] text-slate-500">{environment.provider}</p>
+              <div className="flex items-center gap-3 text-left">
+                <ProviderBadge providerId={environment.provider} />
+                <div>
+                  <p className="font-medium">{environment.name}</p>
+                  <p className="text-[10px] uppercase tracking-[0.2em] text-slate-500">{environment.provider}</p>
+                </div>
               </div>
             </button>
           ))}
@@ -698,7 +786,10 @@ const FileManager = ({ showPageIntro = true }) => {
         <div className="flex flex-wrap items-center justify-between gap-3">
           <div>
             <span className="text-slate-500">Ambiente ativo:</span>{' '}
-            <span className="text-blue-200">{selectedEnvironment?.name || 'n/a'}</span>
+            <span className="inline-flex items-center gap-2 text-blue-200">
+              {selectedEnvironment ? <ProviderBadge providerId={selectedEnvironment.provider} className="h-7 w-7 rounded-lg" /> : null}
+              <span>{selectedEnvironment?.name || 'n/a'}</span>
+            </span>
             <span className="ml-3 text-slate-500">Provider:</span>{' '}
             <span className="text-slate-200">{selectedEnvironment?.provider || 'n/a'}</span>
           </div>
