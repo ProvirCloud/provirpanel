@@ -14,6 +14,7 @@ Inclui autenticação JWT, terminal web, métricas em tempo real, Docker manager
 - Metrics collector (CPU/RAM/DISCO/Processos) em tempo real
 - Storage manager com upload/download/preview/editor/rename/move
 - CI/CD basico com git pull/build/restart e rollback
+- Storage Hub multi-ambiente com permissao por provider/ambiente
 - Cloudflare control plane para DNS, Email Routing, firewall e WAF
 
 ### Frontend (React + Vite)
@@ -273,6 +274,30 @@ Endpoints:
 - `GET /storage/projects`
 - `GET /storage/stats`
 - `POST /storage/upload`
+
+## Storage Hub Multi-Cloud
+
+O modulo `Arquivos` agora foi estruturado para operar como hub multi-storage:
+- ambientes dinamicos por provider
+- permissoes por ambiente e por role (`admin`, `dev`, `viewer`)
+- abas por ambiente na UI
+- copia entre ambientes
+- operacoes comuns unificadas: listar, editar, mover, remover, criar, upload e download
+
+Persistencia:
+- `backend/data/storage-environments.json`
+
+Providers catalogados:
+- `local` (ativo)
+- `s3`
+- `onedrive`
+- `sharepoint`
+- `azureBlob`
+- `ftp`
+
+Observacao importante:
+- nesta primeira fase, o provider `local` esta operacional de ponta a ponta
+- os demais providers ja possuem catalogo, configuracao dinamica, permissoes e contrato de integracao, mas ainda retornam `Storage provider "<provider>" is not enabled yet` ate a implementacao concreta de cada conector
 - `POST /storage/create`
 - `DELETE /storage?path=/...`
 - `GET /storage/download`
