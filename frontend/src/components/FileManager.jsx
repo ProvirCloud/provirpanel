@@ -64,6 +64,8 @@ const renderInPortal = (content) => {
   return createPortal(content, document.body)
 }
 
+const getProviderMeta = (catalog, providerId) => catalog.find((provider) => provider.id === providerId) || null
+
 const FileManager = ({ showPageIntro = true }) => {
   const [providerCatalog, setProviderCatalog] = useState([])
   const [environments, setEnvironments] = useState([])
@@ -94,6 +96,7 @@ const FileManager = ({ showPageIntro = true }) => {
   const [showCopyModal, setShowCopyModal] = useState(false)
   const [copyTargetEnvironmentId, setCopyTargetEnvironmentId] = useState('')
   const [copyTargetPath, setCopyTargetPath] = useState('/')
+  const [unsupportedEnvironmentMessage, setUnsupportedEnvironmentMessage] = useState('')
   const uploadRef = useRef(null)
   const socketRef = useRef(null)
 
@@ -102,6 +105,8 @@ const FileManager = ({ showPageIntro = true }) => {
   const canManageEnvironments = true
 
   const requestConfig = (environmentId) => ({ params: { environmentId } })
+  const findEnvironmentById = (environmentId, environmentList = environments) =>
+    environmentList.find((environment) => environment.id === environmentId) || null
 
   const loadProvidersAndEnvironments = async (preferredEnvironmentId = null) => {
     const response = await api.get('/storage/providers')
@@ -118,9 +123,17 @@ const FileManager = ({ showPageIntro = true }) => {
 
     if (nextEnvironmentId) {
       setSelectedEnvironmentId(nextEnvironmentId)
-      return nextEnvironmentId
+      return {
+        environmentId: nextEnvironmentId,
+        catalog: nextCatalog,
+        environments: nextEnvironments,
+      }
     }
-    return ''
+    return {
+      environmentId: '',
+      catalog: nextCatalog,
+      environments: nextEnvironments,
+    }
   }
 
   const loadTree = async (environmentId) => {
@@ -159,8 +172,28 @@ const FileManager = ({ showPageIntro = true }) => {
     }
   }
 
-  const refreshEnvironment = async (environmentId, targetPath = path) => {
+  const refreshEnvironment = async (
+    environmentId,
+    targetPath = path,
+    options = {}
+  ) => {
     if (!environmentId) return
+    const catalog = options.catalog || providerCatalog
+    const environmentList = options.environments || environments
+    const environment = findEnvironmentById(environmentId, environmentList)
+    const providerMeta = getProviderMeta(catalog, environment?.provider)
+    if (providerMeta && providerMeta.status !== 'active') {
+      setTree([])
+      setItems([])
+      setPath(targetPath)
+      setSelected(null)
+      setPreview(null)
+      setPreviewUrl('')
+      setUsage({ used: 0, total: 0 })
+      setUnsupportedEnvironmentMessage(`O provider ${providerMeta.label} ainda não está habilitado neste painel.`)
+      return
+    }
+    setUnsupportedEnvironmentMessage('')
     await Promise.all([
       loadTree(environmentId),
       loadItems(environmentId, targetPath),
@@ -172,9 +205,9 @@ const FileManager = ({ showPageIntro = true }) => {
     let active = true
     ;(async () => {
       try {
-        const nextEnvironmentId = await loadProvidersAndEnvironments()
-        if (!active || !nextEnvironmentId) return
-        await refreshEnvironment(nextEnvironmentId, '/')
+        const loaded = await loadProvidersAndEnvironments()
+        if (!active || !loaded.environmentId) return
+        await refreshEnvironment(loaded.environmentId, '/', loaded)
       } catch (err) {
         if (active) {
           setToast(err.response?.data?.message || 'Erro ao carregar storages')
@@ -207,13 +240,19 @@ const FileManager = ({ showPageIntro = true }) => {
 
     refreshEnvironment(selectedEnvironmentId, '/').catch((err) => {
       if (active) {
-        setToast(err.response?.data?.message || 'Erro ao carregar ambiente')
+        const status = err.response?.status
+        const message = err.response?.data?.message || 'Erro ao carregar ambiente'
+        if (status === 501) {
+          setUnsupportedEnvironmentMessage(message)
+        } else {
+          setToast(message)
+        }
       }
     })
     return () => {
       active = false
     }
-  }, [selectedEnvironmentId])
+  }, [selectedEnvironmentId, providerCatalog, environments])
 
   const breadcrumbs = path.split('/').filter(Boolean)
 
@@ -469,8 +508,8 @@ const FileManager = ({ showPageIntro = true }) => {
       } else {
         await api.post('/storage/environments', environmentForm)
       }
-      const nextEnvironmentId = await loadProvidersAndEnvironments(environmentForm.id || selectedEnvironmentId)
-      await refreshEnvironment(nextEnvironmentId || selectedEnvironmentId, '/')
+      const loaded = await loadProvidersAndEnvironments(environmentForm.id || selectedEnvironmentId)
+      await refreshEnvironment(loaded.environmentId || selectedEnvironmentId, '/', loaded)
       setShowEnvironmentModal(false)
       setToast('Ambiente salvo')
     } catch (err) {
@@ -482,9 +521,9 @@ const FileManager = ({ showPageIntro = true }) => {
     if (!environmentForm.id) return
     try {
       await api.delete(`/storage/environments/${environmentForm.id}`)
-      const nextEnvironmentId = await loadProvidersAndEnvironments()
-      if (nextEnvironmentId) {
-        await refreshEnvironment(nextEnvironmentId, '/')
+      const loaded = await loadProvidersAndEnvironments()
+      if (loaded.environmentId) {
+        await refreshEnvironment(loaded.environmentId, '/', loaded)
       }
       setShowEnvironmentModal(false)
       setToast('Ambiente removido')
@@ -559,7 +598,7 @@ const FileManager = ({ showPageIntro = true }) => {
           <button
             className="flex items-center gap-2 rounded-xl border border-slate-800 bg-slate-900/60 px-3 py-2 text-xs text-slate-200 transition hover:border-blue-500/60"
             onClick={() => uploadRef.current?.click()}
-            disabled={!selectedEnvironment}
+            disabled={!selectedEnvironment || !!unsupportedEnvironmentMessage}
           >
             <UploadCloud className="h-4 w-4" />
             Upload
@@ -567,7 +606,7 @@ const FileManager = ({ showPageIntro = true }) => {
           <button
             className="flex items-center gap-2 rounded-xl border border-slate-800 bg-slate-900/60 px-3 py-2 text-xs text-slate-200 transition hover:border-blue-500/60"
             onClick={() => handleCreate('file')}
-            disabled={!selectedEnvironment}
+            disabled={!selectedEnvironment || !!unsupportedEnvironmentMessage}
           >
             <Plus className="h-4 w-4" />
             Novo arquivo
@@ -575,7 +614,7 @@ const FileManager = ({ showPageIntro = true }) => {
           <button
             className="flex items-center gap-2 rounded-xl border border-slate-800 bg-slate-900/60 px-3 py-2 text-xs text-slate-200 transition hover:border-blue-500/60"
             onClick={() => handleCreate('folder')}
-            disabled={!selectedEnvironment}
+            disabled={!selectedEnvironment || !!unsupportedEnvironmentMessage}
           >
             <Plus className="h-4 w-4" />
             Nova pasta
@@ -583,7 +622,7 @@ const FileManager = ({ showPageIntro = true }) => {
           <button
             className="flex items-center gap-2 rounded-xl border border-slate-800 bg-slate-900/60 px-3 py-2 text-xs text-slate-200 transition hover:border-blue-500/60"
             onClick={() => setShowCopyModal(true)}
-            disabled={!selected || selected?.isDir}
+            disabled={!selected || selected?.isDir || !!unsupportedEnvironmentMessage}
           >
             <Copy className="h-4 w-4" />
             Copiar
@@ -628,6 +667,16 @@ const FileManager = ({ showPageIntro = true }) => {
           </div>
         </div>
       </div>
+
+      {unsupportedEnvironmentMessage ? (
+        <div className="rounded-2xl border border-amber-500/30 bg-amber-500/10 px-4 py-4 text-sm text-amber-100">
+          <p className="font-medium">Ambiente configurado, mas não operacional ainda</p>
+          <p className="mt-2 text-amber-200/90">{unsupportedEnvironmentMessage}</p>
+          <p className="mt-2 text-xs text-amber-200/80">
+            Você pode manter a configuração e permissões salvas, mas listagem, edição, upload e cópia só funcionarão quando o conector deste provider for implementado.
+          </p>
+        </div>
+      ) : null}
 
       <div className="grid gap-4 lg:grid-cols-[260px_1fr]">
         <div className="rounded-2xl border border-slate-800 bg-slate-900/60 p-4">
@@ -687,8 +736,12 @@ const FileManager = ({ showPageIntro = true }) => {
 
           <div
             className="mt-4 rounded-xl border border-dashed border-slate-700 bg-slate-950/60 p-4 text-center text-xs text-slate-400"
-            onDragOver={(event) => event.preventDefault()}
+            onDragOver={(event) => {
+              if (unsupportedEnvironmentMessage) return
+              event.preventDefault()
+            }}
             onDrop={(event) => {
+              if (unsupportedEnvironmentMessage) return
               event.preventDefault()
               handleUpload(event.dataTransfer.files)
             }}

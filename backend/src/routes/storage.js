@@ -7,7 +7,7 @@ const fs = require('fs');
 const axios = require('axios');
 const StorageManager = require('../services/StorageManager');
 const { StorageEnvironmentManager, DEFAULT_PERMISSIONS } = require('../services/StorageEnvironmentManager');
-const { MultiStorageService } = require('../services/MultiStorageService');
+const { MultiStorageService, UnsupportedStorageProviderError } = require('../services/MultiStorageService');
 
 const router = express.Router();
 const storageManager = new StorageManager();
@@ -64,6 +64,14 @@ const assertPermission = (req, action) => {
   return environment;
 };
 
+const buildUnsupportedReadPayload = (req, environment, extra = {}) => ({
+  unsupported: true,
+  message: `O provider ${environment.provider} ainda nao esta habilitado neste painel.`,
+  environment,
+  environments: environmentManager.getEnvironmentView(req.user?.role || 'viewer').environments,
+  ...extra
+});
+
 const withEnvironment = (handler) => async (req, res, next) => {
   try {
     await handler(req, res, next);
@@ -108,30 +116,60 @@ router.delete('/environments/:id', withEnvironment(async (req, res) => {
 
 router.get('/', withEnvironment(async (req, res) => {
   const environment = assertPermission(req, 'list');
-  const items = await multiStorage.listFiles(environment.id, req.query.path || '/');
-  res.json({ items, environment });
+  try {
+    const items = await multiStorage.listFiles(environment.id, req.query.path || '/');
+    res.json({ items, environment });
+  } catch (err) {
+    if (err instanceof UnsupportedStorageProviderError) {
+      return res.json(buildUnsupportedReadPayload(req, environment, { items: [] }));
+    }
+    throw err;
+  }
 }));
 
 router.get('/tree', withEnvironment(async (req, res) => {
   const environment = assertPermission(req, 'list');
-  const tree = await multiStorage.listTree(environment.id);
-  res.json({
-    tree,
-    environment,
-    environments: environmentManager.getEnvironmentView(req.user?.role || 'viewer').environments
-  });
+  try {
+    const tree = await multiStorage.listTree(environment.id);
+    res.json({
+      tree,
+      environment,
+      environments: environmentManager.getEnvironmentView(req.user?.role || 'viewer').environments
+    });
+  } catch (err) {
+    if (err instanceof UnsupportedStorageProviderError) {
+      return res.json(buildUnsupportedReadPayload(req, environment, { tree: [] }));
+    }
+    throw err;
+  }
 }));
 
 router.get('/projects', withEnvironment(async (req, res) => {
   const environment = assertPermission(req, 'list');
-  const projects = await multiStorage.listTree(environment.id);
-  res.json({ projects, environment });
+  try {
+    const projects = await multiStorage.listTree(environment.id);
+    res.json({ projects, environment });
+  } catch (err) {
+    if (err instanceof UnsupportedStorageProviderError) {
+      return res.json(buildUnsupportedReadPayload(req, environment, { projects: [] }));
+    }
+    throw err;
+  }
 }));
 
 router.get('/stats', withEnvironment(async (req, res) => {
   const environment = assertPermission(req, 'list');
-  const stats = multiStorage.getStats(environment.id);
-  res.json({ stats, environment });
+  try {
+    const stats = multiStorage.getStats(environment.id);
+    res.json({ stats, environment });
+  } catch (err) {
+    if (err instanceof UnsupportedStorageProviderError) {
+      return res.json(buildUnsupportedReadPayload(req, environment, {
+        stats: { used: 0, total: 0 }
+      }));
+    }
+    throw err;
+  }
 }));
 
 router.post('/upload', upload.array('files'), withEnvironment(async (req, res) => {
