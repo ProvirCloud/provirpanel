@@ -17,7 +17,15 @@ const typeMeta: Record<NginxSite['type'], { label: string; variant: 'info' | 'wa
   static: { label: 'Site estático', variant: 'neutral' },
 }
 
-const NodeBox = ({ children, accent = false }: { children: React.ReactNode; accent?: boolean }) => (
+const NodeBox = ({
+  children,
+  accent = false,
+  muted = false,
+}: {
+  children: React.ReactNode
+  accent?: boolean
+  muted?: boolean
+}) => (
   <div
     className="flex-shrink-0 flex items-center gap-1.5 rounded-xl px-3 py-1.5 text-xs font-medium"
     style={
@@ -27,9 +35,15 @@ const NodeBox = ({ children, accent = false }: { children: React.ReactNode; acce
             color: 'var(--color-brand)',
             border: '1px solid color-mix(in srgb, var(--color-brand) 24%, transparent)',
           }
+        : muted
+        ? {
+            background: 'transparent',
+            color: 'var(--color-text-muted)',
+            border: '1px dashed var(--color-border-subtle)',
+          }
         : {
             background: 'var(--color-canvas-subtle)',
-            color: 'var(--color-text-muted)',
+            color: 'var(--color-text)',
             border: '1px solid var(--color-border-subtle)',
           }
     }
@@ -38,21 +52,149 @@ const NodeBox = ({ children, accent = false }: { children: React.ReactNode; acce
   </div>
 )
 
-const Connector = () => (
+const Pipe = () => (
   <div className="flex flex-shrink-0 items-center gap-0.5" style={{ color: 'var(--color-text-muted)' }}>
-    <div className="h-px w-5" style={{ background: 'var(--color-border)' }} />
+    <div className="h-px w-4" style={{ background: 'var(--color-border)' }} />
     <ArrowRight size={11} />
   </div>
+)
+
+const InfoPill = ({ label }: { label: string }) => (
+  <span
+    className="rounded-full px-2 py-0.5 text-[11px] font-medium"
+    style={{
+      background: 'var(--color-canvas-subtle)',
+      color: 'var(--color-text-muted)',
+      border: '1px solid var(--color-border-subtle)',
+    }}
+  >
+    {label}
+  </span>
 )
 
 const SiteCard = ({ site, onEdit, onToggle, onDelete }: SiteCardProps) => {
   const meta = typeMeta[site.type]
   const domain = site.serverNames[0] || site.displayName
 
-  const destinationLabel = () => {
-    if (site.type === 'static') return site.rootPath
-    if (site.type === 'load-balancer') return `${site.targets.length} servidor${site.targets.length !== 1 ? 'es' : ''}`
-    return `${site.proxyHost}:${site.proxyPort}`
+  // ── Destination column ────────────────────────────────────────────────────
+  const renderDestinations = () => {
+    if (site.type === 'load-balancer') {
+      return (
+        <div className="flex flex-col gap-1.5 min-w-0">
+          {site.targets.slice(0, 4).map((t, i) => (
+            <div
+              key={i}
+              className="flex items-center gap-2 rounded-xl px-3 py-1.5 text-xs"
+              style={{
+                background: 'var(--color-canvas-subtle)',
+                border: '1px solid var(--color-border-subtle)',
+              }}
+            >
+              <span
+                className="h-1.5 w-1.5 flex-shrink-0 rounded-full"
+                style={{ background: t.backup ? 'var(--color-warning)' : 'var(--color-success)' }}
+              />
+              <span className="font-mono" style={{ color: 'var(--color-text)' }}>
+                {t.host}:{t.port}
+              </span>
+              {t.weight !== '1' && (
+                <span className="ml-auto text-[10px]" style={{ color: 'var(--color-text-muted)' }}>
+                  ×{t.weight}
+                </span>
+              )}
+              {t.backup && (
+                <span className="ml-auto text-[10px]" style={{ color: 'var(--color-warning)' }}>
+                  backup
+                </span>
+              )}
+            </div>
+          ))}
+          {site.targets.length > 4 && (
+            <span className="px-3 text-xs" style={{ color: 'var(--color-text-muted)' }}>
+              +{site.targets.length - 4} mais
+            </span>
+          )}
+        </div>
+      )
+    }
+
+    if (site.type === 'static') {
+      return (
+        <div className="flex flex-col gap-1.5 min-w-0">
+          {site.locations.map((loc, i) => (
+            <div
+              key={i}
+              className="flex items-center gap-2 rounded-xl px-3 py-1.5 text-xs"
+              style={{
+                background: 'var(--color-canvas-subtle)',
+                border: '1px solid var(--color-border-subtle)',
+              }}
+            >
+              <code className="font-mono" style={{ color: 'var(--color-text-muted)' }}>
+                {loc.path}
+              </code>
+              <ArrowRight size={10} style={{ color: 'var(--color-text-muted)', flexShrink: 0 }} />
+              <span className="font-mono truncate" style={{ color: 'var(--color-text)' }}>
+                {loc.root || site.rootPath}
+              </span>
+            </div>
+          ))}
+        </div>
+      )
+    }
+
+    // proxy — show all locations with their targets
+    const proxyLocs = site.locations.filter((l) => l.proxyHost)
+    const displayLocs = proxyLocs.length > 0 ? proxyLocs : site.locations
+    return (
+      <div className="flex flex-col gap-1.5 min-w-0">
+        {displayLocs.slice(0, 5).map((loc, i) => (
+          <div
+            key={i}
+            className="flex items-center gap-2 rounded-xl px-3 py-1.5 text-xs"
+            style={{
+              background: 'var(--color-canvas-subtle)',
+              border: '1px solid var(--color-border-subtle)',
+            }}
+          >
+            <code className="font-mono flex-shrink-0" style={{ color: 'var(--color-text-muted)' }}>
+              {loc.path}
+            </code>
+            <ArrowRight size={10} style={{ color: 'var(--color-text-muted)', flexShrink: 0 }} />
+            <span className="font-mono truncate" style={{ color: 'var(--color-text)' }}>
+              {loc.proxyHost}:{loc.proxyPort}
+            </span>
+          </div>
+        ))}
+        {displayLocs.length > 5 && (
+          <span className="px-3 text-xs" style={{ color: 'var(--color-text-muted)' }}>
+            +{displayLocs.length - 5} mais
+          </span>
+        )}
+      </div>
+    )
+  }
+
+  // ── Proxy settings pills ──────────────────────────────────────────────────
+  const renderSettingsPills = () => {
+    const pills: string[] = []
+    const s = site.proxySettings
+    if (s.websocket) pills.push('WebSocket')
+    if (s.forwardHeaders) pills.push('Headers')
+    if (s.cacheBypass) pills.push('Cache bypass')
+    if (s.clientBodySize) pills.push(s.clientBodySize)
+    if (s.connectTimeout) pills.push(`conn ${s.connectTimeout}`)
+    if (s.readTimeout) pills.push(`read ${s.readTimeout}`)
+    if (s.sendTimeout && s.sendTimeout !== s.readTimeout) pills.push(`send ${s.sendTimeout}`)
+    if (site.upstreamMethod) pills.push(site.upstreamMethod)
+    if (!pills.length) return null
+    return (
+      <div className="mt-3 flex flex-wrap items-center gap-1.5">
+        {pills.map((p) => (
+          <InfoPill key={p} label={p} />
+        ))}
+      </div>
+    )
   }
 
   return (
@@ -73,7 +215,9 @@ const SiteCard = ({ site, onEdit, onToggle, onDelete }: SiteCardProps) => {
           </div>
           <p className="mt-0.5 text-sm text-[var(--color-text-muted)]">{site.displayName}</p>
         </div>
-        <Badge variant={site.enabled ? 'success' : 'neutral'}>{site.enabled ? 'Ativo' : 'Inativo'}</Badge>
+        <Badge variant={site.enabled ? 'success' : 'neutral'} className="flex-shrink-0">
+          {site.enabled ? 'Ativo' : 'Inativo'}
+        </Badge>
       </div>
 
       {/* Type & SSL badges */}
@@ -88,61 +232,29 @@ const SiteCard = ({ site, onEdit, onToggle, onDelete }: SiteCardProps) => {
       </div>
 
       {/* Flow diagram */}
-      <div className="mt-5 flex items-center gap-1 overflow-x-auto pb-1">
+      <div className="mt-5 flex items-start gap-2 overflow-x-auto pb-1">
+        {/* Internet */}
         <NodeBox accent>
           <Globe size={11} />
           Internet
         </NodeBox>
 
-        <Connector />
+        <Pipe />
 
+        {/* Nginx */}
         <NodeBox>
-          <span className="text-[var(--color-text-muted)]">Nginx</span>
-          <span className="ml-1 font-mono" style={{ color: 'var(--color-text)' }}>
-            :{site.sslEnabled ? '443' : site.listenPort}
-          </span>
+          <span style={{ color: 'var(--color-text-muted)' }}>Nginx</span>
+          <span className="ml-1 font-mono">:{site.sslEnabled ? '443' : site.listenPort}</span>
         </NodeBox>
 
-        <Connector />
+        <Pipe />
 
-        {site.type === 'load-balancer' ? (
-          <div className="flex flex-col gap-1 min-w-0">
-            {site.targets.slice(0, 3).map((t, i) => (
-              <div
-                key={i}
-                className="flex items-center gap-1.5 rounded-xl px-3 py-1 text-xs font-mono"
-                style={{
-                  background: 'var(--color-canvas-subtle)',
-                  color: 'var(--color-text-muted)',
-                  border: '1px solid var(--color-border-subtle)',
-                }}
-              >
-                <span
-                  className="h-1.5 w-1.5 flex-shrink-0 rounded-full"
-                  style={{ background: 'var(--color-success)' }}
-                />
-                {t.host}:{t.port}
-                {t.weight !== '1' && (
-                  <span className="ml-auto opacity-60">×{t.weight}</span>
-                )}
-              </div>
-            ))}
-            {site.targets.length > 3 && (
-              <span className="px-3 text-xs" style={{ color: 'var(--color-text-muted)' }}>
-                +{site.targets.length - 3} mais
-              </span>
-            )}
-          </div>
-        ) : (
-          <NodeBox>
-            {site.type === 'static' ? (
-              <span className="font-mono truncate max-w-[160px]">{site.rootPath}</span>
-            ) : (
-              <span className="font-mono">{destinationLabel()}</span>
-            )}
-          </NodeBox>
-        )}
+        {/* Destinations */}
+        {renderDestinations()}
       </div>
+
+      {/* Proxy settings pills */}
+      {renderSettingsPills()}
 
       {/* Actions */}
       <div className="mt-6 flex flex-wrap gap-3">
@@ -160,12 +272,7 @@ const SiteCard = ({ site, onEdit, onToggle, onDelete }: SiteCardProps) => {
           </Button>
         )}
         {site.deletable && (
-          <Button
-            variant="danger"
-            size="sm"
-            leadingIcon={<Trash2 size={14} />}
-            onClick={() => onDelete(site)}
-          >
+          <Button variant="danger" size="sm" leadingIcon={<Trash2 size={14} />} onClick={() => onDelete(site)}>
             Remover
           </Button>
         )}
