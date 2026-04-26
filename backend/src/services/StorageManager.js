@@ -9,6 +9,29 @@ const { promisify } = require('util');
 const execFileAsync = promisify(execFile);
 
 const ARCHIVE_SUFFIXES = ['.tar.gz', '.tgz', '.tar', '.zip'];
+const DEFAULT_PAGE_SIZE = 100;
+const MAX_PAGE_SIZE = 500;
+
+const normalizePageSize = (value) => {
+  const numeric = Number.parseInt(value, 10);
+  if (!Number.isFinite(numeric) || numeric <= 0) {
+    return DEFAULT_PAGE_SIZE;
+  }
+  return Math.min(numeric, MAX_PAGE_SIZE);
+};
+
+const encodePageToken = (offset) => Buffer.from(JSON.stringify({ offset }), 'utf8').toString('base64url');
+
+const decodePageToken = (token) => {
+  if (!token) return 0;
+  try {
+    const parsed = JSON.parse(Buffer.from(String(token), 'base64url').toString('utf8'));
+    const offset = Number.parseInt(parsed?.offset, 10);
+    return Number.isFinite(offset) && offset >= 0 ? offset : 0;
+  } catch (err) {
+    return 0;
+  }
+};
 
 class StorageManager {
   constructor(options = {}) {
@@ -34,7 +57,7 @@ class StorageManager {
     return resolved;
   }
 
-  async listFiles(targetPath = '/') {
+  async listFiles(targetPath = '/', options = {}) {
     const resolved = this.safeResolve(targetPath);
     const entries = await fsp.readdir(resolved, { withFileTypes: true });
     const items = await Promise.all(
@@ -55,11 +78,23 @@ class StorageManager {
         };
       })
     );
-    return items.sort((a, b) => {
+    const sorted = items.sort((a, b) => {
       if (a.isDir && !b.isDir) return -1;
       if (!a.isDir && b.isDir) return 1;
       return a.name.localeCompare(b.name);
     });
+    const pageSize = normalizePageSize(options.pageSize);
+    const offset = decodePageToken(options.pageToken);
+    const paginated = sorted.slice(offset, offset + pageSize);
+    const nextOffset = offset + pageSize;
+    return {
+      items: paginated,
+      pagination: {
+        pageSize,
+        nextPageToken: nextOffset < sorted.length ? encodePageToken(nextOffset) : null,
+        hasMore: nextOffset < sorted.length
+      }
+    };
   }
 
   async uploadFile(file, destination = '/') {
