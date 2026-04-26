@@ -73,6 +73,13 @@ class StorageManager {
     return { path: path.join('/', path.relative(this.basePath, targetPath)) };
   }
 
+  async createFile(targetPath, content = '') {
+    const resolved = this.safeResolve(targetPath);
+    await fsp.mkdir(path.dirname(resolved), { recursive: true });
+    await fsp.writeFile(resolved, content, 'utf8');
+    return true;
+  }
+
   async deleteFile(targetPath) {
     const resolved = this.safeResolve(targetPath);
     await fsp.rm(resolved, { recursive: true, force: true });
@@ -117,9 +124,30 @@ class StorageManager {
     return fsp.readFile(resolved, 'utf8');
   }
 
+  async readBinaryFile(targetPath) {
+    const resolved = this.safeResolve(targetPath);
+    const stats = await fsp.stat(resolved);
+    if (stats.isDirectory()) {
+      throw new Error('Cannot read directory');
+    }
+    return {
+      buffer: await fsp.readFile(resolved),
+      fileName: path.basename(resolved),
+      size: stats.size
+    };
+  }
+
   async writeFile(targetPath, content) {
     const resolved = this.safeResolve(targetPath);
+    await fsp.mkdir(path.dirname(resolved), { recursive: true });
     await fsp.writeFile(resolved, content, 'utf8');
+    return true;
+  }
+
+  async putBuffer(targetPath, buffer) {
+    const resolved = this.safeResolve(targetPath);
+    await fsp.mkdir(path.dirname(resolved), { recursive: true });
+    await fsp.writeFile(resolved, buffer);
     return true;
   }
 
@@ -248,6 +276,11 @@ class StorageManager {
       })
     );
     return projects.sort((a, b) => a.name.localeCompare(b.name));
+  }
+
+  async validateAccess() {
+    await fsp.mkdir(this.basePath, { recursive: true });
+    await fsp.access(this.basePath, fs.constants.R_OK | fs.constants.W_OK);
   }
 }
 

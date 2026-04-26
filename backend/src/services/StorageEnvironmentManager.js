@@ -17,7 +17,7 @@ const STORAGE_PROVIDER_CATALOG = {
   s3: {
     id: 's3',
     label: 'AWS S3 / S3 Compatible',
-    status: 'planned',
+    status: 'active',
     capabilities: ['list', 'read', 'write', 'delete', 'create', 'move', 'upload', 'download', 'copy', 'preview'],
     configSchema: [
       { key: 'bucket', label: 'Bucket', type: 'text', required: true, secret: false },
@@ -25,7 +25,8 @@ const STORAGE_PROVIDER_CATALOG = {
       { key: 'accessKeyId', label: 'Access Key ID', type: 'text', required: true, secret: true },
       { key: 'secretAccessKey', label: 'Secret Access Key', type: 'password', required: true, secret: true },
       { key: 'endpoint', label: 'Endpoint', type: 'text', required: false, secret: false },
-      { key: 'forcePathStyle', label: 'Force Path Style', type: 'boolean', required: false, secret: false }
+      { key: 'forcePathStyle', label: 'Force Path Style', type: 'boolean', required: false, secret: false },
+      { key: 'rootPath', label: 'Root Path', type: 'text', required: false, secret: false }
     ]
   },
   onedrive: {
