@@ -64,6 +64,16 @@ const assertPermission = (req, action) => {
   return environment;
 };
 
+const getDownloadName = (targetPath = '/', fallback = 'download') => path.basename(targetPath) || fallback;
+const IMAGE_MIME_MAP = {
+  '.png': 'image/png',
+  '.jpg': 'image/jpeg',
+  '.jpeg': 'image/jpeg',
+  '.gif': 'image/gif',
+  '.webp': 'image/webp',
+  '.svg': 'image/svg+xml'
+};
+
 const buildUnsupportedReadPayload = (req, environment, extra = {}) => ({
   unsupported: true,
   message: `O provider ${environment.provider} ainda nao esta habilitado neste painel.`,
@@ -86,6 +96,7 @@ router.get('/providers', (req, res) => {
 
 router.post('/environments', withEnvironment(async (req, res) => {
   if (!requireAdmin(req, res)) return;
+  await multiStorage.validateEnvironmentConfig(req.body || {});
   const environment = environmentManager.createEnvironment({
     name: req.body?.name,
     provider: req.body?.provider,
@@ -98,6 +109,7 @@ router.post('/environments', withEnvironment(async (req, res) => {
 
 router.put('/environments/:id', withEnvironment(async (req, res) => {
   if (!requireAdmin(req, res)) return;
+  await multiStorage.validateEnvironmentConfig(req.body || {});
   const environment = environmentManager.updateEnvironment(req.params.id, {
     name: req.body?.name,
     provider: req.body?.provider,
@@ -320,33 +332,38 @@ router.delete('/', withEnvironment(async (req, res) => {
 
 router.get('/download', withEnvironment(async (req, res) => {
   const environment = assertPermission(req, 'download');
-  const targetPath = multiStorage.resolveAbsolutePath(environment.id, req.query.path);
-  res.download(targetPath);
+  const file = await multiStorage.readBinaryFile(environment.id, req.query.path);
+  res.setHeader('Content-Type', file.contentType || 'application/octet-stream');
+  res.setHeader('Content-Disposition', `attachment; filename="${file.fileName || getDownloadName(req.query.path)}"`);
+  res.send(file.buffer);
 }));
 
 router.get('/preview', withEnvironment(async (req, res) => {
   const environment = assertPermission(req, 'preview');
-  const targetPath = multiStorage.resolveAbsolutePath(environment.id, req.query.path);
+  const targetPath = String(req.query.path || '');
   const ext = path.extname(targetPath).toLowerCase();
   if (!['.png', '.jpg', '.jpeg', '.gif', '.webp', '.svg'].includes(ext)) {
     return res.status(400).json({ message: 'Not an image' });
   }
-  res.sendFile(targetPath);
+  const file = await multiStorage.readBinaryFile(environment.id, targetPath);
+  res.setHeader('Content-Type', file.contentType || IMAGE_MIME_MAP[ext] || 'application/octet-stream');
+  res.send(file.buffer);
 }));
 
 router.get('/pdf', withEnvironment(async (req, res) => {
   const environment = assertPermission(req, 'preview');
-  const targetPath = multiStorage.resolveAbsolutePath(environment.id, req.query.path);
+  const targetPath = String(req.query.path || '');
   if (path.extname(targetPath).toLowerCase() !== '.pdf') {
     return res.status(400).json({ message: 'Not a pdf' });
   }
+  const file = await multiStorage.readBinaryFile(environment.id, targetPath);
   res.setHeader('Content-Type', 'application/pdf');
-  res.sendFile(targetPath);
+  res.send(file.buffer);
 }));
 
 router.get('/media', withEnvironment(async (req, res) => {
   const environment = assertPermission(req, 'preview');
-  const targetPath = multiStorage.resolveAbsolutePath(environment.id, req.query.path);
+  const targetPath = String(req.query.path || '');
   const ext = path.extname(targetPath).toLowerCase();
   const mimeMap = {
     '.mp3': 'audio/mpeg',
@@ -362,8 +379,9 @@ router.get('/media', withEnvironment(async (req, res) => {
   if (!mime) {
     return res.status(400).json({ message: 'Not a supported media type' });
   }
+  const file = await multiStorage.readBinaryFile(environment.id, targetPath);
   res.setHeader('Content-Type', mime);
-  res.sendFile(targetPath);
+  res.send(file.buffer);
 }));
 
 router.get('/file', withEnvironment(async (req, res) => {

@@ -1,9 +1,9 @@
 'use strict';
 
 const path = require('path');
-const fs = require('fs');
 const { StorageEnvironmentManager } = require('./StorageEnvironmentManager');
 const StorageManager = require('./StorageManager');
+const S3StorageProvider = require('./S3StorageProvider');
 
 class UnsupportedStorageProviderError extends Error {
   constructor(provider) {
@@ -48,7 +48,22 @@ class MultiStorageService {
         basePath: environment.config?.basePath || process.env.CLOUDPAINEL_PROJECTS_DIR
       });
     }
+    if (environment.provider === 's3') {
+      return new S3StorageProvider(environment.config || {});
+    }
     throw new UnsupportedStorageProviderError(environment.provider);
+  }
+
+  getProviderByDraft(payload = {}) {
+    if (payload.provider === 'local') {
+      return new StorageManager({
+        basePath: payload.config?.basePath || process.env.CLOUDPAINEL_PROJECTS_DIR
+      });
+    }
+    if (payload.provider === 's3') {
+      return new S3StorageProvider(payload.config || {});
+    }
+    return null;
   }
 
   async listFiles(environmentId, targetPath = '/') {
@@ -83,10 +98,7 @@ class MultiStorageService {
       await provider.createFolder(targetPath);
       return { status: 'created' };
     }
-
-    const resolved = provider.safeResolve(targetPath);
-    await fs.promises.mkdir(path.dirname(resolved), { recursive: true });
-    await fs.promises.writeFile(resolved, '');
+    await provider.createFile(targetPath, '');
     return { status: 'created' };
   }
 
@@ -123,10 +135,10 @@ class MultiStorageService {
     return provider.extractArchive(archivePath, destinationPath);
   }
 
-  resolveAbsolutePath(environmentId, targetPath) {
+  async readBinaryFile(environmentId, targetPath) {
     const environment = this.getEnvironment(environmentId);
     const provider = this.getProvider(environment);
-    return provider.safeResolve(targetPath);
+    return provider.readBinaryFile(targetPath);
   }
 
   async copyBetweenEnvironments({ sourceEnvironmentId, sourcePath, targetEnvironmentId, targetPath }) {
@@ -135,27 +147,28 @@ class MultiStorageService {
     const sourceProvider = this.getProvider(sourceEnvironment);
     const targetProvider = this.getProvider(targetEnvironment);
 
-    const sourceAbsolute = sourceProvider.safeResolve(sourcePath);
-    const sourceStats = await fs.promises.stat(sourceAbsolute);
-    if (sourceStats.isDirectory()) {
-      throw new Error('Directory copy between environments is not supported yet');
-    }
-
-    const fileName = path.basename(sourceAbsolute);
+    const sourceFile = await sourceProvider.readBinaryFile(sourcePath);
+    const fileName = sourceFile.fileName || path.posix.basename(sourcePath);
     const finalTargetPath = targetPath
       ? ensureLeadingSlash(targetPath)
       : ensureLeadingSlash(path.posix.join('/', fileName));
-
-    const buffer = await fs.promises.readFile(sourceAbsolute);
-    const destinationAbsolute = targetProvider.safeResolve(finalTargetPath);
-    await fs.promises.mkdir(path.dirname(destinationAbsolute), { recursive: true });
-    await fs.promises.writeFile(destinationAbsolute, buffer);
+    await targetProvider.putBuffer(finalTargetPath, sourceFile.buffer, {
+      contentType: sourceFile.contentType
+    });
 
     return {
       status: 'copied',
       from: { environmentId: sourceEnvironment.id, path: sourcePath },
       to: { environmentId: targetEnvironment.id, path: finalTargetPath }
     };
+  }
+
+  async validateEnvironmentConfig(payload = {}) {
+    const provider = this.getProviderByDraft(payload);
+    if (!provider || typeof provider.validateAccess !== 'function') {
+      return;
+    }
+    await provider.validateAccess();
   }
 }
 
