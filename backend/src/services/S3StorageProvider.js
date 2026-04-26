@@ -13,6 +13,16 @@ const {
 } = require('@aws-sdk/client-s3');
 
 const IMAGE_REGEX = /\.(png|jpe?g|gif|webp|svg)$/i;
+const DEFAULT_PAGE_SIZE = 100;
+const MAX_PAGE_SIZE = 500;
+
+const normalizePageSize = (value) => {
+  const numeric = Number.parseInt(value, 10);
+  if (!Number.isFinite(numeric) || numeric <= 0) {
+    return DEFAULT_PAGE_SIZE;
+  }
+  return Math.min(numeric, MAX_PAGE_SIZE);
+};
 
 const normalizeStoragePath = (targetPath = '/', options = {}) => {
   const input = String(targetPath || '/').replace(/\\/g, '/').trim() || '/';
@@ -81,13 +91,16 @@ class S3StorageProvider {
     return key;
   }
 
-  async listFiles(targetPath = '/') {
+  async listFiles(targetPath = '/', options = {}) {
     const normalized = this.normalizePath(targetPath);
     const prefix = this.toKey(normalized, { directory: normalized !== '/' });
+    const pageSize = normalizePageSize(options.pageSize);
     const response = await this.client.send(new ListObjectsV2Command({
       Bucket: this.bucket,
       Prefix: prefix || undefined,
-      Delimiter: '/'
+      Delimiter: '/',
+      MaxKeys: pageSize,
+      ContinuationToken: options.pageToken || undefined
     }));
 
     const directories = (response.CommonPrefixes || [])
@@ -130,11 +143,19 @@ class S3StorageProvider {
       })
       .filter(Boolean);
 
-    return [...directories, ...files].sort((a, b) => {
+    const sorted = [...directories, ...files].sort((a, b) => {
       if (a.isDir && !b.isDir) return -1;
       if (!a.isDir && b.isDir) return 1;
       return a.name.localeCompare(b.name);
     });
+    return {
+      items: sorted,
+      pagination: {
+        pageSize,
+        nextPageToken: response.IsTruncated ? response.NextContinuationToken || null : null,
+        hasMore: response.IsTruncated === true
+      }
+    };
   }
 
   async listProjects() {

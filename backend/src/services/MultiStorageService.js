@@ -66,10 +66,21 @@ class MultiStorageService {
     return null;
   }
 
-  async listFiles(environmentId, targetPath = '/') {
+  async listFiles(environmentId, targetPath = '/', options = {}) {
     const environment = this.getEnvironment(environmentId);
     const provider = this.getProvider(environment);
-    return provider.listFiles(targetPath);
+    const result = await provider.listFiles(targetPath, options);
+    if (Array.isArray(result)) {
+      return {
+        items: result,
+        pagination: {
+          pageSize: Number.parseInt(options.pageSize, 10) || result.length,
+          nextPageToken: null,
+          hasMore: false
+        }
+      };
+    }
+    return result;
   }
 
   async listTree(environmentId) {

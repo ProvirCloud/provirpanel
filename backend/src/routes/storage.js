@@ -129,11 +129,17 @@ router.delete('/environments/:id', withEnvironment(async (req, res) => {
 router.get('/', withEnvironment(async (req, res) => {
   const environment = assertPermission(req, 'list');
   try {
-    const items = await multiStorage.listFiles(environment.id, req.query.path || '/');
-    res.json({ items, environment });
+    const result = await multiStorage.listFiles(environment.id, req.query.path || '/', {
+      pageSize: req.query.pageSize,
+      pageToken: req.query.pageToken
+    });
+    res.json({ items: result.items || [], pagination: result.pagination || null, environment });
   } catch (err) {
     if (err instanceof UnsupportedStorageProviderError) {
-      return res.json(buildUnsupportedReadPayload(req, environment, { items: [] }));
+      return res.json(buildUnsupportedReadPayload(req, environment, {
+        items: [],
+        pagination: { pageSize: 0, nextPageToken: null, hasMore: false }
+      }));
     }
     throw err;
   }

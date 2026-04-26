@@ -23,6 +23,7 @@ import { createMetricsSocket } from '../services/socket.js'
 
 const ARCHIVE_SUFFIXES = ['.tar.gz', '.tgz', '.tar', '.zip']
 const STORAGE_ACTIONS = ['list', 'read', 'write', 'delete', 'create', 'move', 'upload', 'download', 'copy', 'preview']
+const PAGE_SIZE = 100
 
 const isArchiveName = (name) => {
   const lowerName = String(name || '').toLowerCase()
@@ -72,6 +73,8 @@ const FileManager = ({ showPageIntro = true }) => {
   const [selectedEnvironmentId, setSelectedEnvironmentId] = useState('')
   const [tree, setTree] = useState([])
   const [items, setItems] = useState([])
+  const [pagination, setPagination] = useState({ pageSize: PAGE_SIZE, nextPageToken: null, hasMore: false, currentPageToken: null })
+  const [pageHistory, setPageHistory] = useState([])
   const [path, setPath] = useState('/')
   const [selected, setSelected] = useState(null)
   const [preview, setPreview] = useState(null)
@@ -144,12 +147,34 @@ const FileManager = ({ showPageIntro = true }) => {
     }
   }
 
-  const loadItems = async (environmentId, targetPath) => {
+  const loadItems = async (environmentId, targetPath, options = {}) => {
     setLoading(true)
     try {
-      const response = await api.get('/storage', { params: { environmentId, path: targetPath } })
+      const previousPageToken = pagination.currentPageToken
+      const nextPageToken = options.pageToken || null
+      const response = await api.get('/storage', {
+        params: {
+          environmentId,
+          path: targetPath,
+          pageSize: PAGE_SIZE,
+          pageToken: nextPageToken || undefined,
+        },
+      })
       setItems(response.data.items || [])
       setPath(targetPath)
+      setPagination({
+        pageSize: response.data?.pagination?.pageSize || PAGE_SIZE,
+        nextPageToken: response.data?.pagination?.nextPageToken || null,
+        hasMore: response.data?.pagination?.hasMore === true,
+        currentPageToken: nextPageToken,
+      })
+      if (options.resetPagination) {
+        setPageHistory([])
+      } else if (options.direction === 'next' && previousPageToken !== nextPageToken) {
+        setPageHistory((current) => [...current, previousPageToken])
+      } else if (options.direction === 'prev') {
+        setPageHistory((current) => current.slice(0, -1))
+      }
       setSelected(null)
       setPreview(null)
       setPreviewUrl('')
@@ -191,12 +216,14 @@ const FileManager = ({ showPageIntro = true }) => {
       setPreviewUrl('')
       setUsage({ used: 0, total: 0 })
       setUnsupportedEnvironmentMessage(`O provider ${providerMeta.label} ainda não está habilitado neste painel.`)
+      setPagination({ pageSize: PAGE_SIZE, nextPageToken: null, hasMore: false, currentPageToken: null })
+      setPageHistory([])
       return
     }
     setUnsupportedEnvironmentMessage('')
     await Promise.all([
       loadTree(environmentId),
-      loadItems(environmentId, targetPath),
+      loadItems(environmentId, targetPath, { resetPagination: true }),
       loadStats(environmentId),
     ])
   }
@@ -252,13 +279,13 @@ const FileManager = ({ showPageIntro = true }) => {
     return () => {
       active = false
     }
-  }, [selectedEnvironmentId, providerCatalog, environments])
+  }, [selectedEnvironmentId])
 
   const breadcrumbs = path.split('/').filter(Boolean)
 
   const openItem = (item) => {
     if (item.isDir) {
-      loadItems(selectedEnvironmentId, item.path)
+      loadItems(selectedEnvironmentId, item.path, { resetPagination: true })
       return
     }
     if (item.isImage) {
@@ -433,6 +460,22 @@ const FileManager = ({ showPageIntro = true }) => {
   const handleDownload = async (item = selected) => {
     if (!item || item.isDir || !selectedEnvironmentId) return
     window.open(`${api.defaults.baseURL}/storage/download?environmentId=${encodeURIComponent(selectedEnvironmentId)}&path=${encodeURIComponent(item.path)}`)
+  }
+
+  const handleNextPage = async () => {
+    if (!selectedEnvironmentId || !pagination.nextPageToken) return
+    await loadItems(selectedEnvironmentId, path, {
+      pageToken: pagination.nextPageToken,
+      direction: 'next',
+    })
+  }
+
+  const handlePreviousPage = async () => {
+    if (!selectedEnvironmentId || pageHistory.length === 0) return
+    await loadItems(selectedEnvironmentId, path, {
+      pageToken: pageHistory[pageHistory.length - 1] || null,
+      direction: 'prev',
+    })
   }
 
   const handleExtract = async (item = selected) => {
@@ -687,7 +730,7 @@ const FileManager = ({ showPageIntro = true }) => {
               <button
                 key={node.path}
                 className="flex w-full items-center gap-2 rounded-lg px-2 py-2 text-left hover:bg-slate-800/60"
-                onClick={() => loadItems(selectedEnvironmentId, node.path)}
+                onClick={() => loadItems(selectedEnvironmentId, node.path, { resetPagination: true })}
                 onDragOver={(event) => event.preventDefault()}
                 onDrop={(event) => {
                   event.preventDefault()
@@ -714,7 +757,7 @@ const FileManager = ({ showPageIntro = true }) => {
           <div className="flex flex-wrap items-center gap-2 text-xs text-slate-300">
             <button
               className="rounded-full border border-slate-800 bg-slate-950 px-3 py-1 text-blue-200"
-              onClick={() => loadItems(selectedEnvironmentId, '/')}
+              onClick={() => loadItems(selectedEnvironmentId, '/', { resetPagination: true })}
             >
               root
             </button>
@@ -725,7 +768,7 @@ const FileManager = ({ showPageIntro = true }) => {
                   <ChevronRight className="h-3 w-3 text-slate-500" />
                   <button
                     className="rounded-full border border-slate-800 bg-slate-950 px-3 py-1 hover:border-blue-500/60"
-                    onClick={() => loadItems(selectedEnvironmentId, crumbPath)}
+                    onClick={() => loadItems(selectedEnvironmentId, crumbPath, { resetPagination: true })}
                   >
                     {crumb}
                   </button>
@@ -805,6 +848,28 @@ const FileManager = ({ showPageIntro = true }) => {
               )
             })}
             {items.length === 0 && <p className="text-xs text-slate-500">{loading ? 'Carregando...' : 'Sem arquivos'}</p>}
+          </div>
+
+          <div className="mt-4 flex items-center justify-between rounded-xl border border-slate-800 bg-slate-950/60 px-4 py-3 text-xs text-slate-400">
+            <span>
+              {loading ? 'Carregando página...' : `Página com até ${pagination.pageSize || PAGE_SIZE} itens`}
+            </span>
+            <div className="flex items-center gap-2">
+              <button
+                className="rounded-lg border border-slate-800 bg-slate-900 px-3 py-2 text-slate-200 disabled:cursor-not-allowed disabled:opacity-40"
+                onClick={handlePreviousPage}
+                disabled={loading || pageHistory.length === 0}
+              >
+                Anterior
+              </button>
+              <button
+                className="rounded-lg border border-slate-800 bg-slate-900 px-3 py-2 text-slate-200 disabled:cursor-not-allowed disabled:opacity-40"
+                onClick={handleNextPage}
+                disabled={loading || !pagination.hasMore || !pagination.nextPageToken}
+              >
+                Próxima
+              </button>
+            </div>
           </div>
         </div>
       </div>
