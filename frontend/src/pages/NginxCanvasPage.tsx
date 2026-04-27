@@ -37,8 +37,13 @@ const NginxCanvasPage = () => {
       ])
       setNginxStatus(statusRes.data)
       setDockerContainers(dockerRes.data.containers || [])
+      const SYSTEM_CONFIGS = new Set(['nginx', 'nginx.conf', 'default', 'default.conf'])
       const configs: BackendConfig[] = configsRes.data.configs || []
-      setSites(configs.filter((c) => c.readable !== false).map(extractSiteInfo))
+      setSites(
+        configs
+          .filter((c) => c.readable !== false && !SYSTEM_CONFIGS.has(c.name))
+          .map(extractSiteInfo),
+      )
     } catch (err: any) {
       setError(err.response?.data?.error || err.message)
     } finally {
