@@ -20,6 +20,11 @@ type FormLocation = {
   tryFiles: string
 }
 
+type StaticLocation = {
+  path: string
+  tryFiles: string
+}
+
 type ModalForm = {
   // Step 1
   filename: string
@@ -33,6 +38,7 @@ type ModalForm = {
   targets: NginxTarget[]
   rootPath: string
   indexFiles: string
+  staticLocations: StaticLocation[]
   // Step 3
   websocket: boolean
   forwardHeaders: boolean
@@ -126,15 +132,15 @@ const initForm = (site: NginxSite | null): ModalForm => ({
   serverNames: site?.serverNames.join(' ') || '',
   listenPort: site?.listenPort || '80',
   type: site?.type || 'proxy',
-  locations: site?.locations?.length
-    ? site.locations.map((l) => ({
-        path: l.path,
-        proxyHost: l.proxyHost,
-        proxyPort: l.proxyPort,
-        root: l.root,
-        tryFiles: l.tryFiles,
-      }))
-    : [{ path: '/', proxyHost: 'localhost', proxyPort: '3000', root: '', tryFiles: '' }],
+  locations: (() => {
+    // For proxy type, only keep locations that actually proxy — mixed configs may have
+    // alias/static locations alongside proxy ones; those belong to a different domain.
+    const raw = site?.locations || []
+    const locs = site?.type === 'proxy' ? raw.filter((l) => l.proxyHost) : raw
+    return locs.length
+      ? locs.map((l) => ({ path: l.path, proxyHost: l.proxyHost, proxyPort: l.proxyPort, root: l.root, tryFiles: l.tryFiles }))
+      : [{ path: '/', proxyHost: 'localhost', proxyPort: '3000', root: '', tryFiles: '' }]
+  })(),
   upstreamName: site?.upstreamName || 'app_backend',
   upstreamMethod: site?.upstreamMethod || '',
   targets: site?.targets?.length
@@ -142,6 +148,10 @@ const initForm = (site: NginxSite | null): ModalForm => ({
     : [{ host: '127.0.0.1', port: '3000', weight: '1', backup: false }],
   rootPath: site?.rootPath || '/var/www/html',
   indexFiles: site?.indexFiles || 'index.html',
+  staticLocations:
+    site?.type === 'static' && site?.locations?.length
+      ? site.locations.map((l) => ({ path: l.path, tryFiles: l.tryFiles }))
+      : [{ path: '/', tryFiles: '$uri $uri/ =404' }],
   websocket: site?.proxySettings?.websocket ?? true,
   forwardHeaders: site?.proxySettings?.forwardHeaders ?? true,
   cacheBypass: site?.proxySettings?.cacheBypass ?? false,
@@ -196,6 +206,22 @@ const SiteModal = ({ site, dockerContainers, onClose, onSave }: SiteModalProps) 
   const removeTarget = (i: number) =>
     setForm((prev) => ({ ...prev, targets: prev.targets.filter((_, idx) => idx !== i) }))
 
+  // ── Static location helpers ───────────────────────────────────────────────
+  const addStaticLocation = () =>
+    setForm((prev) => ({
+      ...prev,
+      staticLocations: [...prev.staticLocations, { path: '/nova-rota', tryFiles: '$uri $uri/ =404' }],
+    }))
+
+  const updateStaticLocation = (i: number, field: keyof StaticLocation, value: string) =>
+    setForm((prev) => ({
+      ...prev,
+      staticLocations: prev.staticLocations.map((l, idx) => (idx === i ? { ...l, [field]: value } : l)),
+    }))
+
+  const removeStaticLocation = (i: number) =>
+    setForm((prev) => ({ ...prev, staticLocations: prev.staticLocations.filter((_, idx) => idx !== i) }))
+
   // ── Docker container helpers ──────────────────────────────────────────────
   const useContainer = (c: DockerContainer) => {
     const host = !c.ip || c.ip === '0.0.0.0' || c.ip === '::' ? 'localhost' : c.ip
@@ -225,6 +251,7 @@ const SiteModal = ({ site, dockerContainers, onClose, onSave }: SiteModalProps) 
     targets: form.targets,
     rootPath: form.rootPath,
     indexFiles: form.indexFiles,
+    staticLocations: form.staticLocations,
     proxySettings: {
       websocket: form.websocket,
       forwardHeaders: form.forwardHeaders,
@@ -497,23 +524,76 @@ const SiteModal = ({ site, dockerContainers, onClose, onSave }: SiteModalProps) 
         {/* Static */}
         {form.type === 'static' && (
           <div className="space-y-3">
-            <div>
-              <Label>Pasta dos arquivos (root)</Label>
-              <input
-                className="zeus-input"
-                placeholder="/var/www/html"
-                value={form.rootPath}
-                onChange={(e) => set('rootPath', e.target.value)}
-              />
+            <div className="grid grid-cols-2 gap-3">
+              <div>
+                <Label>Pasta dos arquivos (root)</Label>
+                <input
+                  className="zeus-input"
+                  placeholder="/var/www/html"
+                  value={form.rootPath}
+                  onChange={(e) => set('rootPath', e.target.value)}
+                />
+              </div>
+              <div>
+                <Label hint="Ex: index.html index.htm">Arquivos de índice</Label>
+                <input
+                  className="zeus-input"
+                  placeholder="index.html"
+                  value={form.indexFiles}
+                  onChange={(e) => set('indexFiles', e.target.value)}
+                />
+              </div>
             </div>
             <div>
-              <Label hint="Ex: index.html index.htm">Arquivos de índice</Label>
-              <input
-                className="zeus-input"
-                placeholder="index.html"
-                value={form.indexFiles}
-                onChange={(e) => set('indexFiles', e.target.value)}
-              />
+              <div className="flex items-center justify-between mb-2">
+                <Label hint="Cada location serve arquivos com try_files">Locations</Label>
+                <Button variant="secondary" size="sm" leadingIcon={<Plus size={13} />} onClick={addStaticLocation}>
+                  Adicionar
+                </Button>
+              </div>
+              <div className="space-y-2">
+                {form.staticLocations.map((loc, i) => (
+                  <div
+                    key={i}
+                    className="rounded-xl p-3"
+                    style={{ background: 'var(--color-canvas-subtle)', border: '1px solid var(--color-border-subtle)' }}
+                  >
+                    <div className="flex items-center gap-2">
+                      <div style={{ width: '7rem', flexShrink: 0 }}>
+                        <label className="block text-xs font-medium mb-1" style={{ color: 'var(--color-text-muted)' }}>
+                          Path
+                        </label>
+                        <input
+                          className="zeus-input"
+                          placeholder="/"
+                          value={loc.path}
+                          onChange={(e) => updateStaticLocation(i, 'path', e.target.value)}
+                        />
+                      </div>
+                      <div className="flex-1">
+                        <label className="block text-xs font-medium mb-1" style={{ color: 'var(--color-text-muted)' }}>
+                          try_files
+                        </label>
+                        <input
+                          className="zeus-input font-mono"
+                          placeholder="$uri $uri/ =404"
+                          value={loc.tryFiles}
+                          onChange={(e) => updateStaticLocation(i, 'tryFiles', e.target.value)}
+                        />
+                      </div>
+                      {form.staticLocations.length > 1 && (
+                        <button
+                          onClick={() => removeStaticLocation(i)}
+                          className="zeus-btn zeus-btn-danger mt-5 flex-shrink-0"
+                          style={{ padding: '8px', minHeight: 'auto' }}
+                        >
+                          <Trash2 size={13} />
+                        </button>
+                      )}
+                    </div>
+                  </div>
+                ))}
+              </div>
             </div>
           </div>
         )}
