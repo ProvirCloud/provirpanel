@@ -1,4 +1,4 @@
-import { ArrowRight, Edit2, Globe, Lock, Power, PowerOff, Trash2 } from 'lucide-react'
+import { ArrowRight, Edit2, Code2, Globe, Lock, Power, PowerOff, Trash2 } from 'lucide-react'
 import type { NginxSite } from '../../types/nginx'
 import Badge from '../ui/Badge'
 import Button from '../ui/Button'
@@ -9,6 +9,7 @@ type SiteCardProps = {
   onEdit: (site: NginxSite) => void
   onToggle: (site: NginxSite) => void
   onDelete: (site: NginxSite) => void
+  onViewRawConfig?: (site: NginxSite) => void
 }
 
 const typeMeta: Record<NginxSite['type'], { label: string; variant: 'info' | 'warning' | 'neutral' }> = {
@@ -72,7 +73,7 @@ const InfoPill = ({ label }: { label: string }) => (
   </span>
 )
 
-const SiteCard = ({ site, onEdit, onToggle, onDelete }: SiteCardProps) => {
+const SiteCard = ({ site, onEdit, onToggle, onDelete, onViewRawConfig }: SiteCardProps) => {
   const meta = typeMeta[site.type]
   const domain = site.serverNames[0] || site.displayName
 
@@ -261,6 +262,11 @@ const SiteCard = ({ site, onEdit, onToggle, onDelete }: SiteCardProps) => {
         <Button variant="secondary" size="sm" leadingIcon={<Edit2 size={14} />} onClick={() => onEdit(site)}>
           Editar
         </Button>
+        {onViewRawConfig && (
+          <Button variant="ghost" size="sm" leadingIcon={<Code2 size={14} />} onClick={() => onViewRawConfig(site)}>
+            Ver .conf
+          </Button>
+        )}
         {site.toggleable && (
           <Button
             variant={site.enabled ? 'danger' : 'secondary'}

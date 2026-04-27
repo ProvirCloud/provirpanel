@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useState } from 'react'
-import { LayoutGrid, Network, Plus, RefreshCw, ShieldAlert } from 'lucide-react'
+import { LayoutGrid, List, Network, Plus, RefreshCw, ShieldAlert } from 'lucide-react'
 import api from '../services/api.js'
 import MetricsRow from '../components/dashboard/MetricsRow'
 import Button from '../components/ui/Button'
@@ -8,11 +8,15 @@ import PageHeader from '../components/layout/PageHeader'
 import EmptyState from '../components/ui/EmptyState'
 import SiteCard from '../components/nginx/SiteCard'
 import SiteModal from '../components/nginx/SiteModal'
+import SiteEditForm from '../components/nginx/SiteEditForm'
+import NginxConfigFileEditor from '../components/nginx/NginxConfigFileEditor'
 import NginxTopologyDiagram from '../components/nginx/NginxTopologyDiagram'
+import NginxFilesView from '../components/nginx/NginxFilesView'
 import type { BackendConfig, DockerContainer, NginxSite } from '../types/nginx'
 import { extractSiteInfo } from '../types/nginx'
 
-type ViewMode = 'topology' | 'cards'
+type ViewMode = 'topology' | 'cards' | 'files'
+type ModalMode = 'create' | 'edit' | 'raw' | null
 
 const NginxCanvasPage = () => {
   const [sites, setSites] = useState<NginxSite[]>([])
@@ -21,10 +25,10 @@ const NginxCanvasPage = () => {
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState('')
   const [notice, setNotice] = useState('')
-  const [modalOpen, setModalOpen] = useState(false)
+  const [modalMode, setModalMode] = useState<ModalMode>(null)
   const [editingSite, setEditingSite] = useState<NginxSite | null>(null)
   const [busyToggle, setBusyToggle] = useState<string | null>(null)
-  const [viewMode, setViewMode] = useState<ViewMode>('topology')
+  const [viewMode, setViewMode] = useState<ViewMode>('files')
 
   const loadAll = async () => {
     setLoading(true)
@@ -83,24 +87,29 @@ const NginxCanvasPage = () => {
 
   const handleEdit = (site: NginxSite) => {
     setEditingSite(site)
-    setModalOpen(true)
+    setModalMode('edit')
   }
 
   const handleCreate = () => {
     setEditingSite(null)
-    setModalOpen(true)
+    setModalMode('create')
   }
 
-  const handleModalSave = async () => {
-    setModalOpen(false)
-    setEditingSite(null)
-    setNotice(editingSite ? `"${editingSite.displayName}" atualizado.` : 'Site criado com sucesso.')
-    await loadAll()
+  const handleOpenRawEditor = (site: NginxSite) => {
+    setEditingSite(site)
+    setModalMode('raw')
   }
 
   const handleModalClose = () => {
-    setModalOpen(false)
+    setModalMode(null)
     setEditingSite(null)
+  }
+
+  const handleModalSave = async () => {
+    setModalMode(null)
+    setEditingSite(null)
+    setNotice(editingSite ? `"${editingSite.displayName}" atualizado.` : 'Site criado com sucesso.')
+    await loadAll()
   }
 
   const metrics = useMemo(
@@ -124,14 +133,32 @@ const NginxCanvasPage = () => {
         subtitle="Visualize e configure o servidor web por camadas — do tráfego de entrada ao destino final. Clique em um virtual host para editar."
         actions={
           <>
-            <Button
-              variant="ghost"
-              size="sm"
-              leadingIcon={viewMode === 'topology' ? <LayoutGrid size={14} /> : <Network size={14} />}
-              onClick={() => setViewMode((v) => (v === 'topology' ? 'cards' : 'topology'))}
-            >
-              {viewMode === 'topology' ? 'Cards' : 'Topologia'}
-            </Button>
+            <div style={{ display: 'flex', gap: 4, alignItems: 'center' }}>
+              <Button
+                variant={viewMode === 'files' ? 'secondary' : 'ghost'}
+                size="sm"
+                leadingIcon={<List size={14} />}
+                onClick={() => setViewMode('files')}
+              >
+                Arquivos
+              </Button>
+              <Button
+                variant={viewMode === 'topology' ? 'secondary' : 'ghost'}
+                size="sm"
+                leadingIcon={<Network size={14} />}
+                onClick={() => setViewMode('topology')}
+              >
+                Topologia
+              </Button>
+              <Button
+                variant={viewMode === 'cards' ? 'secondary' : 'ghost'}
+                size="sm"
+                leadingIcon={<LayoutGrid size={14} />}
+                onClick={() => setViewMode('cards')}
+              >
+                Cards
+              </Button>
+            </div>
             <Button variant="secondary" leadingIcon={<RefreshCw size={15} />} onClick={loadAll}>
               Atualizar
             </Button>
@@ -143,6 +170,33 @@ const NginxCanvasPage = () => {
       />
 
       <MetricsRow metrics={metrics} />
+
+      {/* ── Files view (default) ────────────────────────────────────────── */}
+      {viewMode === 'files' && !loading && (
+        <SectionContainer title="Configurações" subtitle="Cada arquivo separado com sua topologia interna">
+          {sites.length ? (
+            <NginxFilesView
+              sites={sites}
+              nginxRunning={nginxStatus?.running ?? false}
+              onEditSite={handleEdit}
+              onToggleSite={handleToggle}
+              onDeleteSite={handleDelete}
+              onViewRawConfig={handleOpenRawEditor}
+              busyToggle={busyToggle}
+            />
+          ) : (
+            <EmptyState
+              title="Nenhum site configurado"
+              description="Crie sua primeira configuração de proxy reverso, load balancer ou site estático."
+              action={
+                <Button variant="primary" leadingIcon={<Plus size={15} />} onClick={handleCreate}>
+                  Novo Site
+                </Button>
+              }
+            />
+          )}
+        </SectionContainer>
+      )}
 
       {/* ── Topology view ───────────────────────────────────────────────── */}
       {viewMode === 'topology' && !loading && (
@@ -179,6 +233,7 @@ const NginxCanvasPage = () => {
                   onEdit={handleEdit}
                   onToggle={handleToggle}
                   onDelete={handleDelete}
+                  onViewRawConfig={handleOpenRawEditor}
                 />
               ))}
             </div>
@@ -196,13 +251,13 @@ const NginxCanvasPage = () => {
         </SectionContainer>
       )}
 
-      {/* ── Topology loading state ──────────────────────────────────────── */}
-      {viewMode === 'topology' && loading && (
+      {/* ── Loading state ───────────────────────────────────────────────── */}
+      {(viewMode === 'topology' || viewMode === 'files') && loading && (
         <div
           className="rounded-[24px] border px-6 py-16 text-center text-[var(--color-text-muted)]"
           style={{ borderColor: 'var(--color-border)', background: 'var(--color-panel-muted)' }}
         >
-          Carregando topologia do Nginx...
+          Carregando configurações do Nginx...
         </div>
       )}
 
@@ -233,10 +288,30 @@ const NginxCanvasPage = () => {
         </div>
       )}
 
-      {modalOpen && (
+      {/* Create modal (wizard) */}
+      {modalMode === 'create' && (
         <SiteModal
-          site={editingSite}
+          site={null}
           dockerContainers={dockerContainers}
+          onClose={handleModalClose}
+          onSave={handleModalSave}
+        />
+      )}
+
+      {/* Edit modal (simple form) */}
+      {modalMode === 'edit' && editingSite && (
+        <SiteEditForm
+          site={editingSite}
+          onClose={handleModalClose}
+          onSave={handleModalSave}
+          onOpenRawEditor={() => setModalMode('raw')}
+        />
+      )}
+
+      {/* Raw config file editor */}
+      {modalMode === 'raw' && editingSite && (
+        <NginxConfigFileEditor
+          site={editingSite}
           onClose={handleModalClose}
           onSave={handleModalSave}
         />
