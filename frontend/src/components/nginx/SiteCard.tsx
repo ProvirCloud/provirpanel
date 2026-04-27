@@ -130,12 +130,12 @@ const SiteCard = ({ site, onEdit, onToggle, onDelete }: SiteCardProps) => {
                 border: '1px solid var(--color-border-subtle)',
               }}
             >
-              <code className="font-mono" style={{ color: 'var(--color-text-muted)' }}>
+              <code className="font-mono flex-shrink-0" style={{ color: 'var(--color-text-muted)' }}>
                 {loc.path}
               </code>
               <ArrowRight size={10} style={{ color: 'var(--color-text-muted)', flexShrink: 0 }} />
               <span className="font-mono truncate" style={{ color: 'var(--color-text)' }}>
-                {loc.root || site.rootPath}
+                {loc.tryFiles || loc.root || site.rootPath}
               </span>
             </div>
           ))}
