@@ -1,4 +1,4 @@
-import { ArrowRight, Edit2, Code2, Globe, Lock, Power, PowerOff, Trash2 } from 'lucide-react'
+import { ArrowRight, Edit2, Code2, Globe, Lock, Power, PowerOff, Trash2, Workflow } from 'lucide-react'
 import type { NginxSite } from '../../types/nginx'
 import Badge from '../ui/Badge'
 import Button from '../ui/Button'
@@ -10,6 +10,7 @@ type SiteCardProps = {
   onToggle: (site: NginxSite) => void
   onDelete: (site: NginxSite) => void
   onViewRawConfig?: (site: NginxSite) => void
+  onOpenVisualEditor?: (site: NginxSite) => void
 }
 
 const typeMeta: Record<NginxSite['type'], { label: string; variant: 'info' | 'warning' | 'neutral' }> = {
@@ -73,7 +74,7 @@ const InfoPill = ({ label }: { label: string }) => (
   </span>
 )
 
-const SiteCard = ({ site, onEdit, onToggle, onDelete, onViewRawConfig }: SiteCardProps) => {
+const SiteCard = ({ site, onEdit, onToggle, onDelete, onViewRawConfig, onOpenVisualEditor }: SiteCardProps) => {
   const meta = typeMeta[site.type]
   const domain = site.serverNames[0] || site.displayName
 
@@ -262,6 +263,11 @@ const SiteCard = ({ site, onEdit, onToggle, onDelete, onViewRawConfig }: SiteCar
         <Button variant="secondary" size="sm" leadingIcon={<Edit2 size={14} />} onClick={() => onEdit(site)}>
           Editar
         </Button>
+        {onOpenVisualEditor && (
+          <Button variant="ghost" size="sm" leadingIcon={<Workflow size={14} />} onClick={() => onOpenVisualEditor(site)}>
+            Editor visual
+          </Button>
+        )}
         {onViewRawConfig && (
           <Button variant="ghost" size="sm" leadingIcon={<Code2 size={14} />} onClick={() => onViewRawConfig(site)}>
             Ver .conf
