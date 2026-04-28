@@ -21,6 +21,7 @@ const routeMeta: Record<string, { title: string; context: string }> = {
   '/files': { title: 'Arquivos', context: 'Storage, uploads e gestão de artefatos' },
   '/logs': { title: 'Logs', context: 'Observabilidade, eventos e troubleshooting' },
   '/nginx': { title: 'Nginx Manager', context: 'Rotas, proxy e publicação de aplicações' },
+  '/nginx-visual-full': { title: 'Nginx Visual Canvas', context: 'Visualize e configure o fluxo de tráfego do Nginx' },
   '/nginx-legacy': { title: 'Nginx Legacy', context: 'Gestão avançada do ambiente Nginx' },
   '/domains': { title: 'Cloudflare', context: 'Domínios, e-mail, firewall e WAF gerenciados pelo edge padrão da Zeus' },
   '/gateway': { title: 'Gateway', context: 'Integrações, APIs e orquestração de borda' },
@@ -32,6 +33,7 @@ const routeMeta: Record<string, { title: string; context: string }> = {
 const AppShell = ({ username, onLogout, onChangePassword, onCreateUser, onManageMfa, children }: AppShellProps) => {
   const location = useLocation()
   const [sidebarOpen, setSidebarOpen] = useState(false)
+  const isWideCanvasRoute = location.pathname === '/nginx-visual-full'
 
   const meta = useMemo(() => routeMeta[location.pathname] || { title: 'ZEUS AI CLOUD OS', context: 'Console operacional da plataforma' }, [location.pathname])
 
@@ -49,9 +51,9 @@ const AppShell = ({ username, onLogout, onChangePassword, onCreateUser, onManage
           onCreateUser={onCreateUser}
           onManageMfa={onManageMfa}
         />
-        <main className="px-4 py-6 sm:px-6 lg:px-8 lg:py-8">
-          <div className="mx-auto w-full max-w-[1440px]">
-            <div className="zeus-content-canvas">{children}</div>
+        <main className={isWideCanvasRoute ? 'px-3 py-4 sm:px-4 lg:px-5 lg:py-5' : 'px-4 py-6 sm:px-6 lg:px-8 lg:py-8'}>
+          <div className={`mx-auto w-full ${isWideCanvasRoute ? 'max-w-none' : 'max-w-[1440px]'}`}>
+            <div className={isWideCanvasRoute ? '' : 'zeus-content-canvas'}>{children}</div>
           </div>
         </main>
       </div>

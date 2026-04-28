@@ -1,0 +1,185 @@
+import { useEffect, useMemo, useState } from 'react'
+import { FolderOpen, Loader2, Plus, Server } from 'lucide-react'
+import PageHeader from '../layout/PageHeader'
+import GeneratedNginxConfig from './GeneratedNginxConfig'
+import NginxConfigPanel from './NginxConfigPanel'
+import NginxFlowCanvas from './NginxFlowCanvas'
+import SecurityRulesPanel from './SecurityRulesPanel'
+import UpstreamList from './UpstreamList'
+import { generateNginxConfig } from './nginxConfigGenerator'
+import { parseNginxConfigToState } from './nginxConfigParser'
+import {
+  addRoute,
+  addUpstream,
+  createInitialNginxVisualState,
+  type SelectedNode,
+} from './nginxVisualConfig'
+import api from '../../services/api.js'
+
+type AvailableConfig = {
+  name: string
+  content: string
+}
+
+const SYSTEM_NAMES = new Set([
+  'nginx', 'nginx.conf', 'default', 'default.conf',
+  'fastcgi.conf', 'fastcgi_params', 'mime.types',
+  'proxy_params', 'scgi_params', 'uwsgi_params',
+  'koi-utf', 'koi-win', 'win-utf',
+])
+
+export default function NginxVisualFullPage() {
+  const [state, setState] = useState(createInitialNginxVisualState)
+  const [selected, setSelected] = useState<SelectedNode>({ kind: 'route', id: 'route-api' })
+  const [availableConfigs, setAvailableConfigs] = useState<AvailableConfig[]>([])
+  const [loadingConfigs, setLoadingConfigs] = useState(false)
+  const [currentConfigName, setCurrentConfigName] = useState<string>('')
+
+  const generatedConfig = useMemo(() => generateNginxConfig(state), [state])
+
+  // Load available configs on mount
+  useEffect(() => {
+    setLoadingConfigs(true)
+    api
+      .get('/nginx/configs')
+      .then((res) => {
+        const raw: any[] = res.data?.configs ?? []
+        const valid = raw.filter(
+          (c) =>
+            c.readable !== false &&
+            c.type !== 'main' &&
+            !SYSTEM_NAMES.has(c.name) &&
+            /\bserver\s*\{/.test(c.content ?? ''),
+        )
+        setAvailableConfigs(valid.map((c) => ({ name: c.name, content: c.content })))
+      })
+      .catch(() => {})
+      .finally(() => setLoadingConfigs(false))
+  }, [])
+
+  // Also support ?config=name query param (navigation from canvas)
+  useEffect(() => {
+    const params = new URLSearchParams(window.location.search)
+    const configName = params.get('config')
+    if (!configName) return
+    // Will be loaded once availableConfigs is populated
+    setCurrentConfigName(configName)
+  }, [])
+
+  useEffect(() => {
+    if (!currentConfigName || availableConfigs.length === 0) return
+    const found = availableConfigs.find((c) => c.name === currentConfigName)
+    if (found) {
+      setState(parseNginxConfigToState(found.content, found.name))
+    }
+  }, [currentConfigName, availableConfigs])
+
+  const handleLoadConfig = (name: string) => {
+    if (!name) return
+    const found = availableConfigs.find((c) => c.name === name)
+    if (!found) return
+    setCurrentConfigName(name)
+    setState(parseNginxConfigToState(found.content, found.name))
+    setSelected({ kind: 'domain', id: 'domain' })
+  }
+
+  const handleAddRoute = () => {
+    const next = addRoute(state)
+    const newRoute = next.routes[next.routes.length - 1]
+    setState(next)
+    setSelected({ kind: 'route', id: newRoute.id })
+  }
+
+  const handleAddUpstream = () => {
+    const next = addUpstream(state)
+    const newUp = next.upstreams[next.upstreams.length - 1]
+    setState(next)
+    setSelected({ kind: 'upstream', id: newUp.id })
+  }
+
+  const handleSelectRoute = (id: string) => {
+    if (id) {
+      setSelected({ kind: 'route', id })
+    } else if (state.routes.length > 0) {
+      setSelected({ kind: 'route', id: state.routes[0].id })
+    } else {
+      setSelected({ kind: 'domain', id: 'domain' })
+    }
+  }
+
+  const activeRoutes = state.routes.filter((r) => !r.disabled).length
+
+  return (
+    <div className="space-y-5">
+      <PageHeader
+        title="Nginx Visual Manager"
+        subtitle={`${state.domain.primary} · ${activeRoutes} rota${activeRoutes !== 1 ? 's' : ''} ativa${activeRoutes !== 1 ? 's' : ''}`}
+        actions={
+          <>
+            {/* Config selector */}
+            <div className="relative flex items-center gap-1.5 rounded-[14px] border border-white/10 bg-[rgba(10,18,34,0.7)] pl-3 pr-1 py-1">
+              <FolderOpen className="h-3.5 w-3.5 flex-shrink-0 text-white/45" />
+              {loadingConfigs ? (
+                <Loader2 className="h-3.5 w-3.5 animate-spin text-white/40" />
+              ) : (
+                <select
+                  value={currentConfigName}
+                  onChange={(e) => handleLoadConfig(e.target.value)}
+                  className="min-w-[160px] bg-transparent text-[13px] text-white/70 outline-none cursor-pointer pr-2"
+                  title="Carregar configuração existente"
+                >
+                  <option value="">Carregar configuração...</option>
+                  {availableConfigs.map((c) => (
+                    <option key={c.name} value={c.name}>
+                      {c.name.replace(/\.conf$/, '')}
+                    </option>
+                  ))}
+                </select>
+              )}
+            </div>
+
+            <button
+              type="button"
+              onClick={handleAddUpstream}
+              className="flex items-center gap-2 rounded-[14px] border border-white/10 bg-[rgba(10,18,34,0.7)] px-4 py-2 text-[13px] font-medium text-white/70 transition hover:bg-white/6 hover:text-white/90"
+            >
+              <Server className="h-4 w-4" />
+              Novo Upstream
+            </button>
+            <button
+              type="button"
+              onClick={handleAddRoute}
+              className="flex items-center gap-2 rounded-[14px] border border-[#2d4f8f]/80 bg-[linear-gradient(135deg,#1a3a72,#142d58)] px-4 py-2 text-[13px] font-semibold text-white shadow-[0_4px_16px_rgba(30,80,200,0.22)] transition hover:brightness-110"
+            >
+              <Plus className="h-4 w-4" />
+              Nova Rota
+            </button>
+          </>
+        }
+      />
+
+      {/* Main: canvas + config panel */}
+      <div className="grid gap-4 xl:grid-cols-[minmax(0,1.7fr)_380px]">
+        <NginxFlowCanvas state={state} selected={selected} onSelect={setSelected} />
+        <NginxConfigPanel
+          state={state}
+          selected={selected}
+          onChange={setState}
+          onSelectRoute={handleSelectRoute}
+        />
+      </div>
+
+      {/* Bottom row: generated config · upstreams · security */}
+      <div className="grid gap-4 xl:grid-cols-[minmax(0,1.6fr)_minmax(260px,0.65fr)_minmax(300px,0.72fr)]">
+        <GeneratedNginxConfig config={generatedConfig} />
+        <UpstreamList
+          state={state}
+          selected={selected}
+          onSelect={setSelected}
+          onChange={setState}
+        />
+        <SecurityRulesPanel state={state} onChange={setState} />
+      </div>
+    </div>
+  )
+}

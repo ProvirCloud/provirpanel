@@ -16,6 +16,8 @@ import NginxPanel from './components/NginxPanel.jsx'
 import NginxVisualManager from './components/NginxVisualManager.jsx'
 import NginxCanvasPage from './pages/NginxCanvasPage'
 import NginxVisualEditor from './pages/NginxVisualEditor'
+import NginxVisualEditorTest from './pages/NginxVisualEditorTest'
+import NginxVisualEditorFull from './pages/NginxVisualEditorFull'
 import ConsoleModulePage from './pages/ConsoleModulePage'
 import InfrastructureCanvasPage from './pages/InfrastructureCanvasPage'
 import StacksPanel from './components/StacksPanel.jsx'
@@ -89,6 +91,9 @@ const App = () => {
   return (
     <BrowserRouter basename="/admin">
       <Routes>
+        {/* Public test route - no authentication required */}
+        <Route path="/nginx-visual-test" element={<NginxVisualEditorTest />} />
+        
         <Route
           path="/login"
           element={
@@ -112,6 +117,7 @@ const App = () => {
           <Route path="docker" element={<ModulePage title="Container Service" subtitle="Serviços, containers e topologias dos ambientes"><DockerPanel showPageIntro={false} /></ModulePage>} />
           <Route path="nginx" element={<NginxCanvasPage />} />
           <Route path="nginx-visual" element={<NginxVisualEditor />} />
+          <Route path="nginx-visual-full" element={<NginxVisualEditorFull />} />
           <Route path="nginx-advanced" element={<ModulePage title="Nginx Manager" subtitle="Rotas, proxy e publicação de aplicações"><NginxVisualManager showPageIntro={false} /></ModulePage>} />
           <Route path="nginx-legacy" element={<ModulePage showHeader={false} title="Nginx Legacy" subtitle="Gestão avançada do ambiente Nginx"><NginxPanel /></ModulePage>} />
           <Route path="domains" element={<ModulePage title="Cloudflare" subtitle="Domínios, e-mail, firewall e WAF com baseline Zeus"><DomainsPanel showPageIntro={false} /></ModulePage>} />

@@ -1,4 +1,5 @@
 import { useEffect, useMemo, useState } from 'react'
+import { useNavigate } from 'react-router-dom'
 import { Plus, RefreshCw, ShieldAlert } from 'lucide-react'
 import api from '../services/api.js'
 import MetricsRow from '../components/dashboard/MetricsRow'
@@ -16,6 +17,7 @@ import { extractSiteInfo } from '../types/nginx'
 type ModalMode = 'create' | 'edit' | 'raw' | null
 
 const NginxCanvasPage = () => {
+  const navigate = useNavigate()
   const [sites, setSites] = useState<NginxSite[]>([])
   const [nginxStatus, setNginxStatus] = useState<{ running: boolean } | null>(null)
   const [dockerContainers, setDockerContainers] = useState<DockerContainer[]>([])
@@ -37,11 +39,30 @@ const NginxCanvasPage = () => {
       ])
       setNginxStatus(statusRes.data)
       setDockerContainers(dockerRes.data.containers || [])
-      const SYSTEM_CONFIGS = new Set(['nginx', 'nginx.conf', 'default', 'default.conf'])
+      // Names that belong to nginx itself and should never appear as sites
+      const SYSTEM_NAMES = new Set([
+        'nginx', 'nginx.conf',
+        'default', 'default.conf',
+        'fastcgi.conf', 'fastcgi_params',
+        'mime.types', 'proxy_params',
+        'scgi_params', 'uwsgi_params',
+        'koi-utf', 'koi-win', 'win-utf',
+      ])
+
+      // A valid site config must have at least one server{} block.
+      // Configs without one are snippets, upstream-only or socket definitions.
+      const hasServerBlock = (content: string) => /\bserver\s*\{/.test(content)
+
       const configs: BackendConfig[] = configsRes.data.configs || []
       setSites(
         configs
-          .filter((c) => c.readable !== false && !SYSTEM_CONFIGS.has(c.name))
+          .filter(
+            (c) =>
+              c.readable !== false &&
+              c.type !== 'main' &&
+              !SYSTEM_NAMES.has(c.name) &&
+              hasServerBlock(c.content || ''),
+          )
           .map(extractSiteInfo),
       )
     } catch (err: any) {
@@ -99,6 +120,10 @@ const NginxCanvasPage = () => {
   const handleOpenRawEditor = (site: NginxSite) => {
     setEditingSite(site)
     setModalMode('raw')
+  }
+
+  const handleOpenVisualEditor = (site: NginxSite) => {
+    navigate(`/nginx-visual-full?config=${encodeURIComponent(site.name)}`)
   }
 
   const handleModalClose = () => {
@@ -167,6 +192,7 @@ const NginxCanvasPage = () => {
                 onToggle={handleToggle}
                 onDelete={handleDelete}
                 onViewRawConfig={handleOpenRawEditor}
+                onOpenVisualEditor={handleOpenVisualEditor}
               />
             ))}
           </div>

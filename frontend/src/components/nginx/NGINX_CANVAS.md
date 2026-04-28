@@ -248,3 +248,563 @@ server {
 - **Múltiplos upstreams**: apenas o primeiro bloco `upstream { }` é extraído.
 - **Diretivas avançadas**: `add_header`, `ssl_session_cache`, `proxy_buffering`, `server_tokens`, etc. são preservadas no campo `raw` mas não são editáveis no wizard.
 - **`location = {`** (malformed, sem path): filtrado automaticamente por ser redirect-only.
+
+---
+
+# Nginx Visual Full — `/nginx-visual-full`
+
+## Resumo
+
+A rota **`/nginx-visual-full`** é uma implementação separada do canvas clássico. Ela não depende do parser de configs reais do backend e opera com um **estado local em JSON**, voltado para uma experiência visual guiada do fluxo Nginx do Zeus.
+
+Entrada:
+
+```tsx
+frontend/src/pages/NginxVisualEditorFull.tsx
+```
+
+Esse arquivo apenas renderiza:
+
+```tsx
+<NginxVisualFullPage />
+```
+
+Ou seja: toda a lógica da tela full foi isolada em `components/nginx-full/`.
+
+---
+
+## Objetivo da tela
+
+Representar visualmente o cenário Zeus:
+
+```text
+Internet
+→ zeusengine.com.br / www.zeusengine.com.br
+→ HTTP :80
+→ HTTPS :443 (SSL)
+→ /api/        → zeus_api
+→ /socket.io/  → zeus_socket
+→ /admin/      → /var/www/panel
+→ /            → /var/www/zeus
+```
+
+Com edição guiada de:
+
+- path
+- upstream
+- load balancer
+- timeouts
+- headers
+- SSL / HTTP2
+- alias / fallback
+
+Sem backend, sem deploy real, sem parser de `.conf` e sem autosave.
+
+---
+
+## Estrutura de arquivos
+
+```text
+frontend/src/
+  pages/
+    NginxVisualEditorFull.tsx
+
+  components/
+    nginx-full/
+      NginxVisualFullPage.tsx
+      NginxFlowCanvas.tsx
+      NginxFlowNode.tsx
+      NginxConfigPanel.tsx
+      GeneratedNginxConfig.tsx
+      UpstreamList.tsx
+      SecurityRulesPanel.tsx
+      nginxVisualConfig.ts
+      nginxConfigGenerator.ts
+```
+
+---
+
+## Fonte da verdade
+
+O estado da tela fica em:
+
+```ts
+frontend/src/components/nginx-full/nginxVisualConfig.ts
+```
+
+### Tipos principais
+
+- `NginxVisualState`
+- `RouteConfig`
+- `UpstreamConfig`
+- `SelectedNode`
+- `RouteTimeouts`
+- `LoadBalancerMethod`
+- `HeaderName`
+
+### Cenário inicial implementado
+
+O JSON inicial já nasce com:
+
+- domínio principal `zeusengine.com.br`
+- domínio adicional `www.zeusengine.com.br`
+- HTTP `:80` com redirect para HTTPS
+- HTTPS `:443` com:
+  - SSL ativo
+  - HTTP/2 ativo
+  - Let's Encrypt
+  - security headers
+  - HSTS
+  - `server_tokens off`
+  - `client_max_body_size = 500m`
+- upstream `zeus_api`
+  - `least_conn`
+  - `127.0.0.1:3000`
+  - `127.0.0.1:3001`
+  - `127.0.0.1:3002`
+- upstream `zeus_socket`
+  - `ip_hash`
+  - `127.0.0.1:3000`
+  - `127.0.0.1:3001`
+  - `127.0.0.1:3002`
+- rotas:
+  - `/api/`
+  - `/socket.io/`
+  - `/admin/`
+  - `/admin/assets/`
+  - `/zeus/assets/`
+  - `/`
+
+---
+
+## Página principal — `NginxVisualFullPage.tsx`
+
+Responsável por:
+
+- montar o layout da página
+- manter o `state`
+- manter o `selected`
+- gerar o `nginx.conf`
+- compor canvas, painel lateral e cards inferiores
+
+### Estado mantido
+
+```ts
+const [state, setState] = useState(createInitialNginxVisualState)
+const [selected, setSelected] = useState<SelectedNode>({ kind: 'route', id: 'route-api' })
+```
+
+### Configuração gerada
+
+```ts
+const generatedConfig = useMemo(() => generateNginxConfig(state), [state])
+```
+
+### Layout atual
+
+Topo:
+
+- título `Nginx Manager`
+- subtítulo operacional
+
+Área central:
+
+- esquerda: `NginxFlowCanvas`
+- direita: `NginxConfigPanel`
+
+Rodapé:
+
+- `GeneratedNginxConfig`
+- `UpstreamList`
+- `SecurityRulesPanel`
+
+Esse layout foi ajustado várias vezes ao longo do trabalho para aproximar do mock visual enviado pelo usuário.
+
+---
+
+## Canvas visual — `NginxFlowCanvas.tsx`
+
+Responsável por desenhar o fluxo fixo do Nginx.
+
+### Características
+
+- não usa React Flow
+- não usa drag-and-drop
+- não tem posicionamento livre
+- é um canvas **estruturado**, em colunas/layers fixas
+
+### O que aparece no mapa
+
+Bloco superior:
+
+- domínio principal
+- HTTP :80
+- HTTPS :443
+
+Quatro colunas de rotas:
+
+- `/api/`
+- `/socket.io/`
+- `/admin/`
+- `/`
+
+Blocos de destino:
+
+- `LB: zeus_api`
+- `LB: zeus_socket`
+- `/var/www/panel`
+- `/var/www/zeus`
+
+Sublistas:
+
+- servidores do upstream da API
+- servidores do upstream do socket
+- leaves estáticos:
+  - `/admin/`
+  - `/admin/assets/`
+  - `/zeus/assets/`
+  - `/index.html`
+
+### Toolbar funcional
+
+O mapa ganhou botões reais:
+
+- `+`
+  - aumenta o zoom
+- `-`
+  - reduz o zoom
+- `expand`
+  - abre o canvas em modo expandido
+  - usa overlay sobre a página
+  - bloqueia o scroll do body enquanto está expandido
+- `shield`
+  - ativa modo de bloqueio de seleção
+  - quando ativo, clicar nos nodes não altera mais o `selected`
+
+### Estado local do canvas
+
+```ts
+const [zoom, setZoom] = useState(1)
+const [expanded, setExpanded] = useState(false)
+const [locked, setLocked] = useState(false)
+```
+
+### Comportamento de seleção
+
+Todos os cliques do canvas passam por:
+
+```ts
+const selectNode = (selection: SelectedNode) => {
+  if (locked) return
+  onSelect(selection)
+}
+```
+
+Ou seja, o mapa pode entrar em modo protegido.
+
+### Ajustes visuais feitos no canvas
+
+Ao longo da evolução da tela, estes pontos foram trabalhados:
+
+- nodes muito grandes
+- excesso de respiro vertical
+- largura excessiva
+- espaçamento horizontal exagerado
+- falta de comportamento real no botão expandir
+
+Resultado atual:
+
+- nodes compactados
+- conectores mais curtos
+- grid mais densa
+- canvas mais próximo do mock operacional do Zeus
+
+---
+
+## Node visual — `NginxFlowNode.tsx`
+
+Componente base de card clicável do mapa.
+
+### Props
+
+- `title`
+- `subtitle`
+- `detail`
+- `tone`
+- `icon`
+- `selected`
+- `onClick`
+- `children`
+- `className`
+
+### Tons suportados
+
+- `domain`
+- `http`
+- `https`
+- `proxy`
+- `websocket`
+- `static`
+- `upstream`
+- `target`
+
+Cada tom controla:
+
+- borda
+- background
+- cor do texto
+- cor do ícone
+- cor da linha de detalhe
+
+### O que foi ajustado nesse componente
+
+- redução de padding
+- redução do tamanho dos ícones
+- redução do tamanho do texto
+- redução da altura geral
+- melhor densidade visual para o mapa
+
+---
+
+## Painel lateral — `NginxConfigPanel.tsx`
+
+Responsável pela edição contextual do node selecionado.
+
+### Seleções tratadas
+
+- `domain`
+- `http`
+- `https`
+- `route`
+- `upstream`
+- `static-target`
+
+### O que o painel mostra hoje
+
+Para rotas proxy/websocket:
+
+- tipo
+- upstream
+- load balancer
+- websocket toggle visual
+- proxy buffering
+- timeouts
+- headers
+
+Para rotas estáticas:
+
+- alias
+- fallback
+- `try_files`
+
+Para upstream:
+
+- método
+- lista de servidores
+
+Para domínio/HTTP/HTTPS:
+
+- informações resumidas e campos básicos
+
+### Ações do rodapé
+
+- `Desativar Rota`
+- `Salvar Rota`
+
+Hoje essas ações são visuais; não fazem deploy real.
+
+---
+
+## Geração de nginx.conf — `nginxConfigGenerator.ts`
+
+Esse arquivo gera o preview textual da configuração com base no JSON.
+
+### Garantias implementadas
+
+- server `80` com redirect para HTTPS
+- server `443 ssl http2`
+- certificados Let’s Encrypt
+- `client_max_body_size 500m`
+- upstream `zeus_api` com `least_conn`
+- upstream `zeus_socket` com `ip_hash`
+- `/api/` com:
+  - proxy headers
+  - `proxy_buffering off`
+  - `connect/read/send`
+- `/socket.io/` com:
+  - websocket headers
+  - timeouts longos
+- rotas estáticas com alias / fallback
+- raiz usando `location / { ... }`
+
+### Importante
+
+Não gera:
+
+```nginx
+location = {
+```
+
+Esse caso foi explicitamente evitado.
+
+---
+
+## Card de config — `GeneratedNginxConfig.tsx`
+
+Mostra o preview gerado do `nginx.conf`.
+
+### Funcionalidades
+
+- renderização do texto completo
+- botão `Copiar`
+- feedback visual de copiado
+
+Essa seção hoje aparece no rodapé, como no mock aprovado.
+
+---
+
+## Card de upstreams — `UpstreamList.tsx`
+
+Mostra cada upstream com:
+
+- nome
+- ícone
+- método
+- badge `Ativo`
+- lista de servidores
+- botão visual `Novo Upstream`
+
+Os cards são clicáveis e atualizam o painel lateral com `selected.kind = 'upstream'`.
+
+---
+
+## Card de segurança — `SecurityRulesPanel.tsx`
+
+Mostra um resumo operacional das regras globais:
+
+- SSL/TLS
+- HSTS
+- Security Headers
+- Server Tokens
+- Body Size
+- HTTP/2
+- redirect HTTP → HTTPS
+
+Também possui botão visual:
+
+- `Editar Regras`
+
+---
+
+## Evolução da UI feita até aqui
+
+### Fase 1
+
+Criação da versão isolada da rota full, separada do canvas legado.
+
+### Fase 2
+
+Introdução de:
+
+- canvas fixo
+- painel lateral contextual
+- preview de config
+- upstreams
+- segurança
+
+### Fase 3
+
+Refino visual para:
+
+- reduzir poluição
+- compactar nodes
+- aproximar do design do mock
+
+### Fase 4
+
+Aproximação estrutural do screenshot:
+
+- header `Nginx Manager`
+- card grande do mapa
+- painel direito fixo
+- rodapé triplo
+
+### Fase 5
+
+Toolbar do mapa funcional:
+
+- zoom
+- expandir
+- lock
+
+### Fase 6
+
+Compactação adicional do mapa:
+
+- menos espaçamento sobrando
+- melhor uso da largura
+- nodes menores
+
+---
+
+## O que não foi implementado
+
+Nesta tela full, propositalmente não foi feito:
+
+- backend
+- persistência real
+- autosave
+- deploy do Nginx
+- parser de `.conf` do servidor
+- leitura/escrita de arquivos reais
+- múltiplos sites reais
+- drag-and-drop
+- React Flow
+
+---
+
+## Limitações atuais
+
+- a tela é visual e orientada a um cenário fixo Zeus
+- o mapa ainda usa coordenadas/layout estruturado manualmente
+- o botão `Salvar Rota` ainda não publica nada
+- o botão `Desativar Rota` ainda é visual
+- a toolbar do mapa controla a visualização local, não o domínio nem o deploy
+
+---
+
+## Arquivos realmente alterados/criados nesta entrega
+
+### Entrada da rota
+
+- `frontend/src/pages/NginxVisualEditorFull.tsx`
+
+### Implementação da tela full
+
+- `frontend/src/components/nginx-full/NginxVisualFullPage.tsx`
+- `frontend/src/components/nginx-full/NginxFlowCanvas.tsx`
+- `frontend/src/components/nginx-full/NginxFlowNode.tsx`
+- `frontend/src/components/nginx-full/NginxConfigPanel.tsx`
+- `frontend/src/components/nginx-full/GeneratedNginxConfig.tsx`
+- `frontend/src/components/nginx-full/UpstreamList.tsx`
+- `frontend/src/components/nginx-full/SecurityRulesPanel.tsx`
+- `frontend/src/components/nginx-full/nginxVisualConfig.ts`
+- `frontend/src/components/nginx-full/nginxConfigGenerator.ts`
+
+---
+
+## Resumo final
+
+O trabalho feito na `/nginx-visual-full` foi:
+
+1. isolar a nova tela do canvas legado
+2. definir um modelo JSON próprio como fonte da verdade
+3. montar um fluxo visual fixo do cenário Zeus
+4. criar um painel lateral contextual
+5. gerar `nginx.conf` a partir do estado
+6. estruturar rodapé com config, upstreams e segurança
+7. aproximar a UI do mock operacional enviado
+8. tornar a toolbar do mapa funcional
+9. reduzir o excesso de espaço e o tamanho do canvas
+
+Esse documento cobre o que foi construído até o estado atual da implementação.
