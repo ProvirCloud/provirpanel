@@ -42,10 +42,19 @@ const stackManager = new StackManager();
 const composeGenerator = new ComposeGenerator();
 
 const BLUEPRINTS_PATH = path.join(__dirname, '../../data/blueprints.json');
+const BLUEPRINTS_SEED_PATH = path.join(__dirname, '../data/blueprints-seed.json');
 
 const readBlueprints = () => {
   try {
-    if (!fs.existsSync(BLUEPRINTS_PATH)) return [];
+    if (!fs.existsSync(BLUEPRINTS_PATH)) {
+      // Seed from bundled file if data dir is empty (fresh deploy)
+      if (fs.existsSync(BLUEPRINTS_SEED_PATH)) {
+        fs.mkdirSync(path.dirname(BLUEPRINTS_PATH), { recursive: true });
+        fs.copyFileSync(BLUEPRINTS_SEED_PATH, BLUEPRINTS_PATH);
+      } else {
+        return [];
+      }
+    }
     return JSON.parse(fs.readFileSync(BLUEPRINTS_PATH, 'utf8'));
   } catch {
     return [];

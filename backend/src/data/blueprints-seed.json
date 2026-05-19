@@ -1,0 +1,499 @@
+[
+  {
+    "id": "mern-stack",
+    "name": "MERN Stack",
+    "description": "MongoDB + Express/Node.js + Nginx reverso. Ideal para SPAs React com API REST.",
+    "category": "web",
+    "tags": ["javascript", "mongodb", "node", "api", "spa"],
+    "complexity": "medium",
+    "services": [
+      {
+        "id": "mern-nginx",
+        "name": "nginx",
+        "role": "entry-point",
+        "image": "nginx",
+        "tag": "1.25-alpine",
+        "ports": [{ "host": 80, "container": 80 }, { "host": 443, "container": 443 }],
+        "volumes": [
+          { "host": "./nginx/conf.d", "container": "/etc/nginx/conf.d" },
+          { "host": "./frontend/dist", "container": "/usr/share/nginx/html" }
+        ],
+        "env": [],
+        "command": [],
+        "dependencies": ["mern-api"]
+      },
+      {
+        "id": "mern-api",
+        "name": "api",
+        "role": "runtime",
+        "image": "node",
+        "tag": "20-alpine",
+        "ports": [{ "host": 3000, "container": 3000 }],
+        "volumes": [{ "host": "./backend", "container": "/app" }],
+        "env": [
+          { "key": "NODE_ENV", "value": "production", "secret": false },
+          { "key": "PORT", "value": "3000", "secret": false },
+          { "key": "MONGODB_URI", "value": "mongodb://mongo:27017/app", "secret": false },
+          { "key": "JWT_SECRET", "value": "", "secret": true }
+        ],
+        "command": ["node", "server.js"],
+        "dependencies": ["mern-mongo"]
+      },
+      {
+        "id": "mern-mongo",
+        "name": "mongo",
+        "role": "database",
+        "image": "mongo",
+        "tag": "7",
+        "ports": [{ "host": 27017, "container": 27017 }],
+        "volumes": [{ "host": "mongo-data", "container": "/data/db" }],
+        "env": [
+          { "key": "MONGO_INITDB_ROOT_USERNAME", "value": "admin", "secret": false },
+          { "key": "MONGO_INITDB_ROOT_PASSWORD", "value": "", "secret": true },
+          { "key": "MONGO_INITDB_DATABASE", "value": "app", "secret": false }
+        ],
+        "command": [],
+        "dependencies": []
+      }
+    ]
+  },
+  {
+    "id": "laravel-mysql-redis",
+    "name": "Laravel + MySQL + Redis",
+    "description": "Stack PHP completa com Laravel, MySQL para dados relacionais e Redis para cache/filas.",
+    "category": "web",
+    "tags": ["php", "laravel", "mysql", "redis", "queue"],
+    "complexity": "medium",
+    "services": [
+      {
+        "id": "laravel-nginx",
+        "name": "nginx",
+        "role": "entry-point",
+        "image": "nginx",
+        "tag": "1.25-alpine",
+        "ports": [{ "host": 80, "container": 80 }],
+        "volumes": [
+          { "host": "./nginx/default.conf", "container": "/etc/nginx/conf.d/default.conf" },
+          { "host": "./app", "container": "/var/www" }
+        ],
+        "env": [],
+        "command": [],
+        "dependencies": ["laravel-app"]
+      },
+      {
+        "id": "laravel-app",
+        "name": "app",
+        "role": "runtime",
+        "image": "php",
+        "tag": "8.3-fpm-alpine",
+        "ports": [{ "host": 9000, "container": 9000 }],
+        "volumes": [{ "host": "./app", "container": "/var/www" }],
+        "env": [
+          { "key": "APP_ENV", "value": "production", "secret": false },
+          { "key": "APP_DEBUG", "value": "false", "secret": false },
+          { "key": "APP_KEY", "value": "", "secret": true },
+          { "key": "DB_HOST", "value": "mysql", "secret": false },
+          { "key": "DB_DATABASE", "value": "laravel", "secret": false },
+          { "key": "DB_USERNAME", "value": "laravel", "secret": false },
+          { "key": "DB_PASSWORD", "value": "", "secret": true },
+          { "key": "REDIS_HOST", "value": "redis", "secret": false },
+          { "key": "CACHE_DRIVER", "value": "redis", "secret": false },
+          { "key": "QUEUE_CONNECTION", "value": "redis", "secret": false }
+        ],
+        "command": [],
+        "dependencies": ["laravel-mysql", "laravel-redis"]
+      },
+      {
+        "id": "laravel-worker",
+        "name": "queue-worker",
+        "role": "queue",
+        "image": "php",
+        "tag": "8.3-fpm-alpine",
+        "ports": [],
+        "volumes": [{ "host": "./app", "container": "/var/www" }],
+        "env": [
+          { "key": "APP_ENV", "value": "production", "secret": false },
+          { "key": "DB_HOST", "value": "mysql", "secret": false },
+          { "key": "REDIS_HOST", "value": "redis", "secret": false }
+        ],
+        "command": ["php", "artisan", "queue:work", "--sleep=3", "--tries=3"],
+        "dependencies": ["laravel-app", "laravel-redis"]
+      },
+      {
+        "id": "laravel-mysql",
+        "name": "mysql",
+        "role": "database",
+        "image": "mysql",
+        "tag": "8.0",
+        "ports": [{ "host": 3306, "container": 3306 }],
+        "volumes": [{ "host": "mysql-data", "container": "/var/lib/mysql" }],
+        "env": [
+          { "key": "MYSQL_DATABASE", "value": "laravel", "secret": false },
+          { "key": "MYSQL_USER", "value": "laravel", "secret": false },
+          { "key": "MYSQL_PASSWORD", "value": "", "secret": true },
+          { "key": "MYSQL_ROOT_PASSWORD", "value": "", "secret": true }
+        ],
+        "command": [],
+        "dependencies": []
+      },
+      {
+        "id": "laravel-redis",
+        "name": "redis",
+        "role": "cache",
+        "image": "redis",
+        "tag": "7-alpine",
+        "ports": [{ "host": 6379, "container": 6379 }],
+        "volumes": [{ "host": "redis-data", "container": "/data" }],
+        "env": [],
+        "command": ["redis-server", "--appendonly", "yes"],
+        "dependencies": []
+      }
+    ]
+  },
+  {
+    "id": "nextjs-postgres-redis",
+    "name": "Next.js + PostgreSQL + Redis",
+    "description": "Stack moderna para aplicações full-stack com Next.js, PostgreSQL e Redis para sessões.",
+    "category": "web",
+    "tags": ["javascript", "nextjs", "postgres", "redis", "fullstack"],
+    "complexity": "medium",
+    "services": [
+      {
+        "id": "next-app",
+        "name": "app",
+        "role": "entry-point",
+        "image": "node",
+        "tag": "20-alpine",
+        "ports": [{ "host": 3000, "container": 3000 }],
+        "volumes": [{ "host": "./", "container": "/app" }],
+        "env": [
+          { "key": "NODE_ENV", "value": "production", "secret": false },
+          { "key": "DATABASE_URL", "value": "postgresql://postgres:password@postgres:5432/app", "secret": true },
+          { "key": "REDIS_URL", "value": "redis://redis:6379", "secret": false },
+          { "key": "NEXTAUTH_SECRET", "value": "", "secret": true },
+          { "key": "NEXTAUTH_URL", "value": "https://seu-dominio.com", "secret": false }
+        ],
+        "command": ["node", "server.js"],
+        "dependencies": ["next-postgres", "next-redis"]
+      },
+      {
+        "id": "next-postgres",
+        "name": "postgres",
+        "role": "database",
+        "image": "postgres",
+        "tag": "16-alpine",
+        "ports": [{ "host": 5432, "container": 5432 }],
+        "volumes": [{ "host": "pg-data", "container": "/var/lib/postgresql/data" }],
+        "env": [
+          { "key": "POSTGRES_DB", "value": "app", "secret": false },
+          { "key": "POSTGRES_USER", "value": "postgres", "secret": false },
+          { "key": "POSTGRES_PASSWORD", "value": "", "secret": true }
+        ],
+        "command": [],
+        "dependencies": []
+      },
+      {
+        "id": "next-redis",
+        "name": "redis",
+        "role": "cache",
+        "image": "redis",
+        "tag": "7-alpine",
+        "ports": [{ "host": 6380, "container": 6379 }],
+        "volumes": [{ "host": "next-redis-data", "container": "/data" }],
+        "env": [],
+        "command": [],
+        "dependencies": []
+      }
+    ]
+  },
+  {
+    "id": "django-postgres-celery",
+    "name": "Django + PostgreSQL + Celery",
+    "description": "Stack Python completa com Django, PostgreSQL, Redis para cache e Celery para tarefas assíncronas.",
+    "category": "web",
+    "tags": ["python", "django", "postgres", "celery", "redis", "async"],
+    "complexity": "advanced",
+    "services": [
+      {
+        "id": "django-nginx",
+        "name": "nginx",
+        "role": "entry-point",
+        "image": "nginx",
+        "tag": "1.25-alpine",
+        "ports": [{ "host": 80, "container": 80 }],
+        "volumes": [
+          { "host": "./nginx.conf", "container": "/etc/nginx/conf.d/default.conf" },
+          { "host": "./static", "container": "/static" }
+        ],
+        "env": [],
+        "command": [],
+        "dependencies": ["django-web"]
+      },
+      {
+        "id": "django-web",
+        "name": "web",
+        "role": "runtime",
+        "image": "python",
+        "tag": "3.12-slim",
+        "ports": [{ "host": 8000, "container": 8000 }],
+        "volumes": [{ "host": "./", "container": "/app" }],
+        "env": [
+          { "key": "DJANGO_SETTINGS_MODULE", "value": "config.settings.production", "secret": false },
+          { "key": "DATABASE_URL", "value": "postgresql://postgres:password@postgres:5432/django", "secret": true },
+          { "key": "REDIS_URL", "value": "redis://redis:6379/0", "secret": false },
+          { "key": "SECRET_KEY", "value": "", "secret": true },
+          { "key": "ALLOWED_HOSTS", "value": "localhost,seu-dominio.com", "secret": false }
+        ],
+        "command": ["gunicorn", "config.wsgi:application", "--bind", "0.0.0.0:8000", "--workers", "4"],
+        "dependencies": ["django-postgres", "django-redis"]
+      },
+      {
+        "id": "django-celery",
+        "name": "celery-worker",
+        "role": "queue",
+        "image": "python",
+        "tag": "3.12-slim",
+        "ports": [],
+        "volumes": [{ "host": "./", "container": "/app" }],
+        "env": [
+          { "key": "DJANGO_SETTINGS_MODULE", "value": "config.settings.production", "secret": false },
+          { "key": "DATABASE_URL", "value": "postgresql://postgres:password@postgres:5432/django", "secret": true },
+          { "key": "REDIS_URL", "value": "redis://redis:6379/0", "secret": false }
+        ],
+        "command": ["celery", "-A", "config", "worker", "--loglevel=info"],
+        "dependencies": ["django-web", "django-redis"]
+      },
+      {
+        "id": "django-postgres",
+        "name": "postgres",
+        "role": "database",
+        "image": "postgres",
+        "tag": "16-alpine",
+        "ports": [{ "host": 5433, "container": 5432 }],
+        "volumes": [{ "host": "django-pg-data", "container": "/var/lib/postgresql/data" }],
+        "env": [
+          { "key": "POSTGRES_DB", "value": "django", "secret": false },
+          { "key": "POSTGRES_USER", "value": "postgres", "secret": false },
+          { "key": "POSTGRES_PASSWORD", "value": "", "secret": true }
+        ],
+        "command": [],
+        "dependencies": []
+      },
+      {
+        "id": "django-redis",
+        "name": "redis",
+        "role": "cache",
+        "image": "redis",
+        "tag": "7-alpine",
+        "ports": [{ "host": 6381, "container": 6379 }],
+        "volumes": [{ "host": "django-redis-data", "container": "/data" }],
+        "env": [],
+        "command": [],
+        "dependencies": []
+      }
+    ]
+  },
+  {
+    "id": "wordpress-mysql",
+    "name": "WordPress + MySQL",
+    "description": "WordPress com MySQL e cache Redis opcional. Configuração rápida para sites e blogs.",
+    "category": "cms",
+    "tags": ["php", "wordpress", "mysql", "cms", "blog"],
+    "complexity": "simple",
+    "services": [
+      {
+        "id": "wp-nginx",
+        "name": "nginx",
+        "role": "entry-point",
+        "image": "nginx",
+        "tag": "1.25-alpine",
+        "ports": [{ "host": 80, "container": 80 }, { "host": 443, "container": 443 }],
+        "volumes": [
+          { "host": "./nginx.conf", "container": "/etc/nginx/conf.d/default.conf" },
+          { "host": "wp-data", "container": "/var/www/html" }
+        ],
+        "env": [],
+        "command": [],
+        "dependencies": ["wp-app"]
+      },
+      {
+        "id": "wp-app",
+        "name": "wordpress",
+        "role": "runtime",
+        "image": "wordpress",
+        "tag": "6.4-php8.2-fpm-alpine",
+        "ports": [{ "host": 9000, "container": 9000 }],
+        "volumes": [{ "host": "wp-data", "container": "/var/www/html" }],
+        "env": [
+          { "key": "WORDPRESS_DB_HOST", "value": "mysql", "secret": false },
+          { "key": "WORDPRESS_DB_NAME", "value": "wordpress", "secret": false },
+          { "key": "WORDPRESS_DB_USER", "value": "wordpress", "secret": false },
+          { "key": "WORDPRESS_DB_PASSWORD", "value": "", "secret": true },
+          { "key": "WORDPRESS_TABLE_PREFIX", "value": "wp_", "secret": false }
+        ],
+        "command": [],
+        "dependencies": ["wp-mysql"]
+      },
+      {
+        "id": "wp-mysql",
+        "name": "mysql",
+        "role": "database",
+        "image": "mysql",
+        "tag": "8.0",
+        "ports": [{ "host": 3307, "container": 3306 }],
+        "volumes": [{ "host": "wp-mysql-data", "container": "/var/lib/mysql" }],
+        "env": [
+          { "key": "MYSQL_DATABASE", "value": "wordpress", "secret": false },
+          { "key": "MYSQL_USER", "value": "wordpress", "secret": false },
+          { "key": "MYSQL_PASSWORD", "value": "", "secret": true },
+          { "key": "MYSQL_ROOT_PASSWORD", "value": "", "secret": true }
+        ],
+        "command": [],
+        "dependencies": []
+      }
+    ]
+  },
+  {
+    "id": "spring-postgres",
+    "name": "Spring Boot + PostgreSQL",
+    "description": "Stack Java enterprise com Spring Boot, PostgreSQL e Nginx como proxy reverso.",
+    "category": "web",
+    "tags": ["java", "spring", "postgres", "enterprise"],
+    "complexity": "medium",
+    "services": [
+      {
+        "id": "spring-nginx",
+        "name": "nginx",
+        "role": "entry-point",
+        "image": "nginx",
+        "tag": "1.25-alpine",
+        "ports": [{ "host": 80, "container": 80 }],
+        "volumes": [{ "host": "./nginx.conf", "container": "/etc/nginx/conf.d/default.conf" }],
+        "env": [],
+        "command": [],
+        "dependencies": ["spring-app"]
+      },
+      {
+        "id": "spring-app",
+        "name": "app",
+        "role": "runtime",
+        "image": "eclipse-temurin",
+        "tag": "21-jre-alpine",
+        "ports": [{ "host": 8080, "container": 8080 }],
+        "volumes": [
+          { "host": "./app.jar", "container": "/app/app.jar" },
+          { "host": "spring-logs", "container": "/app/logs" }
+        ],
+        "env": [
+          { "key": "SPRING_PROFILES_ACTIVE", "value": "production", "secret": false },
+          { "key": "SPRING_DATASOURCE_URL", "value": "jdbc:postgresql://postgres:5432/app", "secret": false },
+          { "key": "SPRING_DATASOURCE_USERNAME", "value": "spring", "secret": false },
+          { "key": "SPRING_DATASOURCE_PASSWORD", "value": "", "secret": true },
+          { "key": "SERVER_PORT", "value": "8080", "secret": false }
+        ],
+        "command": ["java", "-jar", "/app/app.jar"],
+        "dependencies": ["spring-postgres"]
+      },
+      {
+        "id": "spring-postgres",
+        "name": "postgres",
+        "role": "database",
+        "image": "postgres",
+        "tag": "16-alpine",
+        "ports": [{ "host": 5434, "container": 5432 }],
+        "volumes": [{ "host": "spring-pg-data", "container": "/var/lib/postgresql/data" }],
+        "env": [
+          { "key": "POSTGRES_DB", "value": "app", "secret": false },
+          { "key": "POSTGRES_USER", "value": "spring", "secret": false },
+          { "key": "POSTGRES_PASSWORD", "value": "", "secret": true }
+        ],
+        "command": [],
+        "dependencies": []
+      }
+    ]
+  },
+  {
+    "id": "microservices-starter",
+    "name": "Microservices Starter",
+    "description": "Arquitetura de microsserviços com API Gateway Nginx, dois serviços Node.js independentes, PostgreSQL compartilhado e Redis.",
+    "category": "architecture",
+    "tags": ["microservices", "node", "nginx", "postgres", "redis", "api-gateway"],
+    "complexity": "advanced",
+    "services": [
+      {
+        "id": "ms-gateway",
+        "name": "gateway",
+        "role": "entry-point",
+        "image": "nginx",
+        "tag": "1.25-alpine",
+        "ports": [{ "host": 80, "container": 80 }, { "host": 443, "container": 443 }],
+        "volumes": [{ "host": "./gateway/nginx.conf", "container": "/etc/nginx/conf.d/default.conf" }],
+        "env": [],
+        "command": [],
+        "dependencies": ["ms-auth", "ms-api"]
+      },
+      {
+        "id": "ms-auth",
+        "name": "auth-service",
+        "role": "runtime",
+        "image": "node",
+        "tag": "20-alpine",
+        "ports": [{ "host": 3001, "container": 3001 }],
+        "volumes": [{ "host": "./services/auth", "container": "/app" }],
+        "env": [
+          { "key": "PORT", "value": "3001", "secret": false },
+          { "key": "DATABASE_URL", "value": "postgresql://app:password@postgres:5432/auth", "secret": true },
+          { "key": "JWT_SECRET", "value": "", "secret": true },
+          { "key": "JWT_EXPIRY", "value": "7d", "secret": false }
+        ],
+        "command": ["node", "server.js"],
+        "dependencies": ["ms-postgres", "ms-redis"]
+      },
+      {
+        "id": "ms-api",
+        "name": "api-service",
+        "role": "runtime",
+        "image": "node",
+        "tag": "20-alpine",
+        "ports": [{ "host": 3002, "container": 3002 }],
+        "volumes": [{ "host": "./services/api", "container": "/app" }],
+        "env": [
+          { "key": "PORT", "value": "3002", "secret": false },
+          { "key": "DATABASE_URL", "value": "postgresql://app:password@postgres:5432/app", "secret": true },
+          { "key": "REDIS_URL", "value": "redis://redis:6379", "secret": false },
+          { "key": "AUTH_SERVICE_URL", "value": "http://auth-service:3001", "secret": false }
+        ],
+        "command": ["node", "server.js"],
+        "dependencies": ["ms-postgres", "ms-redis", "ms-auth"]
+      },
+      {
+        "id": "ms-postgres",
+        "name": "postgres",
+        "role": "database",
+        "image": "postgres",
+        "tag": "16-alpine",
+        "ports": [{ "host": 5435, "container": 5432 }],
+        "volumes": [{ "host": "ms-pg-data", "container": "/var/lib/postgresql/data" }],
+        "env": [
+          { "key": "POSTGRES_DB", "value": "app", "secret": false },
+          { "key": "POSTGRES_USER", "value": "app", "secret": false },
+          { "key": "POSTGRES_PASSWORD", "value": "", "secret": true }
+        ],
+        "command": [],
+        "dependencies": []
+      },
+      {
+        "id": "ms-redis",
+        "name": "redis",
+        "role": "cache",
+        "image": "redis",
+        "tag": "7-alpine",
+        "ports": [{ "host": 6382, "container": 6379 }],
+        "volumes": [{ "host": "ms-redis-data", "container": "/data" }],
+        "env": [],
+        "command": [],
+        "dependencies": []
+      }
+    ]
+  }
+]

@@ -4240,9 +4240,9 @@ export default function StacksPanel() {
 
   useEffect(() => {
     const state = location.state || {}
-    if (!stacks.length || (!state.selectedStackId && !state.openModal)) return
+    if (!state.selectedStackId && !state.openModal) return
 
-    if (state.selectedStackId) {
+    if (state.selectedStackId && stacks.length) {
       const targetStack = stacks.find((stack) => stack.id === state.selectedStackId)
       if (targetStack) setSelectedStack(targetStack)
     }
@@ -4251,7 +4251,9 @@ export default function StacksPanel() {
       setModal(state.openModal)
     }
 
-    navigate(location.pathname, { replace: true, state: null })
+    if (!state.selectedStackId || stacks.length) {
+      navigate(location.pathname, { replace: true, state: null })
+    }
   }, [location.pathname, location.state, navigate, stacks])
 
   // Mantém selectedStack sincronizado
