@@ -1461,18 +1461,14 @@ const ServerForm = ({ server, onSave, onApply, onCancel, dockerContainers, docke
     }
   }
 
-  const handleSave = async () => {
+  const handleSave = async (applyAfterSave = false) => {
     const activeForm = formRef.current
     if (!activeForm.name || !activeForm.primary_domain) {
       onNotify?.('Campos obrigatorios', 'Nome e dominio sao obrigatorios')
       return
     }
-    if (!editorContent.trim()) {
-      onNotify?.('Preview obrigatorio', 'Gere o preview ou cole a configuracao antes de salvar')
-      return
-    }
     let previewContent = editorContent
-    if (!editorTouched) {
+    if (!previewContent.trim() || !editorTouched) {
       try {
         const res = await api.post('/nginx/preview-config', activeForm)
         previewContent = res.data?.config || ''
@@ -1484,33 +1480,36 @@ const ServerForm = ({ server, onSave, onApply, onCancel, dockerContainers, docke
         return
       }
     }
-    const viewConfirm = () => {
-      setApplyConfirm({
-        title: 'Ver arquivo completo?',
-        message: 'Deseja visualizar a configuracao completa e as diferencas antes de aplicar?',
-        confirmText: 'Sim, ver arquivo',
-        onConfirm: () => {
-          setApplyConfirm(null)
-          const diffLines = buildDiffLines(currentConfig, previewContent)
-          setDiffModal({
-            diffLines
-          })
-        },
-        onCancel: () => {
-          setApplyConfirm(null)
-          if (editorTouched) {
-            onNotify?.(
-              'Edicao avancada pendente',
-              'Para salvar o arquivo avancado com simbolos especiais, use Aplicar configuracoes.'
-            )
-            return
-          }
-          performSave({ ...activeForm }, true)
+    if (applyAfterSave) {
+      if (editorTouched && server?.id) {
+        setApplyLoading(true)
+        try {
+          await api.post(`/nginx/servers/${server.id}/apply-raw-config`, { content: editorContent })
+          setCurrentConfig(editorContent)
+          setEditorTouched(false)
+          setShowAdvanced(false)
+          onNotify?.('Configuracao aplicada', 'Arquivo salvo e Nginx recarregado com sucesso')
+          try {
+            const parsedRes = await api.post('/nginx/parse-config', { content: editorContent, filename: `${form.primary_domain || 'server'}.conf` })
+            if (parsedRes.data?.parsed) {
+              const parsed = parsedRes.data.parsed
+              setForm((prev) => ({ ...prev, ...parsed, upstream_servers: parsed.upstream_servers || prev.upstream_servers, path_rules: parsed.path_rules || prev.path_rules }))
+            }
+          } catch { /* keep current form */ }
+        } catch (err) {
+          onNotify?.('Erro ao aplicar', err.response?.data?.error || err.message)
+        } finally {
+          setApplyLoading(false)
         }
-      })
+      } else {
+        await performSave({ ...activeForm }, true)
+      }
+    } else {
+      await performSave({ ...activeForm }, false)
     }
-    viewConfirm()
   }
+
+  const handleSaveAndApply = () => handleSave(true)
 
   const handleApplyFromDiff = async () => {
     setDiffModal(null)
@@ -2783,12 +2782,20 @@ const ServerForm = ({ server, onSave, onApply, onCancel, dockerContainers, docke
         {/* Actions */}
         <div className="flex gap-2">
           <button
-            onClick={handleSave}
-            disabled={saving || pathSaving}
-            className="flex-1 flex items-center justify-center gap-2 rounded-xl bg-emerald-500 px-4 py-2 text-sm font-semibold text-white hover:bg-emerald-600 disabled:opacity-50"
+            onClick={() => handleSave(false)}
+            disabled={saving || pathSaving || applyLoading}
+            className="flex items-center justify-center gap-2 rounded-xl border border-slate-600 bg-slate-800 px-4 py-2 text-sm font-semibold text-slate-200 hover:bg-slate-700 disabled:opacity-50"
           >
             <Save className="h-4 w-4" />
-            {saving ? 'Salvando...' : pathSaving ? 'Publicando arquivos...' : 'Salvar'}
+            {saving ? 'Salvando...' : 'Salvar'}
+          </button>
+          <button
+            onClick={handleSaveAndApply}
+            disabled={saving || pathSaving || applyLoading}
+            className="flex-1 flex items-center justify-center gap-2 rounded-xl bg-emerald-500 px-4 py-2 text-sm font-semibold text-white hover:bg-emerald-600 disabled:opacity-50"
+          >
+            <Play className="h-4 w-4" />
+            {applyLoading ? 'Aplicando...' : pathSaving ? 'Publicando...' : 'Salvar e Aplicar'}
           </button>
           {onCancel && (
             <button
