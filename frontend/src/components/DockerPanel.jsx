@@ -1097,9 +1097,15 @@ const DockerPanel = ({ showPageIntro = true }) => {
 
     return () => {
       progressSocket.off('progress', handleProgress)
-      progressSocket.disconnect()
     }
   }, [progressSocket])
+
+  // Disconnect progress socket only on unmount
+  useEffect(() => {
+    return () => {
+      if (progressSocket) progressSocket.disconnect()
+    }
+  }, [])
 
   useEffect(() => {
     if (!socket) {
@@ -1111,15 +1117,26 @@ const DockerPanel = ({ showPageIntro = true }) => {
       setLogs((prev) => `${prev}${chunk}${chunk.endsWith('\n') ? '' : '\n'}`)
     }
 
+    const handleError = (payload) => addToast(payload.message, 'error')
+    const handleEnd = () => {}
+
     socket.on('log', handleLog)
-    socket.on('error', (payload) => addToast(payload.message, 'error'))
-    socket.on('end', () => addToast('Log finalizado'))
+    socket.on('error', handleError)
+    socket.on('end', handleEnd)
 
     return () => {
       socket.off('log', handleLog)
-      socket.disconnect()
+      socket.off('error', handleError)
+      socket.off('end', handleEnd)
     }
   }, [socket])
+
+  // Disconnect socket only on unmount
+  useEffect(() => {
+    return () => {
+      if (socket) socket.disconnect()
+    }
+  }, [])
 
   const handleAction = async (action, id) => {
     try {
