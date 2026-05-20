@@ -128,12 +128,16 @@ function detectRoute(
     if (upstreamNames.has(withoutScheme)) {
       upstreamId = withoutScheme
     } else {
-      // Inline proxy_pass host:port → create ad-hoc upstream
+      // Inline proxy_pass host:port -> create ad-hoc upstream
       const [host, portStr] = withoutScheme.split(':')
       const port = parseInt(portStr || '80', 10)
+      // Avoid reserved names like 'localhost' as upstream name
+      const safeName = (host === 'localhost' || host === '127.0.0.1' || host === '0.0.0.0')
+        ? `backend_${isNaN(port) ? 80 : port}`
+        : (host || 'app')
       const inlineUpstream: UpstreamConfig = {
         id: `upstream-${makeId()}`,
-        name: host || 'app',
+        name: safeName,
         method: 'round_robin',
         servers: [{ id: `srv-${makeId()}`, host: host || '127.0.0.1', port: isNaN(port) ? 80 : port }],
       }
