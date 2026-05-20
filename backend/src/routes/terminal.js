@@ -66,11 +66,24 @@ const initTerminalSocket = (io) => {
   namespace.on('connection', (socket) => {
     const baseDir = process.env.TERMINAL_BASE_DIR || process.cwd();
     socket.cwd = baseDir;
+    socket.ptyProcess = null;
     socket.currentProcess = null;
     socket.emit('ready', { message: 'Terminal ready' });
     socket.emit('cwd', { cwd: socket.cwd });
 
+    let pty = null;
+    try {
+      pty = require('node-pty');
+    } catch (err) {
+      // node-pty not available, fallback to spawn
+    }
+
     const cleanupProcess = () => {
+      if (socket.ptyProcess) {
+        try { socket.ptyProcess.kill(); } catch (err) { /* ignore */ }
+        socket.ptyProcess = null;
+        return;
+      }
       const child = socket.currentProcess;
       if (child && !child.killed) {
         try {
@@ -85,6 +98,9 @@ const initTerminalSocket = (io) => {
       }
       socket.currentProcess = null;
     };
+
+    // Check if command should use PTY mode (interactive shell)
+    const isPtyCommand = (cmd) => /^\s*(bash|sh|zsh|fish)\s*$/.test(cmd.trim());
 
     socket.on('command', async (payload = {}) => {
       const command = payload.command || '';
@@ -110,6 +126,30 @@ const initTerminalSocket = (io) => {
           return;
         }
 
+        // PTY mode for interactive shells
+        if (pty && isPtyCommand(trimmed)) {
+          const shell = trimmed || 'bash';
+          const ptyProc = pty.spawn(shell, [], {
+            name: 'xterm-256color',
+            cols: 120,
+            rows: 30,
+            cwd: socket.cwd,
+            env: { ...process.env, TERM: 'xterm-256color' }
+          });
+          socket.ptyProcess = ptyProc;
+
+          ptyProc.onData((data) => {
+            socket.emit('output', { data });
+          });
+
+          ptyProc.onExit(({ exitCode, signal }) => {
+            socket.ptyProcess = null;
+            socket.emit('done', { code: exitCode, signal: signal || null, stderr: '', stdout: '' });
+          });
+          return;
+        }
+
+        // Fallback: spawnInteractive for non-shell commands
         const child = executor.spawnInteractive(
           command,
           socket.user.id,
@@ -144,6 +184,16 @@ const initTerminalSocket = (io) => {
       if (data == null) {
         return;
       }
+      // PTY mode: write directly to pty
+      if (socket.ptyProcess) {
+        try {
+          socket.ptyProcess.write(data);
+        } catch (err) {
+          // ignore
+        }
+        return;
+      }
+      // Fallback: write to child stdin
       const child = socket.currentProcess;
       if (!child || child.killed || !child.stdin) {
         return;
@@ -152,6 +202,17 @@ const initTerminalSocket = (io) => {
         child.stdin.write(data);
       } catch (err) {
         // Ignore write errors on closed streams.
+      }
+    });
+
+    socket.on('resize', (payload = {}) => {
+      const { cols, rows } = payload;
+      if (socket.ptyProcess && cols && rows) {
+        try {
+          socket.ptyProcess.resize(cols, rows);
+        } catch (err) {
+          // ignore
+        }
       }
     });
 

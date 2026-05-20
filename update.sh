@@ -115,14 +115,14 @@ cd "${INSTALL_DIR}"
 log "Verificando dependencias de extracao"
 if command -v apt-get >/dev/null 2>&1; then
   apt-get update -y
-  apt-get install -y unzip tar
+  apt-get install -y unzip tar build-essential python3
 elif command -v dnf >/dev/null 2>&1; then
-  dnf install -y unzip tar
+  dnf install -y unzip tar gcc gcc-c++ make python3
 elif command -v yum >/dev/null 2>&1; then
-  yum install -y unzip tar
+  yum install -y unzip tar gcc gcc-c++ make python3
 elif command -v zypper >/dev/null 2>&1; then
   zypper refresh
-  zypper install -y unzip tar
+  zypper install -y unzip tar gcc gcc-c++ make python3
 fi
 
 install_certbot
