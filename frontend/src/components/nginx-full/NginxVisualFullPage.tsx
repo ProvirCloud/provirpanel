@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useState } from 'react'
-import { FolderOpen, Loader2, Plus, Server } from 'lucide-react'
+import { FolderOpen, Loader2, Plus, Save, Server, Play, CheckCircle } from 'lucide-react'
 import PageHeader from '../layout/PageHeader'
 import GeneratedNginxConfig from './GeneratedNginxConfig'
 import NginxConfigPanel from './NginxConfigPanel'
@@ -9,9 +9,12 @@ import UpstreamList from './UpstreamList'
 import { generateNginxConfig } from './nginxConfigGenerator'
 import { parseNginxConfigToState } from './nginxConfigParser'
 import {
-  addRoute,
   addUpstream,
   createInitialNginxVisualState,
+  BASIC_PROXY_HEADERS,
+  BASIC_WEBSOCKET_HEADERS,
+  type NginxVisualState,
+  type RouteConfig,
   type SelectedNode,
 } from './nginxVisualConfig'
 import api from '../../services/api.js'
@@ -83,11 +86,59 @@ export default function NginxVisualFullPage() {
     setSelected({ kind: 'domain', id: 'domain' })
   }
 
+  const [showNewRouteModal, setShowNewRouteModal] = useState(false)
+  const [saving, setSaving] = useState(false)
+  const [saveStatus, setSaveStatus] = useState<'idle' | 'saved' | 'error'>('idle')
+
   const handleAddRoute = () => {
-    const next = addRoute(state)
-    const newRoute = next.routes[next.routes.length - 1]
+    setShowNewRouteModal(true)
+  }
+
+  const handleCreateRoute = (route: RouteConfig) => {
+    const next: NginxVisualState = { ...state, routes: [...state.routes, route] }
     setState(next)
-    setSelected({ kind: 'route', id: newRoute.id })
+    setSelected({ kind: 'route', id: route.id })
+    setShowNewRouteModal(false)
+  }
+
+  const handleSaveConfig = async () => {
+    if (!currentConfigName) {
+      setSaveStatus('error')
+      setTimeout(() => setSaveStatus('idle'), 3000)
+      return
+    }
+    setSaving(true)
+    try {
+      await api.put(`/nginx/configs/${currentConfigName}`, { content: generatedConfig })
+      setSaveStatus('saved')
+      setTimeout(() => setSaveStatus('idle'), 3000)
+    } catch {
+      setSaveStatus('error')
+      setTimeout(() => setSaveStatus('idle'), 3000)
+    } finally {
+      setSaving(false)
+    }
+  }
+
+  const handleSaveAndApply = async () => {
+    setSaving(true)
+    try {
+      if (currentConfigName) {
+        await api.put(`/nginx/configs/${currentConfigName}`, { content: generatedConfig })
+      } else {
+        const filename = `${state.domain.primary.replace(/[^a-zA-Z0-9.-]/g, '_')}.conf`
+        await api.post('/nginx/configs', { filename, content: generatedConfig })
+        setCurrentConfigName(filename)
+      }
+      await api.post('/nginx/reload')
+      setSaveStatus('saved')
+      setTimeout(() => setSaveStatus('idle'), 3000)
+    } catch {
+      setSaveStatus('error')
+      setTimeout(() => setSaveStatus('idle'), 3000)
+    } finally {
+      setSaving(false)
+    }
   }
 
   const handleAddUpstream = () => {
@@ -154,6 +205,25 @@ export default function NginxVisualFullPage() {
               <Plus className="h-4 w-4" />
               Nova Rota
             </button>
+            <button
+              type="button"
+              onClick={handleSaveConfig}
+              disabled={saving || !currentConfigName}
+              className="flex items-center gap-2 rounded-[14px] border border-white/10 bg-[rgba(10,18,34,0.7)] px-4 py-2 text-[13px] font-medium text-white/70 transition hover:bg-white/6 hover:text-white/90 disabled:opacity-40"
+              title={!currentConfigName ? 'Carregue uma configuração primeiro' : 'Salvar sem recarregar o Nginx'}
+            >
+              <Save className="h-4 w-4" />
+              Salvar
+            </button>
+            <button
+              type="button"
+              onClick={handleSaveAndApply}
+              disabled={saving}
+              className="flex items-center gap-2 rounded-[14px] border border-emerald-500/50 bg-[linear-gradient(135deg,#065f46,#064e3b)] px-4 py-2 text-[13px] font-semibold text-emerald-100 shadow-[0_4px_16px_rgba(16,185,129,0.2)] transition hover:brightness-110 disabled:opacity-50"
+            >
+              {saving ? <Loader2 className="h-4 w-4 animate-spin" /> : saveStatus === 'saved' ? <CheckCircle className="h-4 w-4" /> : <Play className="h-4 w-4" />}
+              {saving ? 'Salvando...' : saveStatus === 'saved' ? 'Aplicado!' : 'Salvar e Aplicar'}
+            </button>
           </>
         }
       />
@@ -169,6 +239,13 @@ export default function NginxVisualFullPage() {
         />
       </div>
 
+      {/* Status bar */}
+      {saveStatus === 'error' && (
+        <div className="rounded-[14px] border border-rose-500/30 bg-rose-500/10 px-4 py-2.5 text-[13px] text-rose-200">
+          {currentConfigName ? 'Erro ao salvar configuração. Verifique se o Nginx está acessível.' : 'Carregue uma configuração existente ou defina um domínio para salvar como nova.'}
+        </div>
+      )}
+
       {/* Bottom row: generated config · upstreams · security */}
       <div className="grid gap-4 xl:grid-cols-[minmax(0,1.6fr)_minmax(260px,0.65fr)_minmax(300px,0.72fr)]">
         <GeneratedNginxConfig config={generatedConfig} />
@@ -179,6 +256,149 @@ export default function NginxVisualFullPage() {
           onChange={setState}
         />
         <SecurityRulesPanel state={state} onChange={setState} />
+      </div>
+
+      {/* New Route Modal */}
+      {showNewRouteModal && (
+        <NewRouteModal
+          upstreams={state.upstreams}
+          onConfirm={handleCreateRoute}
+          onClose={() => setShowNewRouteModal(false)}
+        />
+      )}
+    </div>
+  )
+}
+
+// ─── New Route Modal ──────────────────────────────────────────────────────────
+
+type NewRouteModalProps = {
+  upstreams: NginxVisualState['upstreams']
+  onConfirm: (route: RouteConfig) => void
+  onClose: () => void
+}
+
+function NewRouteModal({ upstreams, onConfirm, onClose }: NewRouteModalProps) {
+  const [routeType, setRouteType] = useState<RouteConfig['type']>('proxy')
+  const [path, setPath] = useState('/')
+  const [upstreamId, setUpstreamId] = useState(upstreams[0]?.id || '')
+  const [alias, setAlias] = useState('/var/www/html/')
+
+  const routeOptions: { value: RouteConfig['type']; label: string; desc: string }[] = [
+    { value: 'proxy', label: 'Proxy reverso', desc: 'Encaminha para um upstream/backend' },
+    { value: 'websocket', label: 'WebSocket', desc: 'Proxy com suporte a WebSocket' },
+    { value: 'static-site', label: 'Site estático', desc: 'Serve arquivos de uma pasta (SPA)' },
+    { value: 'static-app', label: 'App estático', desc: 'Serve app com fallback para index.html' },
+    { value: 'static-assets', label: 'Assets estáticos', desc: 'Serve assets com cache longo' },
+  ]
+
+  const handleCreate = () => {
+    const id = `route-${Date.now().toString(36)}${Math.random().toString(36).slice(2, 6)}`
+    const isProxy = routeType === 'proxy' || routeType === 'websocket'
+    const headers = routeType === 'websocket' ? BASIC_WEBSOCKET_HEADERS : isProxy ? BASIC_PROXY_HEADERS : []
+
+    const route: RouteConfig = {
+      id,
+      path: path || '/',
+      title: path || '/',
+      type: routeType,
+      ...(isProxy ? { upstreamId, timeouts: { connect: 5, read: 60, send: 60 }, proxyBuffering: false } : {}),
+      ...(!isProxy ? { alias, fallback: routeType === 'static-assets' ? undefined : `${path === '/' ? '' : path}/index.html`, tryFiles: routeType === 'static-assets' ? '=404' : undefined } : {}),
+      headers,
+    }
+    onConfirm(route)
+  }
+
+  return (
+    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 backdrop-blur-sm" onClick={(e) => { if (e.target === e.currentTarget) onClose() }}>
+      <div className="w-full max-w-lg rounded-[20px] border border-white/10 bg-[linear-gradient(160deg,rgba(8,16,32,0.99),rgba(6,13,26,0.98))] p-6 shadow-2xl">
+        <h3 className="text-[15px] font-semibold text-white mb-1">Nova Rota</h3>
+        <p className="text-[12px] text-white/45 mb-5">Escolha o tipo e configure o caminho da rota</p>
+
+        {/* Route type selection */}
+        <div className="grid grid-cols-1 gap-2 mb-5">
+          {routeOptions.map((opt) => (
+            <button
+              key={opt.value}
+              type="button"
+              onClick={() => setRouteType(opt.value)}
+              className={[
+                'flex items-start gap-3 rounded-[12px] border p-3 text-left transition',
+                routeType === opt.value
+                  ? 'border-[#3d72ff]/60 bg-[#3d72ff]/10'
+                  : 'border-white/8 bg-white/2 hover:border-white/15',
+              ].join(' ')}
+            >
+              <div className={['mt-0.5 h-3.5 w-3.5 rounded-full border-2 flex-shrink-0', routeType === opt.value ? 'border-[#3d72ff] bg-[#3d72ff]' : 'border-white/25'].join(' ')} />
+              <div>
+                <div className="text-[13px] font-medium text-white">{opt.label}</div>
+                <div className="text-[11px] text-white/40">{opt.desc}</div>
+              </div>
+            </button>
+          ))}
+        </div>
+
+        {/* Path */}
+        <div className="mb-4">
+          <label className="block text-[11px] font-semibold uppercase tracking-[0.14em] text-white/38 mb-1.5">Caminho (path)</label>
+          <input
+            className="h-9 w-full rounded-[10px] border border-white/10 bg-[rgba(8,15,30,0.9)] px-3 text-[13px] text-white placeholder-white/25 outline-none focus:border-[#4d85ff]/60"
+            value={path}
+            onChange={(e) => setPath(e.target.value)}
+            placeholder="/api/"
+          />
+          <p className="mt-1 text-[10px] text-white/30">Ex: /api/ para rota independente, /admin/assets/ para sub-rota</p>
+        </div>
+
+        {/* Proxy-specific: upstream */}
+        {(routeType === 'proxy' || routeType === 'websocket') && (
+          <div className="mb-4">
+            <label className="block text-[11px] font-semibold uppercase tracking-[0.14em] text-white/38 mb-1.5">Upstream de destino</label>
+            <select
+              className="h-9 w-full rounded-[10px] border border-white/10 bg-[rgba(8,15,30,0.9)] px-3 text-[13px] text-white outline-none focus:border-[#4d85ff]/60 cursor-pointer"
+              value={upstreamId}
+              onChange={(e) => setUpstreamId(e.target.value)}
+            >
+              <option value="">— Selecionar upstream —</option>
+              {upstreams.map((u) => (
+                <option key={u.id} value={u.id}>{u.name}</option>
+              ))}
+            </select>
+          </div>
+        )}
+
+        {/* Static-specific: alias */}
+        {routeType !== 'proxy' && routeType !== 'websocket' && (
+          <div className="mb-4">
+            <label className="block text-[11px] font-semibold uppercase tracking-[0.14em] text-white/38 mb-1.5">Pasta no servidor (alias)</label>
+            <input
+              className="h-9 w-full rounded-[10px] border border-white/10 bg-[rgba(8,15,30,0.9)] px-3 text-[13px] text-white placeholder-white/25 outline-none focus:border-[#4d85ff]/60"
+              value={alias}
+              onChange={(e) => setAlias(e.target.value)}
+              placeholder="/var/www/html/"
+            />
+          </div>
+        )}
+
+        {/* Actions */}
+        <div className="flex justify-end gap-3 pt-2 border-t border-white/6">
+          <button
+            type="button"
+            onClick={onClose}
+            className="rounded-[10px] border border-white/10 px-4 py-2 text-[13px] text-white/60 hover:text-white/80 transition"
+          >
+            Cancelar
+          </button>
+          <button
+            type="button"
+            onClick={handleCreate}
+            disabled={!path.trim()}
+            className="flex items-center gap-2 rounded-[10px] border border-[#2d4f8f]/80 bg-[linear-gradient(135deg,#1a3a72,#142d58)] px-5 py-2 text-[13px] font-semibold text-white shadow-[0_4px_16px_rgba(30,80,200,0.22)] transition hover:brightness-110 disabled:opacity-40"
+          >
+            <Plus className="h-4 w-4" />
+            Criar Rota
+          </button>
+        </div>
       </div>
     </div>
   )
