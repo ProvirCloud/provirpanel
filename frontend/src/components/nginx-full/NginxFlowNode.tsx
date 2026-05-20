@@ -7,6 +7,7 @@ type Tone =
   | 'https'
   | 'proxy'
   | 'websocket'
+  | 'redirect'
   | 'static'
   | 'upstream'
   | 'target'
@@ -58,6 +59,11 @@ const TONE_CLASSES: Record<
     shell: 'border-[#8f5f1d] bg-[rgba(58,40,18,0.72)] text-[#fff6e8]',
     icon: 'bg-[#ffb54a]/14 text-[#ffc975] border-[#ffc975]/24',
     detail: 'text-[#ffd89f]',
+  },
+  redirect: {
+    shell: 'border-[#c2410c] bg-[rgba(68,32,12,0.72)] text-[#fff7ed]',
+    icon: 'bg-[#fb923c]/14 text-[#fdba74] border-[#fdba74]/24',
+    detail: 'text-[#fed7aa]',
   },
 }
 
