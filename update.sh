@@ -143,6 +143,17 @@ sudo cp -r frontend/dist/* /var/www/panel/
 sudo chown -R www-data:www-data /var/www/panel
 sudo chmod -R 755 /var/www/panel
 
+# Garantir sudoers para nginx
+log "Verificando permissoes de nginx para o backend"
+if [ ! -f /etc/sudoers.d/provirpanel-nginx ]; then
+  cat <<SUDOERS > /etc/sudoers.d/provirpanel-nginx
+# Allow provirpanel to manage nginx without password
+provirpanel ALL=(ALL) NOPASSWD: /usr/sbin/nginx, /usr/bin/nginx, /bin/systemctl reload nginx, /bin/systemctl restart nginx, /usr/sbin/service nginx *
+SUDOERS
+  chmod 440 /etc/sudoers.d/provirpanel-nginx
+  log "Sudoers configurado para nginx"
+fi
+
 log "Reiniciando backend"
 pm2 delete provirpanel-backend 2>/dev/null || true
 pm2 start backend/src/server.js --name provirpanel-backend

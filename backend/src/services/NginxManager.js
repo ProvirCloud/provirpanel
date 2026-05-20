@@ -472,7 +472,24 @@ server {
   }
 
   reload() {
-    execSync('systemctl reload nginx');
+    const commands = [
+      'sudo nginx -s reload',
+      'sudo systemctl reload nginx',
+      'nginx -s reload',
+      'systemctl reload nginx',
+      'sudo service nginx reload',
+      'service nginx reload'
+    ];
+    let lastError = null;
+    for (const cmd of commands) {
+      try {
+        execSync(cmd, { stdio: 'pipe', timeout: 10000 });
+        return;
+      } catch (err) {
+        lastError = err;
+      }
+    }
+    throw new Error(`Falha ao recarregar Nginx: ${lastError?.stderr?.toString()?.trim() || lastError?.message || 'permissao negada ou comando nao disponivel'}`);
   }
 
   getStatus() {
