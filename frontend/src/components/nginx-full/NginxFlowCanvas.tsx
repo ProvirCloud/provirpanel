@@ -1,5 +1,6 @@
 import {
   ArrowRightLeft,
+  CornerDownRight,
   Expand,
   FolderKanban,
   Globe,
@@ -41,14 +42,16 @@ const WIRE_SIB = 'rgba(78,120,210,0.28)' // sibling (same-group) connector
 const ROUTE_ICONS: Record<RouteConfig['type'], React.ElementType> = {
   proxy:          ArrowRightLeft,
   websocket:      Radio,
+  redirect:       CornerDownRight,
   'static-app':   FolderKanban,
   'static-assets': HardDrive,
   'static-site':  FolderKanban,
 }
 
-const ROUTE_TONES: Record<RouteConfig['type'], 'proxy' | 'websocket' | 'static'> = {
+const ROUTE_TONES: Record<RouteConfig['type'], 'proxy' | 'websocket' | 'static' | 'redirect'> = {
   proxy:          'proxy',
   websocket:      'websocket',
+  redirect:       'redirect',
   'static-app':   'static',
   'static-assets':'static',
   'static-site':  'static',
@@ -57,6 +60,7 @@ const ROUTE_TONES: Record<RouteConfig['type'], 'proxy' | 'websocket' | 'static'>
 const ROUTE_LABELS: Record<RouteConfig['type'], string> = {
   proxy:          'Proxy Pass',
   websocket:      'WebSocket',
+  redirect:       'Redirect',
   'static-app':   'App estático',
   'static-assets':'Assets',
   'static-site':  'Site estático',
@@ -182,10 +186,15 @@ function GroupColumn({
   const proxyGroup = !!group.upstreamId
 
   // Target node props
-  const targetTitle  = proxyGroup ? (upstream ? `LB: ${upstream.name}` : 'Sem upstream') : (group.aliasBase || firstRoute.alias || '—')
-  const targetSub    = proxyGroup ? (upstream?.method || '—') : 'alias'
-  const targetTone   = proxyGroup ? (firstRoute.type === 'websocket' ? 'websocket' as const : 'upstream' as const) : 'target' as const
-  const TargetIcon   = proxyGroup ? (firstRoute.type === 'websocket' ? Waypoints : Server) : HardDrive
+  const isRedirectGroup = firstRoute.type === 'redirect'
+  const targetTitle  = proxyGroup
+    ? (upstream ? `LB: ${upstream.name}` : 'Sem upstream')
+    : isRedirectGroup
+      ? (firstRoute.redirectTo || firstRoute.path + '/')
+      : (group.aliasBase || firstRoute.alias || '—')
+  const targetSub    = proxyGroup ? (upstream?.method || '—') : isRedirectGroup ? `${firstRoute.redirectCode || 301} redirect` : 'alias'
+  const targetTone   = proxyGroup ? (firstRoute.type === 'websocket' ? 'websocket' as const : 'upstream' as const) : isRedirectGroup ? 'redirect' as const : 'target' as const
+  const TargetIcon   = proxyGroup ? (firstRoute.type === 'websocket' ? Waypoints : Server) : isRedirectGroup ? CornerDownRight : HardDrive
   const targetSelected = proxyGroup && upstream
     ? selected.kind === 'upstream' && selected.id === upstream.id
     : group.routes.some(r => selected.kind === 'static-target' && selected.id === `target-${r.id}`)
