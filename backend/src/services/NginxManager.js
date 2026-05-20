@@ -463,12 +463,18 @@ server {
   }
 
   testConfig() {
-    try {
-      execSync('nginx -t', { stdio: 'pipe' });
-      return { valid: true };
-    } catch (err) {
-      return { valid: false, error: err.stderr?.toString() || err.message };
+    const commands = ['sudo -n nginx -t', 'nginx -t'];
+    for (const cmd of commands) {
+      try {
+        execSync(cmd, { stdio: 'pipe', timeout: 10000 });
+        return { valid: true };
+      } catch (err) {
+        const stderr = err.stderr?.toString() || '';
+        if (stderr.includes('Permission denied') || stderr.includes('EACCES')) continue;
+        return { valid: false, error: stderr || err.message };
+      }
     }
+    return { valid: false, error: 'Nao foi possivel executar nginx -t (permissao negada)' };
   }
 
   reload() {
