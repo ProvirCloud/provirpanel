@@ -325,9 +325,13 @@ function NewRouteModal({ upstreams, onConfirm, onClose }: NewRouteModalProps) {
   const [upstreamId, setUpstreamId] = useState(upstreams[0]?.id || '')
   const [alias, setAlias] = useState('/var/www/html/')
 
+  const [redirectTo, setRedirectTo] = useState('')
+  const [redirectCode, setRedirectCode] = useState<301 | 302>(301)
+
   const routeOptions: { value: RouteConfig['type']; label: string; desc: string }[] = [
     { value: 'proxy', label: 'Proxy reverso', desc: 'Encaminha para um upstream/backend' },
     { value: 'websocket', label: 'WebSocket', desc: 'Proxy com suporte a WebSocket' },
+    { value: 'redirect', label: 'Redirecionamento', desc: 'Redireciona para outro path ou URL (ex: /admin → /admin/)' },
     { value: 'static-site', label: 'Site estático', desc: 'Serve arquivos de uma pasta (SPA)' },
     { value: 'static-app', label: 'App estático', desc: 'Serve app com fallback para index.html' },
     { value: 'static-assets', label: 'Assets estáticos', desc: 'Serve assets com cache longo' },
@@ -336,6 +340,7 @@ function NewRouteModal({ upstreams, onConfirm, onClose }: NewRouteModalProps) {
   const handleCreate = () => {
     const id = `route-${Date.now().toString(36)}${Math.random().toString(36).slice(2, 6)}`
     const isProxy = routeType === 'proxy' || routeType === 'websocket'
+    const isRedirect = routeType === 'redirect'
     const headers = routeType === 'websocket' ? BASIC_WEBSOCKET_HEADERS : isProxy ? BASIC_PROXY_HEADERS : []
 
     const route: RouteConfig = {
@@ -344,7 +349,8 @@ function NewRouteModal({ upstreams, onConfirm, onClose }: NewRouteModalProps) {
       title: path || '/',
       type: routeType,
       ...(isProxy ? { upstreamId, timeouts: { connect: 5, read: 60, send: 60 }, proxyBuffering: false } : {}),
-      ...(!isProxy ? { alias, fallback: routeType === 'static-assets' ? undefined : `${path === '/' ? '' : path}/index.html`, tryFiles: routeType === 'static-assets' ? '=404' : undefined } : {}),
+      ...(isRedirect ? { redirectTo: redirectTo || (path.endsWith('/') ? path : path + '/'), redirectCode } : {}),
+      ...(!isProxy && !isRedirect ? { alias, fallback: routeType === 'static-assets' ? undefined : `${path === '/' ? '' : path}/index.html`, tryFiles: routeType === 'static-assets' ? '=404' : undefined } : {}),
       headers,
     }
     onConfirm(route)
@@ -390,6 +396,33 @@ function NewRouteModal({ upstreams, onConfirm, onClose }: NewRouteModalProps) {
           />
           <p className="mt-1 text-[10px] text-white/30">Ex: /api/ para rota independente, /admin/assets/ para sub-rota</p>
         </div>
+
+        {/* Redirect-specific: target */}
+        {routeType === 'redirect' && (
+          <>
+            <div className="mb-4">
+              <label className="block text-[11px] font-semibold uppercase tracking-[0.14em] text-white/38 mb-1.5">Destino do redirecionamento</label>
+              <input
+                className="h-9 w-full rounded-[10px] border border-white/10 bg-[rgba(8,15,30,0.9)] px-3 text-[13px] text-white placeholder-white/25 outline-none focus:border-[#4d85ff]/60"
+                value={redirectTo}
+                onChange={(e) => setRedirectTo(e.target.value)}
+                placeholder={path ? (path.endsWith('/') ? path : path + '/') : '/destino/'}
+              />
+              <p className="mt-1 text-[10px] text-white/30">Deixe vazio para redirecionar para o mesmo path com trailing slash</p>
+            </div>
+            <div className="mb-4">
+              <label className="block text-[11px] font-semibold uppercase tracking-[0.14em] text-white/38 mb-1.5">Código HTTP</label>
+              <select
+                className="h-9 w-full rounded-[10px] border border-white/10 bg-[rgba(8,15,30,0.9)] px-3 text-[13px] text-white outline-none focus:border-[#4d85ff]/60 cursor-pointer"
+                value={redirectCode}
+                onChange={(e) => setRedirectCode(Number(e.target.value) as 301 | 302)}
+              >
+                <option value={301}>301 - Permanente</option>
+                <option value={302}>302 - Temporário</option>
+              </select>
+            </div>
+          </>
+        )}
 
         {/* Proxy-specific: upstream */}
         {(routeType === 'proxy' || routeType === 'websocket') && (

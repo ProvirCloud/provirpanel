@@ -52,6 +52,18 @@ const buildStaticLocation = (route: RouteConfig) => {
   return lines.join('\n')
 }
 
+const buildRedirectLocation = (route: RouteConfig) => {
+  const code = route.redirectCode || 301
+  const target = route.redirectTo || route.path + '/'
+  // Use exact match for clean redirects like /admin -> /admin/
+  const modifier = route.path.endsWith('/') ? '' : '= '
+  return [
+    `    location ${modifier}${route.path} {`,
+    `        return ${code} ${target};`,
+    '    }',
+  ].join('\n')
+}
+
 const buildProxyLocation = (route: RouteConfig, upstream: UpstreamConfig) => {
   const lines = [
     `    location ${route.path} {`,
@@ -80,6 +92,9 @@ export const generateNginxConfig = (state: NginxVisualState) => {
   const upstreamBlocks = state.upstreams.map(buildUpstream).join('\n\n')
   const routeBlocks = activeRoutes
     .map((route) => {
+      if (route.type === 'redirect') {
+        return buildRedirectLocation(route)
+      }
       if (route.type === 'proxy' || route.type === 'websocket') {
         const upstream = state.upstreams.find((u) => u.id === route.upstreamId)
         return upstream ? buildProxyLocation(route, upstream) : ''

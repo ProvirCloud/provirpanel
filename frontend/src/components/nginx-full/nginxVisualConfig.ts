@@ -14,6 +14,7 @@ export type RouteType =
   | 'static-app'
   | 'static-assets'
   | 'static-site'
+  | 'redirect'
 
 export type SelectedNode =
   | { kind: 'domain'; id: 'domain' }
@@ -51,6 +52,8 @@ export type RouteConfig = {
   alias?: string
   fallback?: string
   tryFiles?: string
+  redirectTo?: string
+  redirectCode?: 301 | 302 | 307 | 308
   headers: HeaderName[]
   timeouts?: RouteTimeouts
   proxyBuffering?: boolean
