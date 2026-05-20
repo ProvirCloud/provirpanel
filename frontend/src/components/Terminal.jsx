@@ -102,7 +102,7 @@ const measureCharSize = (container) => {
   }
 }
 
-const fitTerminal = (terminal, container) => {
+const fitTerminal = (terminal, container, socket) => {
   if (!terminal || !container) {
     return
   }
@@ -113,6 +113,9 @@ const fitTerminal = (terminal, container) => {
   const cols = Math.max(20, Math.floor(safeWidth / charSize.width))
   const rows = Math.max(8, Math.floor(safeHeight / charSize.height))
   terminal.resize(cols, rows)
+  if (socket && socket.connected) {
+    socket.emit('resize', { cols, rows })
+  }
 }
 
 const writePrompt = (terminal, cwd, newLine = true) => {
@@ -176,8 +179,6 @@ const Terminal = ({ showPageIntro = true }) => {
       historyIndexRef.current.set(id, historyRef.current.length)
 
       term.open(container)
-      term.writeln('\x1b[1;36mCloudPainel Terminal\x1b[0m')
-      writePrompt(term, cwdRef.current.get(id), false)
 
       term.attachCustomKeyEventHandler((event) => {
         const running = runningRef.current.get(id)
@@ -220,23 +221,10 @@ const Terminal = ({ showPageIntro = true }) => {
         const running = runningRef.current.get(id)
         if (running) {
           const socket = socketsRef.current.get(id)
-          const payload = data === '\r' ? '\n' : data
           if (socket && socket.connected) {
-            socket.emit('input', { data: payload })
+            // Send raw data to the shell — bash handles echo
+            socket.emit('input', { data })
           }
-          // Locally echo to provide visual feedback for interactive shells (basic line mode).
-          if (data === '\u0003') {
-            return
-          }
-          if (data === '\r') {
-            term.write('\r\n')
-            return
-          }
-          if (data === '\u007f') {
-            term.write('\b \b')
-            return
-          }
-          term.write(data)
           return
         }
 
@@ -362,8 +350,8 @@ const Terminal = ({ showPageIntro = true }) => {
         event.preventDefault()
       })
 
-      fitTerminal(term, container)
-      const observer = new ResizeObserver(() => fitTerminal(term, container))
+      fitTerminal(term, container, socketsRef.current.get(id))
+      const observer = new ResizeObserver(() => fitTerminal(term, container, socketsRef.current.get(id)))
       observer.observe(container)
       observersRef.current.set(id, observer)
     },
@@ -383,6 +371,14 @@ const Terminal = ({ showPageIntro = true }) => {
       socket.on('connect', () => {
         runningRef.current.set(id, false)
         updateTab(id, { status: 'connected' })
+        // Auto-start interactive shell
+        const term = terminalsRef.current.get(id)
+        if (term) {
+          term.write('\r\n\x1b[90m[Iniciando shell interativo...]\x1b[0m\r\n')
+        }
+        outputRef.current.set(id, '')
+        socket.emit('command', { command: 'bash' })
+        runningRef.current.set(id, true)
       })
       socket.on('disconnect', () => {
         runningRef.current.set(id, false)
@@ -392,8 +388,7 @@ const Terminal = ({ showPageIntro = true }) => {
       socket.on('output', (payload) => {
         const current = terminalsRef.current.get(id)
         if (current) {
-          const normalized = payload.data.replace(/\r?\n/g, '\r\n')
-          current.write(normalized)
+          current.write(payload.data)
         }
         const prev = outputRef.current.get(id) || ''
         outputRef.current.set(id, prev + payload.data)
@@ -401,13 +396,21 @@ const Terminal = ({ showPageIntro = true }) => {
 
       socket.on('done', (payload) => {
         const current = terminalsRef.current.get(id)
+        runningRef.current.set(id, false)
         if (current) {
-          current.write(`\r\n\x1b[90m[exit ${payload.code}]\x1b[0m`)
-          writePrompt(current, cwdRef.current.get(id))
+          current.write(`\r\n\x1b[90m[sessao encerrada - code ${payload.code}]\x1b[0m\r\n`)
+          // Restart shell automatically
+          setTimeout(() => {
+            if (socket.connected) {
+              current.write('\x1b[90m[Reconectando shell...]\x1b[0m\r\n')
+              outputRef.current.set(id, '')
+              socket.emit('command', { command: 'bash' })
+              runningRef.current.set(id, true)
+            }
+          }, 500)
         }
         const finalOutput = outputRef.current.get(id) || ''
         lastOutputRef.current.set(id, finalOutput)
-        runningRef.current.set(id, false)
       })
 
       socket.on('error', (payload) => {
@@ -485,7 +488,15 @@ const Terminal = ({ showPageIntro = true }) => {
     const term = terminalsRef.current.get(activeId)
     if (term) {
       term.clear()
-      writePrompt(term, cwdRef.current.get(activeId), false)
+      // If shell is running, send clear command instead of writing prompt
+      if (runningRef.current.get(activeId)) {
+        const socket = socketsRef.current.get(activeId)
+        if (socket && socket.connected) {
+          socket.emit('input', { data: 'clear\n' })
+        }
+      } else {
+        writePrompt(term, cwdRef.current.get(activeId), false)
+      }
     }
     outputRef.current.set(activeId, '')
     lastOutputRef.current.set(activeId, '')
