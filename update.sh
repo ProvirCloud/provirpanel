@@ -50,6 +50,39 @@ install_certbot() {
   fi
 }
 
+configure_sudoers() {
+  log "Configurando sudoers para nginx"
+  cat <<'SUDOERS' | run_as_root tee /etc/sudoers.d/provirpanel-nginx > /dev/null
+# Allow provirpanel to manage nginx without password
+provirpanel ALL=(ALL) NOPASSWD: /usr/sbin/nginx, /usr/bin/nginx, /bin/systemctl reload nginx, /bin/systemctl restart nginx, /bin/systemctl stop nginx, /bin/systemctl start nginx, /usr/sbin/service nginx *
+SUDOERS
+  run_as_root chmod 440 /etc/sudoers.d/provirpanel-nginx
+}
+
+test_and_reload_nginx() {
+  log "Testando configuracao do Nginx"
+  if run_as_root nginx -t 2>&1; then
+    log "Nginx config OK, recarregando"
+    run_as_root nginx -s reload 2>/dev/null || run_as_root systemctl reload nginx 2>/dev/null || true
+  else
+    log "AVISO: Nginx config invalida, reload ignorado"
+  fi
+}
+
+seed_blueprints() {
+  local data_dir="${INSTALL_DIR}/backend/data"
+  local seed_file="${INSTALL_DIR}/backend/src/data/blueprints-seed.json"
+  local target_file="${data_dir}/blueprints.json"
+
+  if [[ ! -f "${target_file}" ]] && [[ -f "${seed_file}" ]]; then
+    log "Criando blueprints.json a partir do seed"
+    mkdir -p "${data_dir}"
+    cp "${seed_file}" "${target_file}"
+  fi
+}
+
+# ─── Main ──────────────────────────────────────────────────────────────────────
+
 log "Atualizando ProvirPanel"
 
 if [[ ! -d "${INSTALL_DIR}" ]]; then
@@ -139,24 +172,45 @@ log "Compilando frontend"
 cd frontend && npm run build && cd ..
 
 log "Atualizando arquivos estáticos"
-sudo cp -r frontend/dist/* /var/www/panel/
-sudo chown -R www-data:www-data /var/www/panel
-sudo chmod -R 755 /var/www/panel
+run_as_root cp -r frontend/dist/* /var/www/panel/
+run_as_root chown -R www-data:www-data /var/www/panel
+run_as_root chmod -R 755 /var/www/panel
 
-# Garantir sudoers para nginx
-log "Verificando permissoes de nginx para o backend"
-if [ ! -f /etc/sudoers.d/provirpanel-nginx ]; then
-  cat <<SUDOERS > /etc/sudoers.d/provirpanel-nginx
-# Allow provirpanel to manage nginx without password
-provirpanel ALL=(ALL) NOPASSWD: /usr/sbin/nginx, /usr/bin/nginx, /bin/systemctl reload nginx, /bin/systemctl restart nginx, /usr/sbin/service nginx *
-SUDOERS
-  chmod 440 /etc/sudoers.d/provirpanel-nginx
-  log "Sudoers configurado para nginx"
+# Garantir sudoers para nginx (sempre atualiza para pegar novas permissões)
+configure_sudoers
+
+# Garantir permissões de escrita no diretório de configs do nginx
+log "Verificando permissoes de escrita no Nginx"
+if [[ -d /etc/nginx/sites-available ]]; then
+  run_as_root chown -R root:provirpanel /etc/nginx/sites-available 2>/dev/null || true
+  run_as_root chmod -R 775 /etc/nginx/sites-available 2>/dev/null || true
 fi
+if [[ -d /etc/nginx/sites-enabled ]]; then
+  run_as_root chown -R root:provirpanel /etc/nginx/sites-enabled 2>/dev/null || true
+  run_as_root chmod -R 775 /etc/nginx/sites-enabled 2>/dev/null || true
+fi
+if [[ -d /etc/nginx/conf.d ]]; then
+  run_as_root chown -R root:provirpanel /etc/nginx/conf.d 2>/dev/null || true
+  run_as_root chmod -R 775 /etc/nginx/conf.d 2>/dev/null || true
+fi
+
+# Criar diretório de backups do nginx
+run_as_root mkdir -p /etc/nginx/provirpanel-backups
+run_as_root chown provirpanel:provirpanel /etc/nginx/provirpanel-backups 2>/dev/null || true
+
+# Seed blueprints se não existir
+seed_blueprints
+
+# Corrigir ownership do projeto
+chown -R provirpanel:provirpanel "${INSTALL_DIR}" 2>/dev/null || true
+
+# Testar e recarregar Nginx
+test_and_reload_nginx
 
 log "Reiniciando backend"
 pm2 delete provirpanel-backend 2>/dev/null || true
 pm2 start backend/src/server.js --name provirpanel-backend
 pm2 save
 
-log "Atualização concluída"
+log "Atualização concluída com sucesso"
+log "Painel: http://$(hostname -I 2>/dev/null | awk '{print $1}' || echo 'localhost')/admin/"
