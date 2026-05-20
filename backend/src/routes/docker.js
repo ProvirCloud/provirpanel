@@ -2508,17 +2508,29 @@ const initDockerSocket = (io) => {
       }
 
       if (currentStream) {
-        currentStream.destroy();
+        try { currentStream.destroy(); } catch (e) { /* ignore */ }
         currentStream = null;
       }
 
       try {
-        currentStream = await dockerManager.getContainerLogs(containerId, { tail });
-        currentStream.on('data', (chunk) => {
+        const stream = await dockerManager.getContainerLogs(containerId, { tail: tail || 200 });
+        if (!stream || typeof stream.on !== 'function') {
+          // Not a stream — emit as single chunk
+          const text = stream ? String(stream) : '';
+          if (text) socket.emit('log', { data: text, ts: Date.now() });
+          return;
+        }
+        currentStream = stream;
+        stream.on('data', (chunk) => {
           socket.emit('log', { data: chunk.toString(), ts: Date.now() });
         });
-        currentStream.on('end', () => {
+        stream.on('end', () => {
           socket.emit('end', { message: 'Log stream ended' });
+          currentStream = null;
+        });
+        stream.on('error', (err) => {
+          socket.emit('error', { message: err.message || 'Stream error' });
+          currentStream = null;
         });
       } catch (err) {
         socket.emit('error', { message: err.message || 'Failed to stream logs' });
@@ -2527,7 +2539,8 @@ const initDockerSocket = (io) => {
 
     socket.on('disconnect', () => {
       if (currentStream) {
-        currentStream.destroy();
+        try { currentStream.destroy(); } catch (e) { /* ignore */ }
+        currentStream = null;
       }
     });
   });

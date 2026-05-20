@@ -495,6 +495,23 @@ function RoutePanel({
         onChange={(v) => set('disabled', !v)}
       />
 
+      {isProxy && route.path && route.path !== '/' && (
+        <div className="rounded-[12px] border border-amber-500/20 bg-amber-500/5 p-3.5">
+          <p className="text-[11px] font-semibold uppercase tracking-[0.12em] text-amber-400/80 mb-1.5">
+            Variável de ambiente Docker
+          </p>
+          <p className="text-[12px] text-white/55 leading-relaxed mb-2">
+            Se o destino é um container Docker, adicione esta variável de ambiente no container/stack:
+          </p>
+          <code className="block rounded-[8px] border border-amber-500/15 bg-[rgba(8,15,30,0.8)] px-3 py-2 text-[12px] font-mono text-amber-300">
+            SCRIPT_NAME={route.path.replace(/\/$/, '')}
+          </code>
+          <p className="mt-2 text-[11px] text-white/35">
+            Isso garante que o app dentro do container saiba que está rodando em um sub-path.
+          </p>
+        </div>
+      )}
+
       <div className="border-t border-white/6 pt-4">
         <button
           type="button"
