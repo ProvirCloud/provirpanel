@@ -302,7 +302,8 @@ function RoutePanel({
 
   const upstream = findUpstreamById(state, route.upstreamId)
   const isProxy = route.type === 'proxy' || route.type === 'websocket'
-  const isStatic = !isProxy
+  const isRedirect = route.type === 'redirect'
+  const isStatic = !isProxy && !isRedirect
   const allHeaders = route.type === 'websocket' ? ALL_WS_HEADERS : ALL_PROXY_HEADERS
 
   const set = <K extends keyof RouteConfig>(key: K, val: RouteConfig[K]) =>
@@ -335,6 +336,7 @@ function RoutePanel({
           >
             <option value="proxy">Proxy reverso</option>
             <option value="websocket">WebSocket</option>
+            <option value="redirect">Redirecionamento</option>
             <option value="static-app">App estático</option>
             <option value="static-assets">Assets estáticos</option>
             <option value="static-site">Site estático</option>
@@ -433,6 +435,44 @@ function RoutePanel({
             checked={route.proxyBuffering !== false}
             onChange={(v) => set('proxyBuffering', v)}
           />
+        </>
+      )}
+
+      {isRedirect && (
+        <>
+          <Section label="Destino do redirecionamento">
+            <input
+              className={inputCls}
+              value={route.redirectTo || ''}
+              onChange={(e) => set('redirectTo', e.target.value)}
+              placeholder={route.path + '/'}
+            />
+          </Section>
+          <Section label="Código HTTP">
+            <select
+              className={selectCls}
+              value={route.redirectCode || 301}
+              onChange={(e) => set('redirectCode', Number(e.target.value) as 301 | 302 | 307 | 308)}
+            >
+              <option value={301}>301 - Permanente</option>
+              <option value={302}>302 - Temporário</option>
+              <option value={307}>307 - Temporário (preserva método)</option>
+              <option value={308}>308 - Permanente (preserva método)</option>
+            </select>
+          </Section>
+          <div className="rounded-[12px] border border-white/6 bg-white/2 p-3.5">
+            <p className="text-[11px] font-semibold uppercase tracking-[0.12em] text-white/38 mb-2">Preview</p>
+            <code className="block text-[12px] font-mono text-[#7ee787]">
+              location = {route.path} {'{'}<br/>
+              &nbsp;&nbsp;&nbsp;&nbsp;return {route.redirectCode || 301} {route.redirectTo || route.path + '/'};<br/>
+              {'}'}
+            </code>
+          </div>
+          <div className="rounded-[12px] border border-amber-500/20 bg-amber-500/5 p-3">
+            <p className="text-[12px] text-white/55 leading-relaxed">
+              <span className="text-amber-400 font-medium">Dica:</span> Use para redirecionar <code className="text-[11px] bg-white/5 px-1.5 py-0.5 rounded">/admin</code> para <code className="text-[11px] bg-white/5 px-1.5 py-0.5 rounded">/admin/</code> (trailing slash) ou para outro domínio.
+            </p>
+          </div>
         </>
       )}
 
