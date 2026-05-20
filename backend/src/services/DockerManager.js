@@ -373,23 +373,54 @@ class DockerManager {
 
   async getContainerLogs(containerId, options = {}) {
     const container = this.docker.getContainer(containerId);
-    const stream = await container.logs({
+    const info = await container.inspect();
+    const isTty = !!info?.Config?.Tty;
+
+    const data = await container.logs({
       stdout: true,
       stderr: true,
       follow: true,
       tail: options.tail || 100
     });
-    const info = await container.inspect();
 
-    if (info?.Config?.Tty) {
-      return stream;
+    // dockerode may return a Buffer, a Stream, or a string depending on version
+    const { PassThrough } = require('stream');
+
+    // If it's already a readable stream with .on
+    if (data && typeof data.on === 'function' && typeof data.pipe === 'function') {
+      if (isTty) {
+        return data;
+      }
+      const output = new PassThrough();
+      this.docker.modem.demuxStream(data, output, output);
+      data.on('end', () => output.end());
+      data.on('error', (err) => output.emit('error', err));
+      return output;
     }
 
-    const { PassThrough } = require('stream');
+    // If it's a Buffer or string, wrap in a stream that emits once then stays open for follow
     const output = new PassThrough();
-    this.docker.modem.demuxStream(stream, output, output);
-    stream.on('end', () => output.end());
-    stream.on('error', (err) => output.emit('error', err));
+    if (Buffer.isBuffer(data)) {
+      if (isTty) {
+        output.write(data);
+      } else {
+        // Parse multiplexed docker log format
+        let offset = 0;
+        while (offset + 8 <= data.length) {
+          const size = data.readUInt32BE(offset + 4);
+          const start = offset + 8;
+          const end = start + size;
+          if (end > data.length) break;
+          output.write(data.slice(start, end));
+          offset = end;
+        }
+        if (offset === 0) output.write(data);
+      }
+    } else if (data) {
+      output.write(String(data));
+    }
+    // Don't end the stream — keep it open for follow mode
+    // The socket handler will destroy it on disconnect
     return output;
   }
 

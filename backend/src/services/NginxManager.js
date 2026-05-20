@@ -473,11 +473,11 @@ server {
 
   reload() {
     const commands = [
-      'sudo nginx -s reload',
-      'sudo systemctl reload nginx',
+      'sudo -n nginx -s reload',
+      'sudo -n systemctl reload nginx',
+      'sudo -n service nginx reload',
       'nginx -s reload',
       'systemctl reload nginx',
-      'sudo service nginx reload',
       'service nginx reload'
     ];
     let lastError = null;

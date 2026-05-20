@@ -1503,26 +1503,39 @@ ${buildProxyBlock(proxyTarget)}    }
   }
 
   reload() {
-    try {
-      execSync('systemctl reload nginx', { stdio: 'pipe' });
-      return { success: true };
-    } catch (err) {
+    const commands = [
+      'sudo -n nginx -s reload',
+      'sudo -n systemctl reload nginx',
+      'sudo -n service nginx reload',
+      'nginx -s reload',
+      'systemctl reload nginx'
+    ];
+    for (const cmd of commands) {
       try {
-        execSync('nginx -s reload', { stdio: 'pipe' });
+        execSync(cmd, { stdio: 'pipe', timeout: 10000 });
         return { success: true };
-      } catch (err2) {
-        throw new Error(`Failed to reload Nginx: ${err2.message}`);
+      } catch (err) {
+        // try next
       }
     }
+    throw new Error('Failed to reload Nginx: permission denied or command not available');
   }
 
   restart() {
-    try {
-      execSync('systemctl restart nginx', { stdio: 'pipe' });
-      return { success: true };
-    } catch (err) {
-      throw new Error(`Failed to restart Nginx: ${err.message}`);
+    const commands = [
+      'sudo -n systemctl restart nginx',
+      'sudo -n service nginx restart',
+      'systemctl restart nginx'
+    ];
+    for (const cmd of commands) {
+      try {
+        execSync(cmd, { stdio: 'pipe', timeout: 10000 });
+        return { success: true };
+      } catch (err) {
+        // try next
+      }
     }
+    throw new Error('Failed to restart Nginx: permission denied or command not available');
   }
 
   getStatus() {
