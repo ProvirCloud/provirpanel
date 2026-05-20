@@ -143,11 +143,28 @@ class NginxManager {
   saveConfig(filename, content) {
     const filePath = this.resolveConfigPath(filename);
     if (!fs.existsSync(filePath)) {
-      throw new Error('Arquivo nao encontrado para edicao');
+      // Create if it doesn't exist (upsert behavior)
+      if (!this.isValidFilename(filename)) {
+        throw new Error('Nome de arquivo invalido');
+      }
+      const targetDir = this.getTargetDirForNewConfig();
+      const newPath = path.join(targetDir, filename);
+      fs.writeFileSync(newPath, content);
+      const result = this.testConfig();
+      if (!result.valid) {
+        fs.unlinkSync(newPath);
+      }
+      return { ...result, created: true };
     }
     const backupPath = this.createBackup(filePath);
     fs.writeFileSync(filePath, content);
     const result = this.testConfig();
+    if (!result.valid) {
+      // Rollback on invalid config
+      if (backupPath && fs.existsSync(backupPath)) {
+        fs.copyFileSync(backupPath, filePath);
+      }
+    }
     return { ...result, backupPath };
   }
 

@@ -101,15 +101,28 @@ export default function NginxVisualFullPage() {
     setShowNewRouteModal(false)
   }
 
+  const resolveFilename = () => {
+    if (currentConfigName) return currentConfigName
+    const domain = state.domain.primary.trim()
+    if (!domain) return ''
+    return `${domain.replace(/[^a-zA-Z0-9.-]/g, '_')}.conf`
+  }
+
+  const saveToBackend = async (filename: string, content: string) => {
+    await api.put(`/nginx/configs/${filename}`, { content })
+    if (!currentConfigName) setCurrentConfigName(filename)
+  }
+
   const handleSaveConfig = async () => {
-    if (!currentConfigName) {
+    const filename = resolveFilename()
+    if (!filename) {
       setSaveStatus('error')
       setTimeout(() => setSaveStatus('idle'), 3000)
       return
     }
     setSaving(true)
     try {
-      await api.put(`/nginx/configs/${currentConfigName}`, { content: generatedConfig })
+      await saveToBackend(filename, generatedConfig)
       setSaveStatus('saved')
       setTimeout(() => setSaveStatus('idle'), 3000)
     } catch {
@@ -121,15 +134,15 @@ export default function NginxVisualFullPage() {
   }
 
   const handleSaveAndApply = async () => {
+    const filename = resolveFilename()
+    if (!filename) {
+      setSaveStatus('error')
+      setTimeout(() => setSaveStatus('idle'), 3000)
+      return
+    }
     setSaving(true)
     try {
-      if (currentConfigName) {
-        await api.put(`/nginx/configs/${currentConfigName}`, { content: generatedConfig })
-      } else {
-        const filename = `${state.domain.primary.replace(/[^a-zA-Z0-9.-]/g, '_')}.conf`
-        await api.post('/nginx/configs', { filename, content: generatedConfig })
-        setCurrentConfigName(filename)
-      }
+      await saveToBackend(filename, generatedConfig)
       await api.post('/nginx/reload')
       setSaveStatus('saved')
       setTimeout(() => setSaveStatus('idle'), 3000)
@@ -208,9 +221,9 @@ export default function NginxVisualFullPage() {
             <button
               type="button"
               onClick={handleSaveConfig}
-              disabled={saving || !currentConfigName}
+              disabled={saving || !state.domain.primary.trim()}
               className="flex items-center gap-2 rounded-[14px] border border-white/10 bg-[rgba(10,18,34,0.7)] px-4 py-2 text-[13px] font-medium text-white/70 transition hover:bg-white/6 hover:text-white/90 disabled:opacity-40"
-              title={!currentConfigName ? 'Carregue uma configuração primeiro' : 'Salvar sem recarregar o Nginx'}
+              title={!state.domain.primary.trim() ? 'Defina um domínio primeiro' : 'Salvar sem recarregar o Nginx'}
             >
               <Save className="h-4 w-4" />
               Salvar
@@ -242,7 +255,9 @@ export default function NginxVisualFullPage() {
       {/* Status bar */}
       {saveStatus === 'error' && (
         <div className="rounded-[14px] border border-rose-500/30 bg-rose-500/10 px-4 py-2.5 text-[13px] text-rose-200">
-          {currentConfigName ? 'Erro ao salvar configuração. Verifique se o Nginx está acessível.' : 'Carregue uma configuração existente ou defina um domínio para salvar como nova.'}
+          {!state.domain.primary.trim()
+            ? 'Defina um domínio principal antes de salvar.'
+            : 'Erro ao salvar. Verifique se o backend está rodando e se o Nginx está acessível no servidor.'}
         </div>
       )}
 
