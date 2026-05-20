@@ -148,7 +148,7 @@ router.post('/reload', (req, res, next) => {
     nginxManager.reload();
     res.json({ success: true });
   } catch (err) {
-    next(err);
+    res.status(500).json({ success: false, error: err.message || 'Falha ao recarregar Nginx' });
   }
 });
 

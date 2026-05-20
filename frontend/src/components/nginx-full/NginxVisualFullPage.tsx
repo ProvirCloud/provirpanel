@@ -88,7 +88,8 @@ export default function NginxVisualFullPage() {
 
   const [showNewRouteModal, setShowNewRouteModal] = useState(false)
   const [saving, setSaving] = useState(false)
-  const [saveStatus, setSaveStatus] = useState<'idle' | 'saved' | 'error'>('idle')
+  const [saveStatus, setSaveStatus] = useState<'idle' | 'saved' | 'applied' | 'error'>('idle')
+  const [saveError, setSaveError] = useState('')
 
   const handleAddRoute = () => {
     setShowNewRouteModal(true)
@@ -116,18 +117,22 @@ export default function NginxVisualFullPage() {
   const handleSaveConfig = async () => {
     const filename = resolveFilename()
     if (!filename) {
+      setSaveError('Defina um domínio principal antes de salvar.')
       setSaveStatus('error')
-      setTimeout(() => setSaveStatus('idle'), 3000)
+      setTimeout(() => setSaveStatus('idle'), 4000)
       return
     }
     setSaving(true)
+    setSaveError('')
     try {
       await saveToBackend(filename, generatedConfig)
       setSaveStatus('saved')
       setTimeout(() => setSaveStatus('idle'), 3000)
-    } catch {
+    } catch (err: any) {
+      const msg = err?.response?.data?.error || err?.response?.data?.message || err?.message || 'Erro desconhecido'
+      setSaveError(`Erro ao salvar: ${msg}`)
       setSaveStatus('error')
-      setTimeout(() => setSaveStatus('idle'), 3000)
+      setTimeout(() => setSaveStatus('idle'), 5000)
     } finally {
       setSaving(false)
     }
@@ -136,19 +141,32 @@ export default function NginxVisualFullPage() {
   const handleSaveAndApply = async () => {
     const filename = resolveFilename()
     if (!filename) {
+      setSaveError('Defina um domínio principal antes de salvar.')
       setSaveStatus('error')
-      setTimeout(() => setSaveStatus('idle'), 3000)
+      setTimeout(() => setSaveStatus('idle'), 4000)
       return
     }
     setSaving(true)
+    setSaveError('')
     try {
       await saveToBackend(filename, generatedConfig)
-      await api.post('/nginx/reload')
-      setSaveStatus('saved')
-      setTimeout(() => setSaveStatus('idle'), 3000)
-    } catch {
+    } catch (err: any) {
+      const msg = err?.response?.data?.error || err?.response?.data?.message || err?.message || 'Erro desconhecido'
+      setSaveError(`Erro ao salvar arquivo: ${msg}`)
       setSaveStatus('error')
+      setTimeout(() => setSaveStatus('idle'), 5000)
+      setSaving(false)
+      return
+    }
+    try {
+      await api.post('/nginx/reload')
+      setSaveStatus('applied')
       setTimeout(() => setSaveStatus('idle'), 3000)
+    } catch (err: any) {
+      const msg = err?.response?.data?.error || err?.response?.data?.message || err?.message || 'Erro desconhecido'
+      setSaveError(`Arquivo salvo, mas falha ao recarregar Nginx: ${msg}`)
+      setSaveStatus('error')
+      setTimeout(() => setSaveStatus('idle'), 6000)
     } finally {
       setSaving(false)
     }
@@ -234,8 +252,8 @@ export default function NginxVisualFullPage() {
               disabled={saving}
               className="flex items-center gap-2 rounded-[14px] border border-emerald-500/50 bg-[linear-gradient(135deg,#065f46,#064e3b)] px-4 py-2 text-[13px] font-semibold text-emerald-100 shadow-[0_4px_16px_rgba(16,185,129,0.2)] transition hover:brightness-110 disabled:opacity-50"
             >
-              {saving ? <Loader2 className="h-4 w-4 animate-spin" /> : saveStatus === 'saved' ? <CheckCircle className="h-4 w-4" /> : <Play className="h-4 w-4" />}
-              {saving ? 'Salvando...' : saveStatus === 'saved' ? 'Aplicado!' : 'Salvar e Aplicar'}
+              {saving ? <Loader2 className="h-4 w-4 animate-spin" /> : saveStatus === 'saved' || saveStatus === 'applied' ? <CheckCircle className="h-4 w-4" /> : <Play className="h-4 w-4" />}
+              {saving ? 'Salvando...' : saveStatus === 'applied' ? 'Aplicado!' : saveStatus === 'saved' ? 'Salvo!' : 'Salvar e Aplicar'}
             </button>
           </>
         }
@@ -255,9 +273,17 @@ export default function NginxVisualFullPage() {
       {/* Status bar */}
       {saveStatus === 'error' && (
         <div className="rounded-[14px] border border-rose-500/30 bg-rose-500/10 px-4 py-2.5 text-[13px] text-rose-200">
-          {!state.domain.primary.trim()
-            ? 'Defina um domínio principal antes de salvar.'
-            : 'Erro ao salvar. Verifique se o backend está rodando e se o Nginx está acessível no servidor.'}
+          {saveError || 'Erro desconhecido.'}
+        </div>
+      )}
+      {saveStatus === 'saved' && (
+        <div className="rounded-[14px] border border-emerald-500/30 bg-emerald-500/10 px-4 py-2.5 text-[13px] text-emerald-200">
+          Configuração salva com sucesso.
+        </div>
+      )}
+      {saveStatus === 'applied' && (
+        <div className="rounded-[14px] border border-emerald-500/30 bg-emerald-500/10 px-4 py-2.5 text-[13px] text-emerald-200">
+          Configuração salva e Nginx recarregado com sucesso.
         </div>
       )}
 
