@@ -165,12 +165,31 @@ const Terminal = ({ showPageIntro = true }) => {
         lineHeight: TERMINAL_LINE_HEIGHT,
         letterSpacing: 0,
         cursorBlink: true,
+        cursorStyle: 'bar',
         fontFamily: TERMINAL_FONT_FAMILY,
         theme: {
-          background: '#0b1120',
-          foreground: '#e2e8f0',
-          cursor: '#3B82F6',
-          selection: 'rgba(59, 130, 246, 0.3)'
+          background: '#0d1117',
+          foreground: '#c9d1d9',
+          cursor: '#58a6ff',
+          cursorAccent: '#0d1117',
+          selectionBackground: 'rgba(56, 139, 253, 0.25)',
+          selectionForeground: '#ffffff',
+          black: '#484f58',
+          red: '#ff7b72',
+          green: '#7ee787',
+          yellow: '#d29922',
+          blue: '#58a6ff',
+          magenta: '#bc8cff',
+          cyan: '#39c5cf',
+          white: '#b1bac4',
+          brightBlack: '#6e7681',
+          brightRed: '#ffa198',
+          brightGreen: '#56d364',
+          brightYellow: '#e3b341',
+          brightBlue: '#79c0ff',
+          brightMagenta: '#d2a8ff',
+          brightCyan: '#56d4dd',
+          brightWhite: '#f0f6fc',
         }
       })
 
@@ -607,13 +626,13 @@ const Terminal = ({ showPageIntro = true }) => {
         ))}
       </div>
 
-      <div className="zeus-panel-dark rounded-[2rem] p-4">
-        <div className="mb-3 flex items-center justify-between text-xs text-slate-300">
+      <div className="rounded-[1.25rem] border border-[#30363d] bg-[#010409] p-4 shadow-[0_24px_64px_rgba(0,0,0,0.5)]">
+        <div className="mb-3 flex items-center justify-between text-xs text-[#8b949e]">
           <span className="flex items-center gap-2">
-            <Wifi className="h-4 w-4 text-blue-300" />
+            <Wifi className="h-4 w-4 text-[#58a6ff]" />
             {formatStatus(tabs.find((tab) => tab.id === activeId)?.status)}
           </span>
-          <span className="text-blue-200">Resize verticalmente</span>
+          <span className="text-[#6e7681]">Resize verticalmente</span>
         </div>
         {tabs.map((tab) => (
           <div
@@ -622,10 +641,10 @@ const Terminal = ({ showPageIntro = true }) => {
           >
             <div
               ref={setContainerRef(tab.id)}
-              className="provir-terminal-shell h-80 min-h-[16rem] w-full resize-y overflow-hidden rounded-2xl border border-slate-700 bg-[#07101f] text-slate-100 shadow-inner shadow-black/30"
+              className="provir-terminal-shell h-80 min-h-[16rem] w-full resize-y overflow-hidden rounded-2xl border border-[#30363d] bg-[#0d1117] text-[#c9d1d9] shadow-[0_16px_48px_rgba(0,0,0,0.4)]"
             />
             <button
-              className="absolute right-3 top-3 hidden items-center gap-2 rounded-xl border border-slate-700 bg-slate-950/90 px-3 py-1 text-[11px] text-slate-200 shadow-lg transition group-hover:flex"
+              className="absolute right-3 top-3 hidden items-center gap-2 rounded-lg border border-[#30363d] bg-[#161b22]/95 px-3 py-1.5 text-[11px] text-[#c9d1d9] shadow-lg backdrop-blur-sm transition group-hover:flex hover:border-[#58a6ff]/50"
               onClick={copyLastOutput}
             >
               <Copy className="h-3 w-3" />
