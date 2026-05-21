@@ -120,7 +120,7 @@ const App = () => {
           <Route path="nginx-visual-full" element={<NginxVisualEditorFull />} />
           <Route path="nginx-advanced" element={<ModulePage title="Nginx Manager" subtitle="Rotas, proxy e publicação de aplicações"><NginxVisualManager showPageIntro={false} /></ModulePage>} />
           <Route path="nginx-legacy" element={<ModulePage showHeader={false} title="Nginx Legacy" subtitle="Gestão avançada do ambiente Nginx"><NginxPanel /></ModulePage>} />
-          <Route path="domains" element={<ModulePage title="Cloudflare" subtitle="Domínios, e-mail, firewall e WAF com baseline Zeus"><DomainsPanel showPageIntro={false} /></ModulePage>} />
+          <Route path="domains" element={<ModulePage title="DNS &amp; WAF" subtitle="Domínios, DNS, firewall e regras de segurança"><DomainsPanel showPageIntro={false} /></ModulePage>} />
           <Route path="files" element={<ModulePage title="Arquivos" subtitle="Storage, uploads e gestão de artefatos"><FileManager showPageIntro={false} /></ModulePage>} />
           <Route path="users" element={<ModulePage title="Usuários" subtitle="Acessos e administração do workspace"><UsersPanel showPageIntro={false} /></ModulePage>} />
           <Route path="email" element={<ModulePage title="E-mail" subtitle="Fluxos de comunicação e entrega transacional"><EmailPanel showPageIntro={false} /></ModulePage>} />
