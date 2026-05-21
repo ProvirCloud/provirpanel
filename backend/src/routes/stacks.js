@@ -327,6 +327,17 @@ router.post('/:id/clone', (req, res) => {
 
 // ─── Sincronização de Status ──────────────────────────────────────────────────
 
+
+router.get("/:id/validate", (req, res) => {
+  try {
+    const stack = stackManager.getStack(req.params.id);
+    const result = stackManager.validateStack(stack);
+    res.json(result);
+  } catch (err) {
+    res.status(404).json({ error: err.message });
+  }
+});
+
 router.post('/:id/sync', async (req, res) => {
   try {
     const stack = await stackManager.syncStackStatus(req.params.id);

@@ -538,16 +538,50 @@ class StackManager {
     const stack = this.getStack(stackId);
     const ordered = topologicalSort(stack.services);
 
+    // ── Validação pré-deploy ──────────────────────────────────────────────────
+    if (onProgress) onProgress('🔍 Validando configuração da stack...');
+    const validation = this.validateStack(stack);
+    if (validation.errors.length > 0) {
+      for (const err of validation.errors) {
+        if (onProgress) onProgress(`❌ ${err}`);
+      }
+      throw new Error(`Validação falhou: ${validation.errors[0]}`);
+    }
+    if (validation.warnings.length > 0) {
+      for (const warn of validation.warnings) {
+        if (onProgress) onProgress(`⚠️  ${warn}`);
+      }
+    }
+
     if (onProgress) onProgress(`🚀 Iniciando stack "${stack.name}" (${ordered.length} serviços)...`);
 
+    // ── Deploy com rollback ───────────────────────────────────────────────────
     const results = [];
+    const startedIds = []; // track successfully started services for rollback
+
     for (const svc of ordered) {
       try {
         const containerId = await this.startService(stackId, svc.id, onProgress);
         results.push({ serviceId: svc.id, name: svc.name, status: 'running', containerId });
+        startedIds.push(svc.id);
       } catch (err) {
         if (onProgress) onProgress(`❌ Falha ao iniciar ${svc.name}: ${err.message}`);
         results.push({ serviceId: svc.id, name: svc.name, status: 'error', error: err.message });
+
+        // ── Rollback: parar todos que já subiram ──────────────────────────────
+        if (startedIds.length > 0) {
+          if (onProgress) onProgress(`🔄 Rollback: parando ${startedIds.length} serviço(s) já iniciado(s)...`);
+          for (const startedSvcId of startedIds.reverse()) {
+            try {
+              await this.stopService(stackId, startedSvcId);
+              const startedSvc = stack.services.find((s) => s.id === startedSvcId);
+              if (onProgress) onProgress(`⏹  ${startedSvc?.name || startedSvcId} parado (rollback)`);
+            } catch (rollbackErr) {
+              if (onProgress) onProgress(`⚠️  Falha no rollback de ${startedSvcId}: ${rollbackErr.message}`);
+            }
+          }
+        }
+        break; // stop deploying remaining services
       }
     }
 
@@ -662,6 +696,60 @@ class StackManager {
     stacks[stackIdx].updatedAt = new Date().toISOString();
     this.writeStacks(stacks);
     return stacks[stackIdx];
+  }
+
+
+  // ─── Validação pré-deploy ─────────────────────────────────────────────────
+
+  validateStack(stack) {
+    const errors = [];
+    const warnings = [];
+
+    if (!stack.services || !stack.services.length) {
+      errors.push("Stack não tem serviços configurados");
+      return { errors, warnings };
+    }
+
+    const usedNames = new Set();
+    const usedPorts = new Set();
+
+    for (const svc of stack.services) {
+      if (!svc.name) {
+        errors.push(`Serviço sem nome (id: ${svc.id})`);
+      } else if (usedNames.has(svc.name)) {
+        errors.push(`Nome duplicado: "${svc.name}"`);
+      } else {
+        usedNames.add(svc.name);
+      }
+
+      if (!svc.image) {
+        errors.push(`Serviço "${svc.name || svc.id}" sem imagem Docker definida`);
+      }
+
+      for (const p of (svc.ports || [])) {
+        if (p.host) {
+          if (usedPorts.has(Number(p.host))) {
+            errors.push(`Porta ${p.host} usada por múltiplos serviços (conflito em "${svc.name}")`);
+          }
+          usedPorts.add(Number(p.host));
+        }
+      }
+
+      if (svc.role === "database" && !(svc.volumes && svc.volumes.length)) {
+        warnings.push(`Banco "${svc.name}" sem volume — dados serão perdidos ao reiniciar`);
+      }
+      if (svc.role === "entry-point" && !(svc.ports && svc.ports.length)) {
+        warnings.push(`Entry-point "${svc.name}" sem portas expostas`);
+      }
+
+      for (const depId of (svc.dependencies || [])) {
+        if (!stack.services.some((s) => s.id === depId)) {
+          warnings.push(`Serviço "${svc.name}" depende de "${depId}" que não existe na stack`);
+        }
+      }
+    }
+
+    return { errors, warnings };
   }
 
   // ─── Helpers Internos ──────────────────────────────────────────────────────
