@@ -2283,7 +2283,7 @@ router.delete('/services/:id', async (req, res, next) => {
         if (svc) { foundStack = stack; foundSvc = svc; break; }
       }
       if (foundSvc) {
-        // Stop and remove container
+        // Stop and remove container by ID or by name pattern
         const ids = Array.isArray(foundSvc.containerIds) && foundSvc.containerIds.length
           ? foundSvc.containerIds
           : (foundSvc.containerId ? [foundSvc.containerId] : []);
@@ -2292,6 +2292,21 @@ router.delete('/services/:id', async (req, res, next) => {
             const c = dockerManager.docker.getContainer(cid);
             await c.stop().catch(() => {});
             await c.remove({ force: true });
+          } catch { /* ignore */ }
+        }
+        // Also try to find by container name pattern (provir-STACKID-SVCNAME)
+        if (!ids.length || ids.every((cid) => !cid)) {
+          try {
+            const containers = await dockerManager.docker.listContainers({ all: true });
+            const namePattern = `provir-${foundStack.id.slice(0, 8)}-${foundSvc.name}`;
+            const matches = containers.filter((c) => (c.Names || []).some((n) => n.includes(namePattern)));
+            for (const m of matches) {
+              try {
+                const c = dockerManager.docker.getContainer(m.Id);
+                await c.stop().catch(() => {});
+                await c.remove({ force: true });
+              } catch { /* ignore */ }
+            }
           } catch { /* ignore */ }
         }
         // Remove service from stack

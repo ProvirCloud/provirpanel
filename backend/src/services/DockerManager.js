@@ -306,29 +306,43 @@ class DockerManager {
       )
     );
 
-    const mergedServices = registryServices.map((service) => {
+    // Filter out services whose container no longer exists (auto-cleanup)
+    const aliveServices = [];
+    const deadIds = [];
+
+    for (const service of registryServices) {
       const matchedContainer = byContainerId.get(service.containerId) || byName.get(service.name);
-      if (!matchedContainer) {
-        return service;
+      if (matchedContainer) {
+        const publishedPort = (matchedContainer.Ports || []).find((port) => port.PublicPort);
+        const hostPort = publishedPort?.PublicPort ?? service.hostPort ?? null;
+        const containerPort = publishedPort?.PrivatePort ?? service.containerPort ?? null;
+        const bindLocalOnly = publishedPort?.IP === '127.0.0.1' || service.bindLocalOnly || false;
+
+        aliveServices.push({
+          ...service,
+          containerId: matchedContainer.Id,
+          hostPort,
+          containerPort,
+          bindLocalOnly,
+          url: hostPort ? `http://localhost:${hostPort}` : service.url,
+          externalUrl: hostPort && !bindLocalOnly ? `http://localhost:${hostPort}` : service.externalUrl
+        });
+      } else if (service.containerId) {
+        // Container gone — mark for removal from registry
+        deadIds.push(service.id);
+      } else {
+        // No containerId yet (never started) — keep it
+        aliveServices.push(service);
       }
+    }
 
-      const publishedPort = (matchedContainer.Ports || []).find((port) => port.PublicPort);
-      const hostPort = publishedPort?.PublicPort ?? service.hostPort ?? null;
-      const containerPort = publishedPort?.PrivatePort ?? service.containerPort ?? null;
-      const bindLocalOnly = publishedPort?.IP === '127.0.0.1' || service.bindLocalOnly || false;
+    // Auto-cleanup dead services from registry
+    if (deadIds.length > 0) {
+      const cleaned = registryServices.filter((s) => !deadIds.includes(s.id));
+      this.writeRegistry(cleaned);
+    }
 
-      return {
-        ...service,
-        containerId: matchedContainer.Id,
-        hostPort,
-        containerPort,
-        bindLocalOnly,
-        url: hostPort ? `http://localhost:${hostPort}` : service.url,
-        externalUrl: hostPort && !bindLocalOnly ? `http://localhost:${hostPort}` : service.externalUrl
-      };
-    });
-
-    const knownContainerIds = new Set(mergedServices.map((service) => service.containerId).filter(Boolean));
+    const knownContainerIds = new Set(aliveServices.map((service) => service.containerId).filter(Boolean));
 
     for (const container of containers) {
       if (knownContainerIds.has(container.Id)) continue;
@@ -337,14 +351,14 @@ class DockerManager {
         const details = await this.docker.getContainer(container.Id).inspect();
         const inferred = this.inferServiceFromContainer(details);
         if (inferred) {
-          mergedServices.push(inferred);
+          aliveServices.push(inferred);
         }
       } catch (err) {
         // Ignore containers that disappear during listing.
       }
     }
 
-    return mergedServices;
+    return aliveServices;
   }
 
   saveService(service) {

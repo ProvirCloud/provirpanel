@@ -276,6 +276,21 @@ class StackManager {
           await container.remove({ force: true });
         } catch { /* container may not exist */ }
       }
+      // Also find by name pattern if no IDs
+      if (!ids.length) {
+        try {
+          const containers = await this.docker.listContainers({ all: true });
+          const namePattern = `provir-${id.slice(0, 8)}-${svc.name}`;
+          const matches = containers.filter((c) => (c.Names || []).some((n) => n.includes(namePattern)));
+          for (const m of matches) {
+            try {
+              const c = this.docker.getContainer(m.Id);
+              await c.stop().catch(() => {});
+              await c.remove({ force: true });
+            } catch { /* ignore */ }
+          }
+        } catch { /* ignore */ }
+      }
     }
 
     // Remove from stacks.json
