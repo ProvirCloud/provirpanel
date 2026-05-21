@@ -47,6 +47,33 @@ class NginxManager {
     return typeof filename === 'string' && /^[A-Za-z0-9._-]+$/.test(filename);
   }
 
+  _writeFile(filePath, content) {
+    try {
+      fs.writeFileSync(filePath, content);
+    } catch (err) {
+      if (err.code === 'EACCES' || err.code === 'EPERM') {
+        const tmpFile = `/tmp/nginx-conf-${Date.now()}`;
+        fs.writeFileSync(tmpFile, content);
+        execSync(`sudo -n cp "${tmpFile}" "${filePath}"`, { stdio: 'pipe', timeout: 5000 });
+        fs.unlinkSync(tmpFile);
+      } else {
+        throw err;
+      }
+    }
+  }
+
+  _removeFile(filePath) {
+    try {
+      fs.unlinkSync(filePath);
+    } catch (err) {
+      if (err.code === 'EACCES' || err.code === 'EPERM') {
+        execSync(`sudo -n rm -f "${filePath}"`, { stdio: 'pipe', timeout: 5000 });
+      } else {
+        throw err;
+      }
+    }
+  }
+
   resolveConfigPath(filename) {
     if (!this.isValidFilename(filename)) {
       throw new Error('Nome de arquivo invalido');
@@ -148,18 +175,18 @@ class NginxManager {
       }
       const targetDir = this.getTargetDirForNewConfig();
       const newPath = path.join(targetDir, filename);
-      fs.writeFileSync(newPath, content);
+      this._writeFile(newPath, content);
       if (options.skipValidation) {
         return { valid: true, created: true, skippedValidation: true };
       }
       const result = this.testConfig();
       if (!result.valid) {
-        fs.unlinkSync(newPath);
+        this._removeFile(newPath);
       }
       return { ...result, created: true };
     }
     const backupPath = this.createBackup(filePath);
-    fs.writeFileSync(filePath, content);
+    this._writeFile(filePath, content);
     if (options.skipValidation) {
       return { valid: true, backupPath, skippedValidation: true };
     }
@@ -182,7 +209,7 @@ class NginxManager {
     if (fs.existsSync(filePath)) {
       throw new Error('Arquivo já existe');
     }
-    fs.writeFileSync(filePath, content);
+    this._writeFile(filePath, content);
     return { success: true };
   }
 
@@ -192,11 +219,35 @@ class NginxManager {
     if (path.resolve(filePath) === path.resolve(this.mainConfig)) {
       throw new Error('Nao e permitido deletar nginx.conf');
     }
-    const sitePath = path.join(this.sitesAvailable, filename);
-    if (fs.existsSync(sitePath)) {
-      this.disableConfig(filename);
+    // Remove symlink from sites-enabled (without reloading yet)
+    const enabledPath = path.join(this.sitesEnabled, filename);
+    if (fs.existsSync(enabledPath)) {
+      try {
+        fs.unlinkSync(enabledPath);
+      } catch (err) {
+        if (err.code === 'EACCES' || err.code === 'EPERM') {
+          execSync(`sudo -n rm -f "${enabledPath}"`, { stdio: 'pipe', timeout: 5000 });
+        } else {
+          throw err;
+        }
+      }
     }
-    fs.unlinkSync(filePath);
+    // Remove the config file
+    try {
+      fs.unlinkSync(filePath);
+    } catch (err) {
+      if (err.code === 'EACCES' || err.code === 'EPERM') {
+        execSync(`sudo -n rm -f "${filePath}"`, { stdio: 'pipe', timeout: 5000 });
+      } else {
+        throw err;
+      }
+    }
+    // Reload nginx after both files are removed
+    try {
+      this.reload();
+    } catch (err) {
+      // Ignore reload errors during delete — config is already gone
+    }
   }
 
   createBackup(filePath) {
@@ -217,7 +268,15 @@ class NginxManager {
     }
     const target = path.join(this.sitesEnabled, filename);
     if (!fs.existsSync(target)) {
-      fs.symlinkSync(source, target);
+      try {
+        fs.symlinkSync(source, target);
+      } catch (err) {
+        if (err.code === 'EACCES' || err.code === 'EPERM') {
+          execSync(`sudo -n ln -sf "${source}" "${target}"`, { stdio: 'pipe', timeout: 5000 });
+        } else {
+          throw err;
+        }
+      }
     }
     this.reload();
   }
@@ -229,9 +288,21 @@ class NginxManager {
     }
     const target = path.join(this.sitesEnabled, filename);
     if (fs.existsSync(target)) {
-      fs.unlinkSync(target);
+      try {
+        fs.unlinkSync(target);
+      } catch (err) {
+        if (err.code === 'EACCES' || err.code === 'EPERM') {
+          execSync(`sudo -n rm -f "${target}"`, { stdio: 'pipe', timeout: 5000 });
+        } else {
+          throw err;
+        }
+      }
     }
-    this.reload();
+    try {
+      this.reload();
+    } catch (err) {
+      // Reload may fail if remaining configs have issues — not a blocker for disable
+    }
   }
 
   // Templates prontos

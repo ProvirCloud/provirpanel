@@ -17,6 +17,46 @@ class NginxServerManager {
     this.storageManager = new StorageManager();
   }
 
+  _writeFile(filePath, content) {
+    try {
+      fs.writeFileSync(filePath, content);
+    } catch (err) {
+      if (err.code === "EACCES" || err.code === "EPERM") {
+        const tmpFile = `/tmp/nginx-conf-${Date.now()}`;
+        fs.writeFileSync(tmpFile, content);
+        execSync(`sudo -n cp "${tmpFile}" "${filePath}"`, { stdio: "pipe", timeout: 5000 });
+        fs.unlinkSync(tmpFile);
+      } else {
+        throw err;
+      }
+    }
+  }
+
+  _removeFile(filePath) {
+    try {
+      fs.unlinkSync(filePath);
+    } catch (err) {
+      if (err.code === "EACCES" || err.code === "EPERM") {
+        execSync(`sudo -n rm -f "${filePath}"`, { stdio: "pipe", timeout: 5000 });
+      } else {
+        throw err;
+      }
+    }
+  }
+
+  _symlink(source, target) {
+    try {
+      fs.symlinkSync(source, target);
+    } catch (err) {
+      if (err.code === "EACCES" || err.code === "EPERM") {
+        execSync(`sudo -n ln -sf "${source}" "${target}"`, { stdio: "pipe", timeout: 5000 });
+      } else {
+        throw err;
+      }
+    }
+  }
+
+
   // ==================== DATABASE OPERATIONS ====================
 
   async syncDatabaseFromFilesystem() {
@@ -107,7 +147,7 @@ class NginxServerManager {
 
     fs.mkdirSync(path.dirname(server.config_file_path), { recursive: true });
     const config = this.generateNginxConfig(server);
-    fs.writeFileSync(server.config_file_path, config);
+    this._writeFile(server.config_file_path, config);
 
     if (
       previousConfigFilePath
@@ -119,7 +159,7 @@ class NginxServerManager {
       } catch {
         // ignore stale symlink cleanup errors
       }
-      fs.unlinkSync(previousConfigFilePath);
+      this._removeFile(previousConfigFilePath);
     }
 
     if (
@@ -344,7 +384,7 @@ class NginxServerManager {
     if (server.configFilePath && fs.existsSync(server.configFilePath)) {
       const filename = path.basename(server.configFilePath);
       this.disableConfigFile(filename);
-      fs.unlinkSync(server.configFilePath);
+      this._removeFile(server.configFilePath);
     }
 
     await prisma.nginxServer.delete({ where: { id } });
@@ -977,7 +1017,7 @@ ${buildProxyBlock(proxyTarget)}    }
     const configFileName = path.basename(server.config_file_path);
 
     const backupPath = this.createBackup(server.config_file_path);
-    fs.writeFileSync(server.config_file_path, config);
+    this._writeFile(server.config_file_path, config);
 
     const testResult = this.testConfig();
     if (!testResult.valid) {
@@ -1020,7 +1060,7 @@ ${buildProxyBlock(proxyTarget)}    }
     const nextContent = content.endsWith('\n') ? content : `${content}\n`;
 
     const backupPath = this.createBackup(configFilePath);
-    fs.writeFileSync(configFilePath, nextContent);
+    this._writeFile(configFilePath, nextContent);
 
     const testResult = this.testConfig();
     if (!testResult.valid) {
@@ -1567,7 +1607,7 @@ ${buildProxyBlock(proxyTarget)}    }
     const target = path.join(this.sitesEnabled, filename);
 
     if (fs.existsSync(source) && !fs.existsSync(target)) {
-      fs.symlinkSync(source, target);
+      this._symlink(source, target);
     }
   }
 
@@ -1576,7 +1616,7 @@ ${buildProxyBlock(proxyTarget)}    }
 
     const target = path.join(this.sitesEnabled, filename);
     if (fs.existsSync(target)) {
-      fs.unlinkSync(target);
+      this._removeFile(target);
     }
   }
 

@@ -46,7 +46,7 @@ configure_sudoers() {
   log "Configurando sudoers para nginx"
   cat <<'SUDOERS' > /etc/sudoers.d/provirpanel-nginx
 # Allow provirpanel to manage nginx without password
-provirpanel ALL=(ALL) NOPASSWD: /usr/sbin/nginx, /usr/bin/nginx, /bin/systemctl reload nginx, /bin/systemctl restart nginx, /bin/systemctl stop nginx, /bin/systemctl start nginx, /usr/sbin/service nginx *
+provirpanel ALL=(ALL) NOPASSWD: /usr/sbin/nginx, /usr/bin/nginx, /bin/systemctl reload nginx, /bin/systemctl restart nginx, /bin/systemctl stop nginx, /bin/systemctl start nginx, /usr/sbin/service nginx *, /bin/rm, /bin/cp, /bin/ln, /bin/mv*
 SUDOERS
   chmod 440 /etc/sudoers.d/provirpanel-nginx
 }
