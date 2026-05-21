@@ -4343,38 +4343,102 @@ export default function StacksPanel() {
   }
 
   const startStack = async (stack) => {
+    // Validate before starting
+    try {
+      const { data: validation } = await api.get(`/stacks/${stack.id}/validate`)
+      if (validation.errors && validation.errors.length > 0) {
+        setProgressLog({
+          title: `Valida\u00e7\u00e3o falhou \u2014 "${stack.name}"`,
+          messages: [
+            '\ud83d\udd0d Valida\u00e7\u00e3o pr\u00e9-deploy:',
+            ...validation.errors.map((e) => `\u274c ${e}`),
+            ...(validation.warnings || []).map((w) => `\u26a0\ufe0f  ${w}`),
+            '',
+            '\u274c Corrija os erros acima antes de iniciar a stack.'
+          ]
+        })
+        return
+      }
+    } catch (err) {
+      // If validation endpoint fails, proceed anyway
+    }
+
     const messages = []
     setProgressLog({ title: `Iniciando stack "${stack.name}"`, messages })
 
-    const es = new EventSource(`/api/stacks/${stack.id}/start`)
-    es.onmessage = (e) => {
-      const data = JSON.parse(e.data)
-      if (data.message) {
-        messages.push(data.message)
-        setProgressLog((p) => ({ ...p, messages: [...messages] }))
+    try {
+      const response = await fetch(`/api/stacks/${stack.id}/start`, {
+        method: 'POST',
+        credentials: 'include',
+        headers: { 'Authorization': `Bearer ${localStorage.getItem('provirpanel-token') || ''}` }
+      })
+      const reader = response.body.getReader()
+      const decoder = new TextDecoder()
+      let buffer = ''
+
+      while (true) {
+        const { done, value } = await reader.read()
+        if (done) break
+        buffer += decoder.decode(value, { stream: true })
+        const lines = buffer.split('\n')
+        buffer = lines.pop() || ''
+        for (const line of lines) {
+          if (!line.startsWith('data: ')) continue
+          try {
+            const data = JSON.parse(line.slice(6))
+            if (data.message) {
+              messages.push(data.message)
+              setProgressLog((p) => ({ ...p, messages: [...messages] }))
+            }
+            if (data.done) {
+              load()
+            }
+          } catch { /* ignore parse errors */ }
+        }
       }
-      if (data.done) {
-        es.close()
-        load()
-      }
+    } catch (err) {
+      messages.push(`\u274c Erro de conex\u00e3o: ${err.message}`)
+      setProgressLog((p) => ({ ...p, messages: [...messages] }))
     }
-    es.onerror = () => { es.close(); load() }
+    load()
   }
 
   const stopStack = async (stack) => {
     const messages = []
     setProgressLog({ title: `Parando stack "${stack.name}"`, messages })
 
-    const es = new EventSource(`/api/stacks/${stack.id}/stop`)
-    es.onmessage = (e) => {
-      const data = JSON.parse(e.data)
-      if (data.message) {
-        messages.push(data.message)
-        setProgressLog((p) => ({ ...p, messages: [...messages] }))
+    try {
+      const response = await fetch(`/api/stacks/${stack.id}/stop`, {
+        method: 'POST',
+        credentials: 'include',
+        headers: { 'Authorization': `Bearer ${localStorage.getItem('provirpanel-token') || ''}` }
+      })
+      const reader = response.body.getReader()
+      const decoder = new TextDecoder()
+      let buffer = ''
+
+      while (true) {
+        const { done, value } = await reader.read()
+        if (done) break
+        buffer += decoder.decode(value, { stream: true })
+        const lines = buffer.split('\n')
+        buffer = lines.pop() || ''
+        for (const line of lines) {
+          if (!line.startsWith('data: ')) continue
+          try {
+            const data = JSON.parse(line.slice(6))
+            if (data.message) {
+              messages.push(data.message)
+              setProgressLog((p) => ({ ...p, messages: [...messages] }))
+            }
+          } catch { /* ignore */ }
+        }
       }
-      if (data.done) { es.close(); load() }
+    } catch (err) {
+      messages.push(`\u274c Erro: ${err.message}`)
+      setProgressLog((p) => ({ ...p, messages: [...messages] }))
     }
-    es.onerror = () => { es.close(); load() }
+    load()
   }
 
   const syncStack = async (stack) => {
@@ -4452,16 +4516,38 @@ export default function StacksPanel() {
     const messages = []
     setProgressLog({ title: `Iniciando ${svc.name}`, messages })
 
-    const es = new EventSource(`/api/stacks/${selectedStack.id}/services/${svc.id}/start`)
-    es.onmessage = (e) => {
-      const data = JSON.parse(e.data)
-      if (data.message) {
-        messages.push(data.message)
-        setProgressLog((p) => ({ ...p, messages: [...messages] }))
+    try {
+      const response = await fetch(`/api/stacks/${selectedStack.id}/services/${svc.id}/start`, {
+        method: 'POST',
+        credentials: 'include',
+        headers: { 'Authorization': `Bearer ${localStorage.getItem('provirpanel-token') || ''}` }
+      })
+      const reader = response.body.getReader()
+      const decoder = new TextDecoder()
+      let buffer = ''
+
+      while (true) {
+        const { done, value } = await reader.read()
+        if (done) break
+        buffer += decoder.decode(value, { stream: true })
+        const lines = buffer.split('\n')
+        buffer = lines.pop() || ''
+        for (const line of lines) {
+          if (!line.startsWith('data: ')) continue
+          try {
+            const data = JSON.parse(line.slice(6))
+            if (data.message) {
+              messages.push(data.message)
+              setProgressLog((p) => ({ ...p, messages: [...messages] }))
+            }
+          } catch { /* ignore */ }
+        }
       }
-      if (data.done) { es.close(); syncStack(selectedStack) }
+    } catch (err) {
+      messages.push(`\u274c Erro: ${err.message}`)
+      setProgressLog((p) => ({ ...p, messages: [...messages] }))
     }
-    es.onerror = () => { es.close(); syncStack(selectedStack) }
+    syncStack(selectedStack)
   }
 
   const stopService = async (svc) => {
