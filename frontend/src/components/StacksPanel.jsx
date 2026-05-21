@@ -10,6 +10,7 @@ import {
 } from 'lucide-react'
 import api from '../services/api.js'
 import { useTheme } from '../app/providers/theme-provider'
+import SERVICE_CATALOG from '../data/serviceCatalog.js'
 
 // ─── Constantes ───────────────────────────────────────────────────────────────
 
@@ -132,7 +133,7 @@ const STAGE_SERVICE_HINTS = {
     label: 'Front-End Principal',
     defaultRole: 'runtime',
     allowedRoles: ['runtime'],
-    presetNames: ['node-app', 'python', 'php']
+    presetNames: ['node', 'python', 'php']
   },
   data: {
     label: 'Cache • Banco de dados • NoSQL',
@@ -3610,226 +3611,290 @@ const inferRoleFromImage = (imageName) => {
 
 const AddServiceModal = ({ onAdd, onClose, stageKey = null }) => {
   const stageHint = stageKey ? STAGE_SERVICE_HINTS[stageKey] : null
-  const filteredPresets = stageHint
-    ? PRESET_SERVICES.filter((service) => {
-      if (stageHint.presetNames?.length && stageHint.presetNames.includes(service.name)) return true
-      return stageHint.allowedRoles?.includes(service.role)
-    })
-    : PRESET_SERVICES
+  const [step, setStep] = useState(1) // 1=choose, 2=configure, 3=confirm
+  const [selectedCatalog, setSelectedCatalog] = useState(null)
+  const [form, setForm] = useState({
+    name: '', role: stageHint?.defaultRole || 'runtime',
+    image: '', tag: 'latest',
+    ports: [], volumes: [], env: [], command: [], dependencies: []
+  })
 
-  const [mode, setMode] = useState(filteredPresets.length ? 'preset' : 'server')
-  const [preset, setPreset]   = useState(null)
-  const [serverImg, setServerImg] = useState(null)   // selected server image
-  const [serverImages, setServerImages] = useState([])
-  const [imgLoading, setImgLoading]     = useState(true)
-  const [imgSearch, setImgSearch]       = useState('')
-  const [custom, setCustom] = useState({ name: '', role: stageHint?.defaultRole || 'runtime', image: '', tag: 'latest', ports: [], volumes: [], env: [], command: [], dependencies: [] })
-
-  useEffect(() => {
-    setImgLoading(true)
-    api.get('/docker/images').then((r) => {
-      const raw = Array.isArray(r.data?.images) ? r.data.images : (Array.isArray(r.data) ? r.data : [])
-      // flatten RepoTags → one entry per tag
-      const entries = []
-      raw.forEach((img) => {
-        const tags = Array.isArray(img.RepoTags) ? img.RepoTags.filter((t) => t && t !== '<none>:<none>') : []
-        if (tags.length === 0) return
-        tags.forEach((tag) => {
-          const [repo, ver] = tag.split(':')
-          const name = repo.split('/').pop()
-          entries.push({ id: img.Id, repo, name, tag: ver || 'latest', size: img.Size, created: img.Created })
-        })
+  const filteredCatalog = stageHint
+    ? SERVICE_CATALOG.filter((s) => {
+        if (stageHint.presetNames?.length && stageHint.presetNames.includes(s.id)) return true
+        return stageHint.allowedRoles?.includes(s.role)
       })
-      setServerImages(entries)
-    }).catch(() => {}).finally(() => setImgLoading(false))
-  }, [])
+    : SERVICE_CATALOG
 
-  const filteredImgs = serverImages.filter((img) =>
-    !imgSearch || img.repo.toLowerCase().includes(imgSearch.toLowerCase()) || img.tag.toLowerCase().includes(imgSearch.toLowerCase())
-  )
-
-  const handleAdd = () => {
-    if (mode === 'preset' && preset) {
-      onAdd({ ...preset, env: [], command: [], volumes: [], dependencies: [] })
-    } else if (mode === 'server' && serverImg) {
-      const role = inferRoleFromImage(serverImg.name)
-      onAdd({ name: serverImg.name, image: serverImg.repo, tag: serverImg.tag, role, ports: [], volumes: [], env: [], command: [], dependencies: [] })
-    } else if (mode === 'custom' && custom.image) {
-      onAdd(custom)
-    }
+  const selectFromCatalog = (item) => {
+    setSelectedCatalog(item)
+    setForm({
+      name: item.name.toLowerCase().replace(/[^a-z0-9-]/g, '-'),
+      role: item.role,
+      image: item.image,
+      tag: item.tag,
+      ports: [...(item.ports || [])],
+      volumes: [...(item.volumes || [])],
+      env: (item.env || []).map((e) => ({ ...e })),
+      command: item.command || [],
+      dependencies: []
+    })
+    setStep(2)
   }
 
-  const canAdd = (mode === 'preset' && preset) || (mode === 'server' && serverImg) || (mode === 'custom' && custom.image)
+  const selectCustom = () => {
+    setSelectedCatalog(null)
+    setForm({
+      name: '', role: stageHint?.defaultRole || 'runtime',
+      image: '', tag: 'latest',
+      ports: [], volumes: [], env: [], command: [], dependencies: []
+    })
+    setStep(2)
+  }
+
+  const handleConfirm = () => {
+    onAdd(form)
+  }
+
+  const upd = (k, v) => setForm((f) => ({ ...f, [k]: v }))
+  const addPort = () => upd('ports', [...form.ports, { host: '', container: '' }])
+  const removePort = (i) => upd('ports', form.ports.filter((_, j) => j !== i))
+  const setPort = (i, k, v) => { const a = [...form.ports]; a[i] = { ...a[i], [k]: v }; upd('ports', a) }
+  const addEnv = () => upd('env', [...form.env, { key: '', value: '', secret: false }])
+  const removeEnv = (i) => upd('env', form.env.filter((_, j) => j !== i))
+  const setEnv = (i, k, v) => { const a = [...form.env]; a[i] = { ...a[i], [k]: v }; upd('env', a) }
+  const addVolume = () => upd('volumes', [...form.volumes, { host: '', container: '' }])
+  const removeVolume = (i) => upd('volumes', form.volumes.filter((_, j) => j !== i))
+  const setVolume = (i, k, v) => { const a = [...form.volumes]; a[i] = { ...a[i], [k]: v }; upd('volumes', a) }
+
+  const requiredEnvs = selectedCatalog?.requiredEnv || []
+  const missingRequired = requiredEnvs.filter((key) => {
+    const entry = form.env.find((e) => e.key === key)
+    return !entry || !entry.value.trim()
+  })
+  const canConfirm = form.name && form.image && missingRequired.length === 0
 
   const inp = { width: '100%', borderRadius: 10, border: '1px solid rgba(255,255,255,0.09)', background: 'rgba(255,255,255,0.04)', padding: '8px 12px', fontSize: 12, color: '#f1f5f9', outline: 'none', boxSizing: 'border-box' }
-
-  const MODES = [
-    { id: 'server', label: 'Do Servidor' },
-    { id: 'preset', label: 'Predefinido' },
-    { id: 'custom', label: 'Customizado' },
-  ]
 
   return (
     <div style={{ position: 'fixed', inset: 0, zIndex: 50, display: 'flex', alignItems: 'center', justifyContent: 'center', background: 'rgba(0,0,0,0.65)', backdropFilter: 'blur(6px)' }}
       onMouseDown={(e) => { if (e.target === e.currentTarget) onClose() }}>
-      <div style={{ width: '100%', maxWidth: 520, maxHeight: '88vh', display: 'flex', flexDirection: 'column', margin: '0 16px', borderRadius: 20, border: '1px solid rgba(255,255,255,0.1)', background: 'linear-gradient(160deg,#080f1e,#060c18)', boxShadow: '0 40px 100px rgba(0,0,0,0.8)' }}>
+      <div style={{ width: '100%', maxWidth: 560, maxHeight: '90vh', display: 'flex', flexDirection: 'column', margin: '0 16px', borderRadius: 20, border: '1px solid rgba(255,255,255,0.1)', background: 'linear-gradient(160deg,#080f1e,#060c18)', boxShadow: '0 40px 100px rgba(0,0,0,0.8)' }}>
 
         {/* Header */}
-        <div style={{ padding: '18px 20px 0', borderBottom: '1px solid rgba(255,255,255,0.06)' }}>
-          <div style={{ display: 'flex', alignItems: 'flex-start', justifyContent: 'space-between', marginBottom: 12 }}>
+        <div style={{ padding: '16px 20px 12px', borderBottom: '1px solid rgba(255,255,255,0.06)' }}>
+          <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
             <div>
-              <div style={{ fontSize: 14, fontWeight: 700, color: '#f1f5f9' }}>Adicionar Serviço</div>
-              {stageHint && <div style={{ fontSize: 11, color: '#7dd3fc', marginTop: 3 }}>Função: {stageHint.label}</div>}
+              <div style={{ fontSize: 14, fontWeight: 700, color: '#f1f5f9' }}>
+                {step === 1 ? 'Escolher Serviço' : step === 2 ? 'Configurar' : 'Confirmar'}
+              </div>
+              <div style={{ fontSize: 11, color: '#475569', marginTop: 2 }}>
+                Passo {step} de 3{selectedCatalog ? ` — ${selectedCatalog.name}` : ''}
+              </div>
             </div>
             <button onClick={onClose} style={{ background: 'rgba(255,255,255,0.06)', border: '1px solid rgba(255,255,255,0.09)', borderRadius: 8, color: '#64748b', cursor: 'pointer', padding: '5px 7px', lineHeight: 1, display: 'flex' }}>
               <X size={13} />
             </button>
           </div>
-          {/* Mode tabs */}
-          <div style={{ display: 'flex', gap: 2 }}>
-            {MODES.map((m) => (
-              <button key={m.id} onClick={() => setMode(m.id)}
-                style={{ padding: '6px 14px', fontSize: 11, fontWeight: mode === m.id ? 600 : 400, color: mode === m.id ? '#fff' : '#475569', background: mode === m.id ? 'rgba(59,130,246,0.18)' : 'transparent', border: mode === m.id ? '1px solid rgba(59,130,246,0.4)' : '1px solid transparent', borderRadius: 8, cursor: 'pointer', transition: 'all 0.15s', marginBottom: 4 }}>
-                {m.label}
-              </button>
+          {/* Step indicator */}
+          <div style={{ display: 'flex', gap: 4, marginTop: 12 }}>
+            {[1, 2, 3].map((s) => (
+              <div key={s} style={{ flex: 1, height: 3, borderRadius: 2, background: s <= step ? '#3b82f6' : 'rgba(255,255,255,0.08)', transition: 'background 0.2s' }} />
             ))}
           </div>
         </div>
 
         {/* Body */}
-        <div style={{ flex: 1, overflowY: 'auto', padding: '14px 16px', display: 'flex', flexDirection: 'column', gap: 10 }}>
+        <div style={{ flex: 1, overflowY: 'auto', padding: '16px 20px' }}>
 
-          {/* DO SERVIDOR */}
-          {mode === 'server' && (<>
-            {/* Search */}
-            <div style={{ position: 'relative' }}>
-              <Eye size={12} style={{ position: 'absolute', left: 10, top: '50%', transform: 'translateY(-50%)', color: '#475569' }} />
-              <input value={imgSearch} onChange={(e) => setImgSearch(e.target.value)}
-                placeholder="Filtrar imagens..."
-                style={{ ...inp, paddingLeft: 30, fontSize: 12 }} />
-            </div>
-
-            {imgLoading ? (
-              <div style={{ textAlign: 'center', padding: '32px 0', fontSize: 12, color: '#334155' }}>Carregando imagens do Docker...</div>
-            ) : filteredImgs.length === 0 ? (
-              <div style={{ textAlign: 'center', padding: '32px 0', fontSize: 12, color: '#334155' }}>
-                {serverImages.length === 0 ? 'Nenhuma imagem encontrada no servidor' : 'Nenhuma imagem corresponde ao filtro'}
-              </div>
-            ) : (
-              <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
-                {filteredImgs.map((img) => {
-                  const role    = inferRoleFromImage(img.name)
-                  const cfg     = SERVICE_ROLES[role] || SERVICE_ROLES.runtime
-                  const RIcon   = cfg.icon
-                  const isSel   = serverImg?.id === img.id && serverImg?.tag === img.tag
-                  const sizeMb  = img.size ? (img.size / (1024 * 1024)).toFixed(0) + ' MB' : ''
+          {/* STEP 1: Choose */}
+          {step === 1 && (
+            <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
+              <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3, 1fr)', gap: 8 }}>
+                {filteredCatalog.map((item) => {
+                  const cfg = SERVICE_ROLES[item.role] || SERVICE_ROLES.runtime
+                  const Icon = cfg.icon
                   return (
-                    <button key={`${img.id}-${img.tag}`} onClick={() => setServerImg(isSel ? null : img)}
-                      style={{ display: 'flex', alignItems: 'center', gap: 10, padding: '10px 12px', borderRadius: 12, cursor: 'pointer', textAlign: 'left', transition: 'all 0.15s',
-                        border: isSel ? `1px solid ${cfg.color}55` : '1px solid rgba(255,255,255,0.07)',
-                        background: isSel ? `${cfg.color}10` : 'rgba(255,255,255,0.03)',
-                      }}>
-                      <div style={{ width: 34, height: 34, borderRadius: 10, background: `${cfg.color}18`, border: `1px solid ${cfg.color}30`, display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0 }}>
-                        <RIcon size={15} style={{ color: cfg.color }} />
+                    <button key={item.id} onClick={() => selectFromCatalog(item)}
+                      style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 6, padding: '14px 8px', borderRadius: 14, cursor: 'pointer', transition: 'all 0.15s', border: '1px solid rgba(255,255,255,0.09)', background: 'rgba(255,255,255,0.03)' }}
+                      onMouseEnter={(e) => { e.currentTarget.style.borderColor = `${cfg.color}55`; e.currentTarget.style.background = `${cfg.color}10` }}
+                      onMouseLeave={(e) => { e.currentTarget.style.borderColor = 'rgba(255,255,255,0.09)'; e.currentTarget.style.background = 'rgba(255,255,255,0.03)' }}>
+                      <div style={{ width: 36, height: 36, borderRadius: 10, background: `${cfg.color}20`, display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
+                        <Icon size={17} style={{ color: cfg.color }} />
                       </div>
-                      <div style={{ flex: 1, minWidth: 0 }}>
-                        <div style={{ display: 'flex', alignItems: 'center', gap: 6, flexWrap: 'wrap' }}>
-                          <span style={{ fontSize: 12, fontWeight: 600, color: '#f1f5f9' }}>{img.name}</span>
-                          <span style={{ fontSize: 10, padding: '1px 6px', borderRadius: 5, background: `${cfg.color}18`, border: `1px solid ${cfg.color}30`, color: cfg.color }}>{cfg.label}</span>
-                        </div>
-                        <div style={{ fontSize: 11, color: '#475569', fontFamily: 'ui-monospace,monospace', marginTop: 2, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
-                          {img.repo}:<span style={{ color: '#64748b' }}>{img.tag}</span>
-                        </div>
-                      </div>
-                      <div style={{ textAlign: 'right', flexShrink: 0 }}>
-                        {sizeMb && <div style={{ fontSize: 10, color: '#334155' }}>{sizeMb}</div>}
-                        {isSel && <div style={{ fontSize: 10, color: cfg.color, marginTop: 2, fontWeight: 600 }}>✓ selecionado</div>}
-                      </div>
+                      <span style={{ fontSize: 11, fontWeight: 600, color: '#f1f5f9' }}>{item.name}</span>
+                      <span style={{ fontSize: 9, color: '#475569', textAlign: 'center', lineHeight: 1.3 }}>{item.description?.slice(0, 40)}</span>
                     </button>
                   )
                 })}
               </div>
-            )}
-
-            {/* Count */}
-            {!imgLoading && serverImages.length > 0 && (
-              <div style={{ fontSize: 10, color: '#334155', textAlign: 'center' }}>
-                {filteredImgs.length} de {serverImages.length} imagem{serverImages.length !== 1 ? 'ns' : ''}
-              </div>
-            )}
-          </>)}
-
-          {/* PREDEFINIDO */}
-          {mode === 'preset' && (
-            <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3,1fr)', gap: 8 }}>
-              {filteredPresets.map((s) => {
-                const cfg  = SERVICE_ROLES[s.role] || SERVICE_ROLES.runtime
-                const Icon = cfg.icon
-                const isSel = preset?.name === s.name
-                return (
-                  <button key={s.name} onClick={() => setPreset(isSel ? null : s)}
-                    style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 6, padding: '14px 8px', borderRadius: 14, cursor: 'pointer', transition: 'all 0.15s',
-                      border: isSel ? `1px solid ${cfg.color}55` : '1px solid rgba(255,255,255,0.09)',
-                      background: isSel ? `${cfg.color}12` : 'rgba(255,255,255,0.03)',
-                    }}>
-                    <div style={{ width: 34, height: 34, borderRadius: 10, background: `${cfg.color}20`, display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
-                      <Icon size={16} style={{ color: cfg.color }} />
-                    </div>
-                    <span style={{ fontSize: 11, fontWeight: 600, color: '#f1f5f9' }}>{s.name}</span>
-                    <span style={{ fontSize: 9, color: '#475569' }}>{s.tag || 'latest'}</span>
-                  </button>
-                )
-              })}
-              {filteredPresets.length === 0 && (
-                <div style={{ gridColumn: '1/-1', textAlign: 'center', padding: '32px 0', fontSize: 12, color: '#334155' }}>
-                  Sem preset para esta função. Use Customizado.
-                </div>
-              )}
+              <button onClick={selectCustom}
+                style={{ marginTop: 8, padding: '12px', borderRadius: 12, border: '1px dashed rgba(255,255,255,0.15)', background: 'transparent', color: '#94a3b8', fontSize: 12, cursor: 'pointer', textAlign: 'center' }}>
+                + Imagem customizada
+              </button>
             </div>
           )}
 
-          {/* CUSTOMIZADO */}
-          {mode === 'custom' && (
-            <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
+          {/* STEP 2: Configure */}
+          {step === 2 && (
+            <div style={{ display: 'flex', flexDirection: 'column', gap: 14 }}>
+              {/* Basic info */}
               <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 10 }}>
                 <div>
                   <label style={{ display: 'block', fontSize: 10, fontWeight: 600, letterSpacing: '0.08em', textTransform: 'uppercase', color: '#64748b', marginBottom: 6 }}>Nome</label>
-                  <input value={custom.name} onChange={(e) => setCustom((c) => ({ ...c, name: e.target.value }))}
-                    style={inp} placeholder="meu-servico" />
+                  <input value={form.name} onChange={(e) => upd('name', e.target.value)} style={inp} placeholder="meu-servico" />
                 </div>
                 <div>
                   <label style={{ display: 'block', fontSize: 10, fontWeight: 600, letterSpacing: '0.08em', textTransform: 'uppercase', color: '#64748b', marginBottom: 6 }}>Papel</label>
-                  <select value={custom.role} onChange={(e) => setCustom((c) => ({ ...c, role: e.target.value }))}
-                    style={{ ...inp, background: 'rgba(255,255,255,0.06)', cursor: 'pointer' }}>
-                    {Object.entries(SERVICE_ROLES)
-                      .filter(([k]) => !stageHint || stageHint.allowedRoles?.includes(k))
-                      .map(([k, v]) => <option key={k} value={k}>{v.label}</option>)}
+                  <select value={form.role} onChange={(e) => upd('role', e.target.value)} style={{ ...inp, cursor: 'pointer' }}>
+                    {Object.entries(SERVICE_ROLES).map(([k, v]) => <option key={k} value={k}>{v.label}</option>)}
                   </select>
                 </div>
               </div>
               <div style={{ display: 'grid', gridTemplateColumns: '2fr 1fr', gap: 10 }}>
                 <div>
                   <label style={{ display: 'block', fontSize: 10, fontWeight: 600, letterSpacing: '0.08em', textTransform: 'uppercase', color: '#64748b', marginBottom: 6 }}>Imagem</label>
-                  <input value={custom.image} onChange={(e) => setCustom((c) => ({ ...c, image: e.target.value }))}
-                    style={{ ...inp, fontFamily: 'ui-monospace,monospace', fontSize: 11 }} placeholder="nginx, node, python..." />
+                  <input value={form.image} onChange={(e) => upd('image', e.target.value)} style={{ ...inp, fontFamily: 'ui-monospace,monospace' }} placeholder="nginx" />
                 </div>
                 <div>
                   <label style={{ display: 'block', fontSize: 10, fontWeight: 600, letterSpacing: '0.08em', textTransform: 'uppercase', color: '#64748b', marginBottom: 6 }}>Tag</label>
-                  <input value={custom.tag} onChange={(e) => setCustom((c) => ({ ...c, tag: e.target.value }))}
-                    style={{ ...inp, fontFamily: 'ui-monospace,monospace', fontSize: 11 }} placeholder="latest" />
+                  <input value={form.tag} onChange={(e) => upd('tag', e.target.value)} style={{ ...inp, fontFamily: 'ui-monospace,monospace' }} placeholder="latest" />
                 </div>
               </div>
+
+              {/* Env vars */}
+              <div>
+                <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 8 }}>
+                  <label style={{ fontSize: 10, fontWeight: 600, letterSpacing: '0.08em', textTransform: 'uppercase', color: '#64748b' }}>Variáveis de ambiente</label>
+                  <button onClick={addEnv} style={{ fontSize: 10, color: '#7dd3fc', background: 'rgba(56,189,248,0.08)', border: '1px solid rgba(56,189,248,0.2)', borderRadius: 7, padding: '3px 9px', cursor: 'pointer' }}>+ Var</button>
+                </div>
+                <div style={{ display: 'flex', flexDirection: 'column', gap: 5 }}>
+                  {form.env.map((e, i) => {
+                    const isRequired = requiredEnvs.includes(e.key)
+                    const isMissing = isRequired && !e.value.trim()
+                    return (
+                      <div key={i} style={{ display: 'grid', gridTemplateColumns: '1.2fr 1.8fr auto auto', gap: 5, alignItems: 'center', background: isMissing ? 'rgba(239,68,68,0.06)' : 'rgba(255,255,255,0.025)', border: `1px solid ${isMissing ? 'rgba(239,68,68,0.3)' : 'rgba(255,255,255,0.06)'}`, borderRadius: 9, padding: '5px 8px' }}>
+                        <input value={e.key} onChange={(ev) => setEnv(i, 'key', ev.target.value)} placeholder="CHAVE"
+                          style={{ ...inp, background: 'transparent', border: 'none', padding: '2px 0', fontSize: 11, color: '#fbbf24', fontFamily: 'ui-monospace,monospace' }} />
+                        <input value={e.value} onChange={(ev) => setEnv(i, 'value', ev.target.value)} placeholder={isRequired ? '⚠ obrigatório' : 'valor'}
+                          type={e.secret ? 'password' : 'text'}
+                          style={{ ...inp, background: 'transparent', border: 'none', padding: '2px 0', fontSize: 11 }} />
+                        <button onClick={() => setEnv(i, 'secret', !e.secret)} style={{ background: 'none', border: 'none', cursor: 'pointer', fontSize: 11, padding: 2 }}>
+                          {e.secret ? '🔒' : '👁'}
+                        </button>
+                        <button onClick={() => removeEnv(i)} style={{ background: 'none', border: 'none', color: '#475569', cursor: 'pointer', padding: 2, lineHeight: 1, display: 'flex' }}>
+                          <X size={11} />
+                        </button>
+                      </div>
+                    )
+                  })}
+                </div>
+                {missingRequired.length > 0 && (
+                  <div style={{ marginTop: 6, fontSize: 10, color: '#f87171' }}>
+                    ⚠ Preencha: {missingRequired.join(', ')}
+                  </div>
+                )}
+              </div>
+
+              {/* Ports */}
+              <div>
+                <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 8 }}>
+                  <label style={{ fontSize: 10, fontWeight: 600, letterSpacing: '0.08em', textTransform: 'uppercase', color: '#64748b' }}>Portas</label>
+                  <button onClick={addPort} style={{ fontSize: 10, color: '#7dd3fc', background: 'rgba(56,189,248,0.08)', border: '1px solid rgba(56,189,248,0.2)', borderRadius: 7, padding: '3px 9px', cursor: 'pointer' }}>+ Porta</button>
+                </div>
+                <div style={{ display: 'flex', flexDirection: 'column', gap: 5 }}>
+                  {form.ports.map((p, i) => (
+                    <div key={i} style={{ display: 'grid', gridTemplateColumns: '1fr auto 1fr auto', gap: 6, alignItems: 'center' }}>
+                      <input value={p.host} onChange={(e) => setPort(i, 'host', e.target.value)} placeholder="Host" style={{ ...inp, fontSize: 11, fontFamily: 'ui-monospace,monospace' }} />
+                      <span style={{ color: '#334155', fontSize: 11 }}>→</span>
+                      <input value={p.container} onChange={(e) => setPort(i, 'container', e.target.value)} placeholder="Container" style={{ ...inp, fontSize: 11, fontFamily: 'ui-monospace,monospace' }} />
+                      <button onClick={() => removePort(i)} style={{ background: 'none', border: 'none', color: '#475569', cursor: 'pointer', padding: 2, lineHeight: 1, display: 'flex' }}><X size={11} /></button>
+                    </div>
+                  ))}
+                </div>
+              </div>
+
+              {/* Volumes */}
+              <div>
+                <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 8 }}>
+                  <label style={{ fontSize: 10, fontWeight: 600, letterSpacing: '0.08em', textTransform: 'uppercase', color: '#64748b' }}>Volumes</label>
+                  <button onClick={addVolume} style={{ fontSize: 10, color: '#7dd3fc', background: 'rgba(56,189,248,0.08)', border: '1px solid rgba(56,189,248,0.2)', borderRadius: 7, padding: '3px 9px', cursor: 'pointer' }}>+ Volume</button>
+                </div>
+                <div style={{ display: 'flex', flexDirection: 'column', gap: 5 }}>
+                  {form.volumes.map((v, i) => (
+                    <div key={i} style={{ display: 'grid', gridTemplateColumns: '1fr auto 1fr auto', gap: 6, alignItems: 'center' }}>
+                      <input value={v.host} onChange={(e) => setVolume(i, 'host', e.target.value)} placeholder="Host/Volume" style={{ ...inp, fontSize: 11, fontFamily: 'ui-monospace,monospace' }} />
+                      <span style={{ color: '#334155', fontSize: 11 }}>→</span>
+                      <input value={v.container} onChange={(e) => setVolume(i, 'container', e.target.value)} placeholder="Container" style={{ ...inp, fontSize: 11, fontFamily: 'ui-monospace,monospace' }} />
+                      <button onClick={() => removeVolume(i)} style={{ background: 'none', border: 'none', color: '#475569', cursor: 'pointer', padding: 2, lineHeight: 1, display: 'flex' }}><X size={11} /></button>
+                    </div>
+                  ))}
+                </div>
+              </div>
+            </div>
+          )}
+
+          {/* STEP 3: Confirm */}
+          {step === 3 && (
+            <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
+              <div style={{ borderRadius: 14, border: '1px solid rgba(255,255,255,0.08)', background: 'rgba(255,255,255,0.02)', padding: '16px' }}>
+                <div style={{ display: 'flex', alignItems: 'center', gap: 10, marginBottom: 12 }}>
+                  {(() => { const cfg = SERVICE_ROLES[form.role] || SERVICE_ROLES.runtime; const Icon = cfg.icon; return (
+                    <div style={{ width: 38, height: 38, borderRadius: 11, background: `${cfg.color}18`, border: `1px solid ${cfg.color}30`, display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
+                      <Icon size={18} style={{ color: cfg.color }} />
+                    </div>
+                  )})()}
+                  <div>
+                    <div style={{ fontSize: 14, fontWeight: 700, color: '#f1f5f9' }}>{form.name}</div>
+                    <div style={{ fontSize: 11, color: '#475569', fontFamily: 'ui-monospace,monospace' }}>{form.image}:{form.tag}</div>
+                  </div>
+                </div>
+                <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr 1fr', gap: 8 }}>
+                  <div style={{ borderRadius: 8, background: 'rgba(255,255,255,0.03)', border: '1px solid rgba(255,255,255,0.06)', padding: '8px 10px', textAlign: 'center' }}>
+                    <div style={{ fontSize: 16, fontWeight: 700, color: '#f1f5f9' }}>{form.ports.length}</div>
+                    <div style={{ fontSize: 9, color: '#475569', textTransform: 'uppercase' }}>Portas</div>
+                  </div>
+                  <div style={{ borderRadius: 8, background: 'rgba(255,255,255,0.03)', border: '1px solid rgba(255,255,255,0.06)', padding: '8px 10px', textAlign: 'center' }}>
+                    <div style={{ fontSize: 16, fontWeight: 700, color: '#f1f5f9' }}>{form.env.length}</div>
+                    <div style={{ fontSize: 9, color: '#475569', textTransform: 'uppercase' }}>Variáveis</div>
+                  </div>
+                  <div style={{ borderRadius: 8, background: 'rgba(255,255,255,0.03)', border: '1px solid rgba(255,255,255,0.06)', padding: '8px 10px', textAlign: 'center' }}>
+                    <div style={{ fontSize: 16, fontWeight: 700, color: '#f1f5f9' }}>{form.volumes.length}</div>
+                    <div style={{ fontSize: 9, color: '#475569', textTransform: 'uppercase' }}>Volumes</div>
+                  </div>
+                </div>
+              </div>
+              {form.env.length > 0 && (
+                <div style={{ borderRadius: 10, border: '1px solid rgba(255,255,255,0.06)', padding: '10px 12px' }}>
+                  <div style={{ fontSize: 10, fontWeight: 600, color: '#64748b', marginBottom: 6, textTransform: 'uppercase', letterSpacing: '0.08em' }}>Variáveis</div>
+                  {form.env.map((e, i) => (
+                    <div key={i} style={{ fontSize: 11, fontFamily: 'ui-monospace,monospace', color: '#94a3b8', lineHeight: 1.8 }}>
+                      <span style={{ color: '#fbbf24' }}>{e.key}</span>=<span style={{ color: e.secret ? '#475569' : '#6ee7b7' }}>{e.secret ? '••••••' : e.value}</span>
+                    </div>
+                  ))}
+                </div>
+              )}
             </div>
           )}
         </div>
 
         {/* Footer */}
-        <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', borderTop: '1px solid rgba(255,255,255,0.06)', padding: '12px 16px' }}>
-          <button onClick={onClose} style={{ fontSize: 11, color: '#475569', background: 'none', border: 'none', cursor: 'pointer' }}>Cancelar</button>
-          <button onClick={handleAdd} disabled={!canAdd}
-            style={{ fontSize: 12, fontWeight: 600, color: '#fff', background: canAdd ? 'linear-gradient(135deg,#3b82f6,#6366f1)' : 'rgba(255,255,255,0.06)', border: 'none', borderRadius: 10, padding: '8px 22px', cursor: canAdd ? 'pointer' : 'default', boxShadow: canAdd ? '0 4px 14px rgba(59,130,246,0.4)' : 'none', transition: 'all 0.2s', opacity: canAdd ? 1 : 0.4 }}>
-            Adicionar Serviço
+        <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', borderTop: '1px solid rgba(255,255,255,0.06)', padding: '12px 20px' }}>
+          <button onClick={() => step === 1 ? onClose() : setStep(step - 1)}
+            style={{ fontSize: 11, color: '#94a3b8', background: 'none', border: 'none', cursor: 'pointer' }}>
+            {step === 1 ? 'Cancelar' : '← Voltar'}
           </button>
+          {step < 3 ? (
+            <button onClick={() => setStep(step + 1)} disabled={step === 2 && !canConfirm}
+              style={{ fontSize: 12, fontWeight: 600, color: '#fff', background: (step === 2 && !canConfirm) ? 'rgba(255,255,255,0.06)' : 'linear-gradient(135deg,#3b82f6,#6366f1)', border: 'none', borderRadius: 10, padding: '8px 22px', cursor: (step === 2 && !canConfirm) ? 'default' : 'pointer', boxShadow: (step === 2 && !canConfirm) ? 'none' : '0 4px 14px rgba(59,130,246,0.4)', opacity: (step === 2 && !canConfirm) ? 0.4 : 1 }}>
+              Próximo →
+            </button>
+          ) : (
+            <button onClick={handleConfirm}
+              style={{ fontSize: 12, fontWeight: 600, color: '#fff', background: 'linear-gradient(135deg,#10b981,#059669)', border: 'none', borderRadius: 10, padding: '8px 22px', cursor: 'pointer', boxShadow: '0 4px 14px rgba(16,185,129,0.4)' }}>
+              ✓ Adicionar Serviço
+            </button>
+          )}
         </div>
       </div>
     </div>
