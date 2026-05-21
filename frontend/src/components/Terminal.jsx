@@ -408,6 +408,7 @@ const Terminal = ({ showPageIntro = true }) => {
         const current = terminalsRef.current.get(id)
         if (current) {
           current.write(payload.data)
+          current.scrollToBottom()
         }
         const prev = outputRef.current.get(id) || ''
         outputRef.current.set(id, prev + payload.data)
@@ -418,6 +419,7 @@ const Terminal = ({ showPageIntro = true }) => {
         runningRef.current.set(id, false)
         if (current) {
           current.write(`\r\n\x1b[90m[sessao encerrada - code ${payload.code}]\x1b[0m\r\n`)
+          current.scrollToBottom()
           // Restart shell automatically
           setTimeout(() => {
             if (socket.connected) {
@@ -436,6 +438,7 @@ const Terminal = ({ showPageIntro = true }) => {
         const current = terminalsRef.current.get(id)
         if (current) {
           current.write(`\r\n\x1b[31m${payload.message}\x1b[0m`)
+          current.scrollToBottom()
           writePrompt(current, cwdRef.current.get(id))
         }
         const finalOutput = outputRef.current.get(id) || ''
@@ -641,7 +644,7 @@ const Terminal = ({ showPageIntro = true }) => {
           >
             <div
               ref={setContainerRef(tab.id)}
-              className="provir-terminal-shell h-80 min-h-[16rem] w-full resize-y overflow-hidden rounded-2xl border border-[#30363d] bg-[#0d1117] text-[#c9d1d9] shadow-[0_16px_48px_rgba(0,0,0,0.4)]"
+              className="provir-terminal-shell h-[calc(100vh-280px)] min-h-[400px] w-full resize-y overflow-hidden rounded-2xl border border-[#30363d] bg-[#0d1117] text-[#c9d1d9] shadow-[0_16px_48px_rgba(0,0,0,0.4)]"
             />
             <button
               className="absolute right-3 top-3 hidden items-center gap-2 rounded-lg border border-[#30363d] bg-[#161b22]/95 px-3 py-1.5 text-[11px] text-[#c9d1d9] shadow-lg backdrop-blur-sm transition group-hover:flex hover:border-[#58a6ff]/50"
