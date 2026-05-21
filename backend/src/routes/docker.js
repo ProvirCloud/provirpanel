@@ -2272,9 +2272,36 @@ router.delete('/services/:id', async (req, res, next) => {
     const services = dockerManager.listServices();
     const service = services.find((s) => s.id === req.params.id);
     if (!service) {
-      // Try to find as a container ID directly and remove it
+      // Try to find in stacks
+      const StackManager = require("../services/StackManager");
+      const sm = new StackManager();
+      const stacks = sm.listStacks();
+      let foundStack = null;
+      let foundSvc = null;
+      for (const stack of stacks) {
+        const svc = (stack.services || []).find((s) => s.id === req.params.id);
+        if (svc) { foundStack = stack; foundSvc = svc; break; }
+      }
+      if (foundSvc) {
+        // Stop and remove container
+        const ids = Array.isArray(foundSvc.containerIds) && foundSvc.containerIds.length
+          ? foundSvc.containerIds
+          : (foundSvc.containerId ? [foundSvc.containerId] : []);
+        for (const cid of ids) {
+          try {
+            const c = dockerManager.docker.getContainer(cid);
+            await c.stop().catch(() => {});
+            await c.remove({ force: true });
+          } catch { /* ignore */ }
+        }
+        // Remove service from stack
+        sm.removeService(foundStack.id, req.params.id);
+        return res.json({ status: "removed" });
+      }
+      // Try as raw container ID
       try {
         const container = dockerManager.docker.getContainer(req.params.id);
+        const info = await container.inspect();
         await container.stop().catch(() => {});
         await container.remove({ force: true });
         return res.json({ status: "removed" });
