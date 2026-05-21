@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from 'react'
+import { useEffect, useMemo, useRef, useState } from 'react'
 import { FolderOpen, Loader2, Plus, Save, Server, Play, CheckCircle } from 'lucide-react'
 import PageHeader from '../layout/PageHeader'
 import GeneratedNginxConfig from './GeneratedNginxConfig'
@@ -60,20 +60,35 @@ export default function NginxVisualFullPage() {
       .finally(() => setLoadingConfigs(false))
   }, [])
 
-  // Also support ?config=name query param (navigation from canvas)
+  // Also support ?config=name query param (navigation from canvas or after save)
   useEffect(() => {
     const params = new URLSearchParams(window.location.search)
     const configName = params.get('config')
-    if (!configName) return
-    // Will be loaded once availableConfigs is populated
-    setCurrentConfigName(configName)
+    if (configName) {
+      setCurrentConfigName(configName)
+    }
   }, [])
+
+  // Persist currentConfigName in URL so refresh reloads the same config
+  useEffect(() => {
+    if (!currentConfigName) return
+    const params = new URLSearchParams(window.location.search)
+    if (params.get('config') !== currentConfigName) {
+      params.set('config', currentConfigName)
+      window.history.replaceState(null, '', `${window.location.pathname}?${params.toString()}`)
+    }
+  }, [currentConfigName])
+
+  const initialLoadDone = useRef(false)
 
   useEffect(() => {
     if (!currentConfigName || availableConfigs.length === 0) return
+    // Only parse on initial load or when user explicitly selects a config
+    if (initialLoadDone.current) return
     const found = availableConfigs.find((c) => c.name === currentConfigName)
     if (found) {
       setState(parseNginxConfigToState(found.content, found.name))
+      initialLoadDone.current = true
     }
   }, [currentConfigName, availableConfigs])
 
@@ -112,6 +127,14 @@ export default function NginxVisualFullPage() {
   const saveToBackend = async (filename: string, content: string) => {
     await api.put(`/nginx/configs/${filename}`, { content })
     if (!currentConfigName) setCurrentConfigName(filename)
+    // Update available configs list so reload works
+    setAvailableConfigs((prev) => {
+      const exists = prev.some((c) => c.name === filename)
+      if (exists) {
+        return prev.map((c) => c.name === filename ? { ...c, content } : c)
+      }
+      return [...prev, { name: filename, content }]
+    })
   }
 
   const handleSaveConfig = async () => {
