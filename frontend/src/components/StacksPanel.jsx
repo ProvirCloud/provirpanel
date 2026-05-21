@@ -3613,6 +3613,11 @@ const AddServiceModal = ({ onAdd, onClose, stageKey = null }) => {
   const stageHint = stageKey ? STAGE_SERVICE_HINTS[stageKey] : null
   const [step, setStep] = useState(1) // 1=choose, 2=configure, 3=confirm
   const [selectedCatalog, setSelectedCatalog] = useState(null)
+  const [mode, setMode] = useState('catalog') // 'catalog' | 'dockerfile' | 'custom'
+  const [dockerfile, setDockerfile] = useState('')
+  const [buildName, setBuildName] = useState('')
+  const [building, setBuilding] = useState(false)
+  const [buildLog, setBuildLog] = useState([])
   const [form, setForm] = useState({
     name: '', role: stageHint?.defaultRole || 'runtime',
     image: '', tag: 'latest',
@@ -3628,6 +3633,7 @@ const AddServiceModal = ({ onAdd, onClose, stageKey = null }) => {
 
   const selectFromCatalog = (item) => {
     setSelectedCatalog(item)
+    setMode('catalog')
     setForm({
       name: item.name.toLowerCase().replace(/[^a-z0-9-]/g, '-'),
       role: item.role,
@@ -3644,12 +3650,53 @@ const AddServiceModal = ({ onAdd, onClose, stageKey = null }) => {
 
   const selectCustom = () => {
     setSelectedCatalog(null)
+    setMode('custom')
     setForm({
       name: '', role: stageHint?.defaultRole || 'runtime',
       image: '', tag: 'latest',
       ports: [], volumes: [], env: [], command: [], dependencies: []
     })
     setStep(2)
+  }
+
+  const selectDockerfile = () => {
+    setSelectedCatalog(null)
+    setMode('dockerfile')
+    setBuildName('')
+    setDockerfile('')
+    setBuildLog([])
+    setStep(2)
+  }
+
+  const handleBuildImage = async () => {
+    if (!buildName.trim() || !dockerfile.trim()) return
+    setBuilding(true)
+    setBuildLog(['\ud83d\udd28 Iniciando build...'])
+    try {
+      const res = await api.post('/docker/images/build', {
+        imageName: buildName.trim(),
+        dockerfileContent: dockerfile
+      })
+      const progress = res.data?.progress || []
+      setBuildLog((prev) => [...prev, ...progress, '\u2705 Build conclu\u00eddo!'])
+      // Set form with built image
+      setForm({
+        name: buildName.trim().split('/').pop().split(':')[0],
+        role: stageHint?.defaultRole || 'runtime',
+        image: buildName.trim().split(':')[0],
+        tag: buildName.trim().split(':')[1] || 'latest',
+        ports: [{ host: 3000, container: 3000 }],
+        volumes: [], env: [], command: [], dependencies: []
+      })
+      setMode('custom')
+      setStep(2)
+    } catch (err) {
+      const msg = err.response?.data?.message || err.message
+      const progress = err.response?.data?.progress || []
+      setBuildLog((prev) => [...prev, ...progress, `\u274c Falha: ${msg}`])
+    } finally {
+      setBuilding(false)
+    }
   }
 
   const handleConfirm = () => {
@@ -3686,7 +3733,7 @@ const AddServiceModal = ({ onAdd, onClose, stageKey = null }) => {
           <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
             <div>
               <div style={{ fontSize: 14, fontWeight: 700, color: '#f1f5f9' }}>
-                {step === 1 ? 'Escolher Serviço' : step === 2 ? 'Configurar' : 'Confirmar'}
+                {step === 1 ? 'Escolher Serviço' : step === 2 && mode === 'dockerfile' ? 'Build Dockerfile' : step === 2 ? 'Configurar' : 'Confirmar'}
               </div>
               <div style={{ fontSize: 11, color: '#475569', marginTop: 2 }}>
                 Passo {step} de 3{selectedCatalog ? ` — ${selectedCatalog.name}` : ''}
@@ -3728,15 +3775,50 @@ const AddServiceModal = ({ onAdd, onClose, stageKey = null }) => {
                   )
                 })}
               </div>
-              <button onClick={selectCustom}
-                style={{ marginTop: 8, padding: '12px', borderRadius: 12, border: '1px dashed rgba(255,255,255,0.15)', background: 'transparent', color: '#94a3b8', fontSize: 12, cursor: 'pointer', textAlign: 'center' }}>
-                + Imagem customizada
-              </button>
+              <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 8, marginTop: 8 }}>
+                <button onClick={selectCustom}
+                  style={{ padding: '12px', borderRadius: 12, border: '1px dashed rgba(255,255,255,0.15)', background: 'transparent', color: '#94a3b8', fontSize: 12, cursor: 'pointer', textAlign: 'center' }}>
+                  + Imagem customizada
+                </button>
+                <button onClick={selectDockerfile}
+                  style={{ padding: '12px', borderRadius: 12, border: '1px dashed rgba(139,92,246,0.4)', background: 'rgba(139,92,246,0.06)', color: '#c4b5fd', fontSize: 12, cursor: 'pointer', textAlign: 'center' }}>
+                  + Build com Dockerfile
+                </button>
+              </div>
             </div>
           )}
 
           {/* STEP 2: Configure */}
-          {step === 2 && (
+          {step === 2 && mode === 'dockerfile' && (
+            <div style={{ display: 'flex', flexDirection: 'column', gap: 14 }}>
+              <div>
+                <label style={{ display: 'block', fontSize: 10, fontWeight: 600, letterSpacing: '0.08em', textTransform: 'uppercase', color: '#64748b', marginBottom: 6 }}>Nome da imagem</label>
+                <input value={buildName} onChange={(e) => setBuildName(e.target.value)}
+                  style={inp} placeholder="minha-app:latest" />
+                <div style={{ fontSize: 10, color: '#475569', marginTop: 4 }}>Ex: minha-api:1.0 ou registry.com/app:latest</div>
+              </div>
+              <div>
+                <label style={{ display: 'block', fontSize: 10, fontWeight: 600, letterSpacing: '0.08em', textTransform: 'uppercase', color: '#64748b', marginBottom: 6 }}>Dockerfile</label>
+                <textarea value={dockerfile} onChange={(e) => setDockerfile(e.target.value)}
+                  rows={12}
+                  style={{ ...inp, fontFamily: 'ui-monospace,monospace', fontSize: 11, lineHeight: 1.6, resize: 'vertical', minHeight: 180 }}
+                  placeholder={'FROM node:20-alpine\nWORKDIR /app\nCOPY package*.json ./\nRUN npm install\nCOPY . .\nEXPOSE 3000\nCMD ["node", "server.js"]'} />
+              </div>
+              {buildLog.length > 0 && (
+                <div style={{ borderRadius: 10, border: '1px solid rgba(255,255,255,0.08)', background: '#050a14', padding: '10px 12px', maxHeight: 150, overflowY: 'auto' }}>
+                  {buildLog.map((line, i) => (
+                    <div key={i} style={{ fontSize: 10, fontFamily: 'ui-monospace,monospace', color: '#94a3b8', lineHeight: 1.7 }}>{line}</div>
+                  ))}
+                </div>
+              )}
+              <button onClick={handleBuildImage} disabled={building || !buildName.trim() || !dockerfile.trim()}
+                style={{ padding: '10px 16px', borderRadius: 10, border: 'none', fontSize: 12, fontWeight: 600, cursor: building ? 'wait' : 'pointer', color: '#fff', background: (building || !buildName.trim() || !dockerfile.trim()) ? 'rgba(255,255,255,0.06)' : 'linear-gradient(135deg,#8b5cf6,#6d28d9)', boxShadow: (building || !buildName.trim() || !dockerfile.trim()) ? 'none' : '0 4px 14px rgba(139,92,246,0.4)', opacity: (building || !buildName.trim() || !dockerfile.trim()) ? 0.4 : 1 }}>
+                {building ? 'Construindo...' : '\ud83d\udd28 Build da Imagem'}
+              </button>
+            </div>
+          )}
+
+          {step === 2 && mode !== 'dockerfile' && (
             <div style={{ display: 'flex', flexDirection: 'column', gap: 14 }}>
               {/* Basic info */}
               <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 10 }}>
@@ -3880,15 +3962,17 @@ const AddServiceModal = ({ onAdd, onClose, stageKey = null }) => {
 
         {/* Footer */}
         <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', borderTop: '1px solid rgba(255,255,255,0.06)', padding: '12px 20px' }}>
-          <button onClick={() => step === 1 ? onClose() : setStep(step - 1)}
+          <button onClick={() => { if (step === 1) onClose(); else { setStep(step - 1); if (step === 2) setMode('catalog') } }}
             style={{ fontSize: 11, color: '#94a3b8', background: 'none', border: 'none', cursor: 'pointer' }}>
             {step === 1 ? 'Cancelar' : '← Voltar'}
           </button>
-          {step < 3 ? (
+          {step < 3 && !(step === 2 && mode === 'dockerfile') ? (
             <button onClick={() => setStep(step + 1)} disabled={step === 2 && !canConfirm}
               style={{ fontSize: 12, fontWeight: 600, color: '#fff', background: (step === 2 && !canConfirm) ? 'rgba(255,255,255,0.06)' : 'linear-gradient(135deg,#3b82f6,#6366f1)', border: 'none', borderRadius: 10, padding: '8px 22px', cursor: (step === 2 && !canConfirm) ? 'default' : 'pointer', boxShadow: (step === 2 && !canConfirm) ? 'none' : '0 4px 14px rgba(59,130,246,0.4)', opacity: (step === 2 && !canConfirm) ? 0.4 : 1 }}>
               Próximo →
             </button>
+          ) : step === 2 && mode === 'dockerfile' ? (
+            <span />
           ) : (
             <button onClick={handleConfirm}
               style={{ fontSize: 12, fontWeight: 600, color: '#fff', background: 'linear-gradient(135deg,#10b981,#059669)', border: 'none', borderRadius: 10, padding: '8px 22px', cursor: 'pointer', boxShadow: '0 4px 14px rgba(16,185,129,0.4)' }}>
