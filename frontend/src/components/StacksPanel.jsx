@@ -2964,10 +2964,11 @@ const ServiceConfigPanel = ({ service, stack, onSave, onDelete, onClose }) => {
     tag:           service.tag      || 'latest',
     command:       service.command  || [],
     // Acesso
-    domainMode:    service.domainMode   || 'subdomain',
+    domainMode:    service.domainMode   || 'none',
     subdomain:     service.subdomain    || '',
     pathPrefix:    service.pathPrefix   || '/',
     exposedPort:   service.exposedPort  || '',
+    bindLocalOnly: service.bindLocalOnly !== false,
     ports:         service.ports        || [],
     // Arquivos de projeto
     projectFiles:  service.projectFiles || [],
@@ -3252,6 +3253,31 @@ const ServiceConfigPanel = ({ service, stack, onSave, onDelete, onClose }) => {
                 <div style={{ textAlign: 'center', padding: '12px 0', fontSize: 11, color: '#334155' }}>Nenhuma porta exposta</div>
               )}
             </div>
+          </div>
+
+          {/* Bind localhost */}
+          <label style={{ display: 'flex', alignItems: 'center', gap: 10, padding: '10px 12px', borderRadius: 10, border: '1px solid rgba(255,255,255,0.07)', background: 'rgba(255,255,255,0.02)', cursor: 'pointer' }}>
+            <input type="checkbox" checked={form.bindLocalOnly} onChange={(e) => upd('bindLocalOnly', e.target.checked)}
+              style={{ width: 16, height: 16, accentColor: '#3b82f6' }} />
+            <div>
+              <div style={{ fontSize: 12, color: '#cbd5e1', fontWeight: 500 }}>Expor apenas em localhost</div>
+              <div style={{ fontSize: 10, color: '#475569', marginTop: 2 }}>Porta acessível apenas internamente (127.0.0.1). Recomendado quando usa proxy reverso.</div>
+            </div>
+          </label>
+
+          {/* Network shortcut */}
+          <div style={{ borderRadius: 10, border: '1px solid rgba(59,130,246,0.2)', background: 'rgba(59,130,246,0.04)', padding: '10px 12px', display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
+            <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+              <GitBranch size={14} style={{ color: '#3b82f6', flexShrink: 0 }} />
+              <div>
+                <div style={{ fontSize: 10, color: '#3b82f6', fontWeight: 600 }}>Rede da Stack</div>
+                <div style={{ fontSize: 12, color: '#93c5fd', fontFamily: 'ui-monospace,monospace', marginTop: 1 }}>{stack?.network || 'bridge'}</div>
+              </div>
+            </div>
+            <button onClick={() => { onClose(); setTimeout(() => document.querySelector('[data-tab="stack-config"]')?.click(), 100) }}
+              style={{ fontSize: 10, color: '#7dd3fc', background: 'rgba(56,189,248,0.08)', border: '1px solid rgba(56,189,248,0.2)', borderRadius: 7, padding: '4px 10px', cursor: 'pointer' }}>
+              Configurar Rede
+            </button>
           </div>
         </>)}
 

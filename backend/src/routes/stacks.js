@@ -42,6 +42,8 @@ const stackManager = new StackManager();
 const composeGenerator = new ComposeGenerator();
 const ComposeParser = require('../services/ComposeParser');
 const composeParser = new ComposeParser();
+const NginxStackIntegration = require('../services/NginxStackIntegration');
+const nginxIntegration = new NginxStackIntegration();
 
 const BLUEPRINTS_PATH = path.join(__dirname, '../../data/blueprints.json');
 const BLUEPRINTS_SEED_PATH = path.join(__dirname, '../data/blueprints-seed.json');
@@ -406,6 +408,20 @@ router.all('/:id/start', async (req, res) => {
 
     const failed = results.filter((r) => r.status === 'error');
     if (failed.length) success = false;
+
+
+    // Auto-configure Nginx if services have access settings
+    if (success) {
+      try {
+        const freshStack = stackManager.getStack(req.params.id);
+        const nginxResult = nginxIntegration.applyForStack(freshStack);
+        if (nginxResult.applied) {
+          send(`🌐 Nginx configurado automaticamente (${nginxResult.results?.length || 0} rota(s))`);
+        }
+      } catch (nginxErr) {
+        send(`⚠️  Nginx: ${nginxErr.message}`);
+      }
+    }
 
     send(`✅ Concluído — ${results.length - failed.length}/${results.length} serviços iniciados`);
     res.write(`data: ${JSON.stringify({ done: true, results })}\n\n`);
