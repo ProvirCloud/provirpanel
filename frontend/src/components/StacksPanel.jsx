@@ -4186,6 +4186,104 @@ const BlueprintLibrary = ({ onSelect, onClose }) => {
   )
 }
 
+
+// ─── Modal de Importar Compose ─────────────────────────────────────────────────
+
+const ImportComposeModal = ({ onImported, onClose }) => {
+  const [content, setContent] = useState("")
+  const [name, setName] = useState("")
+  const [environment, setEnvironment] = useState("production")
+  const [loading, setLoading] = useState(false)
+  const [error, setError] = useState("")
+  const [preview, setPreview] = useState(null)
+
+  const handleFile = (e) => {
+    const file = e.target.files?.[0]
+    if (!file) return
+    const reader = new FileReader()
+    reader.onload = (ev) => setContent(ev.target.result || "")
+    reader.readAsText(file)
+  }
+
+  const handleImport = async () => {
+    if (!content.trim()) { setError("Cole ou carregue um docker-compose.yml"); return }
+    setLoading(true)
+    setError("")
+    try {
+      const res = await api.post("/stacks/import-compose", {
+        content,
+        name: name.trim() || undefined,
+        environment
+      })
+      onImported(res.data)
+    } catch (err) {
+      setError(err.response?.data?.error || err.message || "Erro ao importar")
+    } finally {
+      setLoading(false)
+    }
+  }
+
+  const inp = { width: "100%", borderRadius: 10, border: "1px solid rgba(255,255,255,0.09)", background: "rgba(255,255,255,0.04)", padding: "8px 12px", fontSize: 12, color: "#f1f5f9", outline: "none", boxSizing: "border-box" }
+
+  return (
+    <div style={{ position: "fixed", inset: 0, zIndex: 50, display: "flex", alignItems: "center", justifyContent: "center", background: "rgba(0,0,0,0.65)", backdropFilter: "blur(6px)" }}
+      onMouseDown={(e) => { if (e.target === e.currentTarget) onClose() }}>
+      <div style={{ width: "100%", maxWidth: 600, maxHeight: "90vh", display: "flex", flexDirection: "column", margin: "0 16px", borderRadius: 20, border: "1px solid rgba(255,255,255,0.1)", background: "linear-gradient(160deg,#080f1e,#060c18)", boxShadow: "0 40px 100px rgba(0,0,0,0.8)" }}>
+        <div style={{ padding: "16px 20px", borderBottom: "1px solid rgba(255,255,255,0.06)", display: "flex", alignItems: "center", justifyContent: "space-between" }}>
+          <div>
+            <div style={{ fontSize: 14, fontWeight: 700, color: "#f1f5f9" }}>Importar Docker Compose</div>
+            <div style={{ fontSize: 11, color: "#475569", marginTop: 2 }}>Cole ou carregue um docker-compose.yml para criar uma stack</div>
+          </div>
+          <button onClick={onClose} style={{ background: "rgba(255,255,255,0.06)", border: "1px solid rgba(255,255,255,0.09)", borderRadius: 8, color: "#64748b", cursor: "pointer", padding: "5px 7px", lineHeight: 1, display: "flex" }}>
+            <X size={13} />
+          </button>
+        </div>
+        <div style={{ flex: 1, overflowY: "auto", padding: "16px 20px", display: "flex", flexDirection: "column", gap: 12 }}>
+          <div style={{ display: "grid", gridTemplateColumns: "2fr 1fr", gap: 10 }}>
+            <div>
+              <label style={{ display: "block", fontSize: 10, fontWeight: 600, letterSpacing: "0.08em", textTransform: "uppercase", color: "#64748b", marginBottom: 6 }}>Nome da Stack</label>
+              <input value={name} onChange={(e) => setName(e.target.value)} style={inp} placeholder="Minha Stack (opcional)" />
+            </div>
+            <div>
+              <label style={{ display: "block", fontSize: 10, fontWeight: 600, letterSpacing: "0.08em", textTransform: "uppercase", color: "#64748b", marginBottom: 6 }}>Ambiente</label>
+              <select value={environment} onChange={(e) => setEnvironment(e.target.value)} style={{ ...inp, cursor: "pointer" }}>
+                <option value="production">Produção</option>
+                <option value="staging">Staging</option>
+                <option value="development">Desenvolvimento</option>
+              </select>
+            </div>
+          </div>
+          <div>
+            <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 6 }}>
+              <label style={{ fontSize: 10, fontWeight: 600, letterSpacing: "0.08em", textTransform: "uppercase", color: "#64748b" }}>docker-compose.yml</label>
+              <label style={{ display: "flex", alignItems: "center", gap: 4, cursor: "pointer", fontSize: 10, color: "#7dd3fc", background: "rgba(56,189,248,0.08)", border: "1px solid rgba(56,189,248,0.2)", borderRadius: 7, padding: "3px 9px" }}>
+                <Upload size={10} /> Carregar arquivo
+                <input type="file" accept=".yml,.yaml,.json" style={{ display: "none" }} onChange={handleFile} />
+              </label>
+            </div>
+            <textarea value={content} onChange={(e) => setContent(e.target.value)}
+              rows={14}
+              style={{ ...inp, fontFamily: "ui-monospace,monospace", fontSize: 11, lineHeight: 1.6, resize: "vertical", minHeight: 200 }}
+              placeholder={"version: \"3.8\"\nservices:\n  app:\n    image: node:20-alpine\n    ports:\n      - \"3000:3000\"\n  postgres:\n    image: postgres:16-alpine\n    environment:\n      POSTGRES_PASSWORD: secret"} />
+          </div>
+          {error && (
+            <div style={{ borderRadius: 10, border: "1px solid rgba(239,68,68,0.3)", background: "rgba(239,68,68,0.08)", padding: "10px 12px", fontSize: 12, color: "#fca5a5" }}>
+              {error}
+            </div>
+          )}
+        </div>
+        <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", borderTop: "1px solid rgba(255,255,255,0.06)", padding: "12px 20px" }}>
+          <button onClick={onClose} style={{ fontSize: 11, color: "#475569", background: "none", border: "none", cursor: "pointer" }}>Cancelar</button>
+          <button onClick={handleImport} disabled={loading || !content.trim()}
+            style={{ fontSize: 12, fontWeight: 600, color: "#fff", background: (!content.trim() || loading) ? "rgba(255,255,255,0.06)" : "linear-gradient(135deg,#10b981,#059669)", border: "none", borderRadius: 10, padding: "8px 22px", cursor: (!content.trim() || loading) ? "default" : "pointer", boxShadow: (!content.trim() || loading) ? "none" : "0 4px 14px rgba(16,185,129,0.4)", opacity: (!content.trim() || loading) ? 0.4 : 1 }}>
+            {loading ? "Importando..." : "Importar e Criar Stack"}
+          </button>
+        </div>
+      </div>
+    </div>
+  )
+}
+
 // ─── Modal de Exportar Compose ─────────────────────────────────────────────────
 
 const ComposeModal = ({ stack, onClose }) => {
@@ -4827,6 +4925,9 @@ export default function StacksPanel() {
       {modal === 'compose' && selectedStack && (
         <ComposeModal stack={selectedStack} onClose={() => setModal(null)} />
       )}
+      {modal === 'import-compose' && (
+        <ImportComposeModal onImported={(stack) => { setModal(null); load(); setSelectedStack(stack); addToast(`Stack "${stack.name}" importada com ${stack.services?.length || 0} servi\u00e7os`) }} onClose={() => setModal(null)} />
+      )}
       {modal === 'layman-help' && (
         <LaymanHelpModal model={laymanModel} onClose={() => setModal(null)} />
       )}
@@ -4972,6 +5073,10 @@ export default function StacksPanel() {
                 className="flex items-center gap-2 rounded-xl border border-white/10 bg-white/5 px-4 py-2 text-xs text-slate-300 hover:border-blue-300/20 hover:bg-blue-400/10 hover:text-blue-300">
                 <Layers size={14} /> Blueprints
               </button>
+              <button onClick={() => setModal('import-compose')}
+                className="flex items-center gap-2 rounded-xl border border-white/10 bg-white/5 px-4 py-2 text-xs text-slate-300 hover:border-emerald-300/20 hover:bg-emerald-400/10 hover:text-emerald-300">
+                <Upload size={14} /> Importar Compose
+              </button>
               <button onClick={() => setModal('create')}
                 className="flex items-center gap-2 rounded-xl border border-blue-500/30 bg-blue-500/10 px-4 py-2 text-xs text-blue-300 hover:bg-blue-500/20">
                 <Plus size={14} /> Nova Stack
@@ -5020,6 +5125,10 @@ export default function StacksPanel() {
                 <button onClick={() => setModal('create')}
                   className="flex items-center gap-2 rounded-xl border border-blue-500/30 bg-blue-500/10 px-5 py-2.5 text-xs text-blue-300 hover:bg-blue-500/20">
                   <Plus size={14} /> Criar do Zero
+                </button>
+                <button onClick={() => setModal('import-compose')}
+                  className="flex items-center gap-2 rounded-xl border border-white/10 px-5 py-2.5 text-xs text-slate-300 hover:border-emerald-300/20 hover:text-emerald-300">
+                  <Upload size={14} /> Importar Compose
                 </button>
               </div>
             </div>

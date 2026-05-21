@@ -40,6 +40,8 @@ const { logAction, getSummary, getRecentActions } = require('../middleware/infra
 
 const stackManager = new StackManager();
 const composeGenerator = new ComposeGenerator();
+const ComposeParser = require('../services/ComposeParser');
+const composeParser = new ComposeParser();
 
 const BLUEPRINTS_PATH = path.join(__dirname, '../../data/blueprints.json');
 const BLUEPRINTS_SEED_PATH = path.join(__dirname, '../data/blueprints-seed.json');
@@ -197,6 +199,34 @@ router.post('/:id/import-services', (req, res) => {
 router.get('/blueprints', (req, res) => {
   res.json(readBlueprints());
 });
+
+// ─── Import Docker Compose ─────────────────────────────────────────────────────
+
+router.post("/import-compose", (req, res) => {
+  try {
+    const { content, name, client, environment } = req.body;
+    if (!content) {
+      return res.status(400).json({ error: "content (docker-compose.yml) is required" });
+    }
+    const parsed = composeParser.parse(content, { name, client, environment });
+    const stack = stackManager.createStack(parsed);
+
+    logAction("stack.create", {
+      user: getUser(req),
+      stackId: stack.id,
+      stackName: stack.name,
+      stackEnvironment: stack.environment,
+      client: stack.client,
+      input: { source: "docker-compose-import", serviceCount: stack.services.length },
+      output: { stackId: stack.id, network: stack.network }
+    });
+
+    res.status(201).json(stack);
+  } catch (err) {
+    res.status(400).json({ error: err.message });
+  }
+});
+
 
 // ─── Training Data (AI) ────────────────────────────────────────────────────────
 
