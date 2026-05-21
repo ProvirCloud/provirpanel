@@ -261,6 +261,41 @@ class StackManager {
     return true;
   }
 
+  async deleteStackFull(id) {
+    const stack = this.getStack(id);
+
+    // Stop and remove all containers
+    for (const svc of stack.services) {
+      const ids = Array.isArray(svc.containerIds) && svc.containerIds.length
+        ? svc.containerIds
+        : (svc.containerId ? [svc.containerId] : []);
+      for (const containerId of ids) {
+        try {
+          const container = this.docker.getContainer(containerId);
+          await container.stop().catch(() => {});
+          await container.remove({ force: true });
+        } catch { /* container may not exist */ }
+      }
+    }
+
+    // Remove from stacks.json
+    const stacks = this.readStacks();
+    const idx = stacks.findIndex((s) => s.id === id);
+    if (idx >= 0) {
+      stacks.splice(idx, 1);
+      this.writeStacks(stacks);
+    }
+
+    // Try to remove the network
+    try {
+      const network = this.docker.getNetwork(stack.network);
+      await network.remove();
+    } catch { /* network may not exist or be in use */ }
+
+    return true;
+  }
+
+
   // ─── CRUD de Serviços ──────────────────────────────────────────────────────
 
   addService(stackId, serviceData) {

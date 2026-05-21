@@ -2272,7 +2272,15 @@ router.delete('/services/:id', async (req, res, next) => {
     const services = dockerManager.listServices();
     const service = services.find((s) => s.id === req.params.id);
     if (!service) {
-      return res.status(404).json({ message: 'Service not found' });
+      // Try to find as a container ID directly and remove it
+      try {
+        const container = dockerManager.docker.getContainer(req.params.id);
+        await container.stop().catch(() => {});
+        await container.remove({ force: true });
+        return res.json({ status: "removed" });
+      } catch {
+        return res.status(404).json({ message: "Service not found" });
+      }
     }
     
     // Remove container if exists

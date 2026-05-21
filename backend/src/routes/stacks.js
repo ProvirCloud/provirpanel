@@ -314,10 +314,10 @@ router.put('/:id', (req, res) => {
   }
 });
 
-router.delete('/:id', (req, res) => {
+router.delete('/:id', async (req, res) => {
   try {
     const stack = stackManager.getStack(req.params.id);
-    stackManager.deleteStack(req.params.id);
+    await stackManager.deleteStackFull(req.params.id);
 
     logAction('stack.delete', {
       user: getUser(req),
