@@ -29,7 +29,11 @@ router.get('/configs', (req, res, next) => {
 // Salvar configuração editada
 router.put('/configs/:filename', (req, res, next) => {
   try {
-    const result = nginxManager.saveConfig(req.params.filename, req.body.content);
+    const skipValidation = req.body.skipValidation === true;
+    const result = nginxManager.saveConfig(req.params.filename, req.body.content, { skipValidation });
+    if (!skipValidation && result.valid === false) {
+      return res.status(400).json({ error: result.error || 'Configuracao Nginx invalida (nginx -t falhou)', ...result });
+    }
     res.json(result);
   } catch (err) {
     next(err);

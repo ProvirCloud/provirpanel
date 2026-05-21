@@ -124,8 +124,8 @@ export default function NginxVisualFullPage() {
     return `${domain.replace(/[^a-zA-Z0-9.-]/g, '_')}.conf`
   }
 
-  const saveToBackend = async (filename: string, content: string) => {
-    await api.put(`/nginx/configs/${filename}`, { content })
+  const saveToBackend = async (filename: string, content: string, validate = false) => {
+    await api.put(`/nginx/configs/${filename}`, { content, skipValidation: !validate })
     if (!currentConfigName) setCurrentConfigName(filename)
     // Update available configs list so reload works
     setAvailableConfigs((prev) => {
@@ -148,7 +148,7 @@ export default function NginxVisualFullPage() {
     setSaving(true)
     setSaveError('')
     try {
-      await saveToBackend(filename, generatedConfig)
+      await saveToBackend(filename, generatedConfig, false)
       setSaveStatus('saved')
       setTimeout(() => setSaveStatus('idle'), 3000)
     } catch (err: any) {
@@ -172,7 +172,7 @@ export default function NginxVisualFullPage() {
     setSaving(true)
     setSaveError('')
     try {
-      await saveToBackend(filename, generatedConfig)
+      await saveToBackend(filename, generatedConfig, true)
     } catch (err: any) {
       const msg = err?.response?.data?.error || err?.response?.data?.message || err?.message || 'Erro desconhecido'
       setSaveError(`Erro ao salvar arquivo: ${msg}`)
