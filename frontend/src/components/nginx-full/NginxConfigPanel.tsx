@@ -311,7 +311,7 @@ function RoutePanel({
 
   return (
     <div className="space-y-4">
-      <div className="grid grid-cols-2 gap-3">
+      <div className="grid grid-cols-[1fr_auto_1fr] gap-3">
         <Section label="Path">
           <input
             className={inputCls}
@@ -327,6 +327,20 @@ function RoutePanel({
             }
             placeholder="/rota"
           />
+        </Section>
+        <Section label="Match">
+          <select
+            className={selectCls}
+            value={route.modifier || ''}
+            onChange={(e) => set('modifier', e.target.value as any)}
+            title="Tipo de match do location"
+          >
+            <option value="">prefix</option>
+            <option value="=">= exato</option>
+            <option value="~">~ regex</option>
+            <option value="~*">~* regex (i)</option>
+            <option value="^~">^~ prioridade</option>
+          </select>
         </Section>
         <Section label="Tipo">
           <select

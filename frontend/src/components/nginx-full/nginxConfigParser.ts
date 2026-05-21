@@ -33,13 +33,21 @@ function extractServerBlocks(content: string): string[] {
   return blocks
 }
 
-function extractLocationBlocks(serverContent: string): Array<{ path: string; inner: string }> {
-  const results: Array<{ path: string; inner: string }> = []
+function extractLocationBlocks(serverContent: string): Array<{ path: string; modifier: string; inner: string }> {
+  const results: Array<{ path: string; modifier: string; inner: string }> = []
   let i = 0
   while (i < serverContent.length) {
     const match = /\blocation\s+([^{]+?)\s*\{/.exec(serverContent.slice(i))
     if (!match) break
-    const path = match[1].trim()
+    const raw = match[1].trim()
+    // Parse modifier: =, ~, ~*, ^~
+    let modifier = ''
+    let path = raw
+    const modMatch = /^(=|~\*|~|\^~)\s+(.+)$/.exec(raw)
+    if (modMatch) {
+      modifier = modMatch[1]
+      path = modMatch[2]
+    }
     const openIdx = i + match.index + match[0].length - 1
     let depth = 1
     let j = openIdx + 1
@@ -48,7 +56,7 @@ function extractLocationBlocks(serverContent: string): Array<{ path: string; inn
       else if (serverContent[j] === '}') depth--
       j++
     }
-    results.push({ path, inner: serverContent.slice(openIdx + 1, j - 1) })
+    results.push({ path, modifier, inner: serverContent.slice(openIdx + 1, j - 1) })
     i = j
   }
   return results
@@ -240,20 +248,29 @@ export function parseNginxConfigToState(content: string, filename: string): Ngin
   const locationBlocks = extractLocationBlocks(parseBlock)
   const routes: RouteConfig[] = []
 
-  for (const { path, inner } of locationBlocks) {
-    // Skip pure redirects
-    const isRedirect =
-      /\breturn\s+30[12]\s/.test(inner) &&
-      !/proxy_pass/.test(inner) &&
-      !/\broot\s/.test(inner) &&
-      !/try_files/.test(inner)
-    if (isRedirect) continue
+  for (const { path, modifier, inner } of locationBlocks) {
+    // Detect redirects (return 301/302)
+    const redirectMatch = inner.match(/\breturn\s+(301|302|307|308)\s+([^;]+);/)
+    if (redirectMatch && !/proxy_pass/.test(inner) && !/\broot\s/.test(inner) && !/try_files/.test(inner)) {
+      routes.push({
+        id: `route-${makeId()}`,
+        path,
+        title: path,
+        type: 'redirect',
+        modifier: (modifier || '') as any,
+        redirectCode: Number(redirectMatch[1]) as 301 | 302 | 307 | 308,
+        redirectTo: redirectMatch[2].trim(),
+        headers: [],
+      })
+      continue
+    }
 
     const detection = detectRoute(inner, path, upstreamNames, adhocUpstreams)
     routes.push({
       id: `route-${makeId()}`,
       path,
       title: path,
+      modifier: (modifier || '') as any,
       ...detection,
     })
   }
