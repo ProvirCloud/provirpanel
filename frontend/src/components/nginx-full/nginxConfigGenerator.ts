@@ -1,5 +1,10 @@
 import type { HeaderName, NginxVisualState, RouteConfig, UpstreamConfig } from './nginxVisualConfig'
 
+const locationDirective = (route: RouteConfig) => {
+  const mod = route.modifier || ''
+  return mod ? `${mod} ${route.path}` : route.path
+}
+
 const SECURITY_HEADERS = [
   'add_header X-Frame-Options "SAMEORIGIN" always;',
   'add_header X-Content-Type-Options "nosniff" always;',
@@ -42,7 +47,7 @@ const buildUpstream = (upstream: UpstreamConfig) => {
 }
 
 const buildStaticLocation = (route: RouteConfig) => {
-  const lines = [`    location ${route.path} {`, `        alias ${route.alias || '/var/www/html/'};`]
+  const lines = [`    location ${locationDirective(route)} {`, `        alias ${route.alias || '/var/www/html/'};`]
   if (route.type === 'static-assets') {
     lines.push(`        try_files $uri $uri/ ${route.tryFiles || '=404'};`)
   } else {
@@ -55,10 +60,10 @@ const buildStaticLocation = (route: RouteConfig) => {
 const buildRedirectLocation = (route: RouteConfig) => {
   const code = route.redirectCode || 301
   const target = route.redirectTo || route.path + '/'
-  // Use exact match for clean redirects like /admin -> /admin/
-  const modifier = route.path.endsWith('/') ? '' : '= '
+  const mod = route.modifier || (route.path.endsWith('/') ? '' : '=')
+  const loc = mod ? `${mod} ${route.path}` : route.path
   return [
-    `    location ${modifier}${route.path} {`,
+    `    location ${loc} {`,
     `        return ${code} ${target};`,
     '    }',
   ].join('\n')
@@ -66,7 +71,7 @@ const buildRedirectLocation = (route: RouteConfig) => {
 
 const buildProxyLocation = (route: RouteConfig, upstream: UpstreamConfig) => {
   const lines = [
-    `    location ${route.path} {`,
+    `    location ${locationDirective(route)} {`,
     `        proxy_pass http://${upstream.name};`,
     '        proxy_http_version 1.1;',
     ...buildProxyHeaders(route.headers),

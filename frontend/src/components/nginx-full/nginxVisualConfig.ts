@@ -43,11 +43,14 @@ export type RouteTimeouts = {
   send: number
 }
 
+export type LocationModifier = '' | '=' | '~' | '~*' | '^~'
+
 export type RouteConfig = {
   id: string
   path: string
   title: string
   type: RouteType
+  modifier?: LocationModifier
   upstreamId?: string
   alias?: string
   fallback?: string

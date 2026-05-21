@@ -209,7 +209,7 @@ function GroupColumn({
         <div key={route.id} className={route.disabled && !allDisabled ? 'opacity-40' : ''}>
           {i > 0 && <SiblingConnector />}
           <NginxFlowNode
-            title={route.path}
+            title={route.modifier ? `${route.modifier} ${route.path}` : route.path}
             subtitle={ROUTE_LABELS[route.type]}
             tone={ROUTE_TONES[route.type]}
             icon={ROUTE_ICONS[route.type]}
