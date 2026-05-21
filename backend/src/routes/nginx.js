@@ -29,7 +29,11 @@ router.get('/configs', (req, res, next) => {
 // Salvar configuração editada
 router.put('/configs/:filename', (req, res, next) => {
   try {
-    const result = nginxManager.saveConfig(req.params.filename, req.body.content);
+    const skipValidation = req.body.skipValidation === true;
+    const result = nginxManager.saveConfig(req.params.filename, req.body.content, { skipValidation });
+    if (!skipValidation && result.valid === false) {
+      return res.status(400).json({ error: result.error || 'Configuracao Nginx invalida (nginx -t falhou)', ...result });
+    }
     res.json(result);
   } catch (err) {
     next(err);
@@ -148,7 +152,7 @@ router.post('/reload', (req, res, next) => {
     nginxManager.reload();
     res.json({ success: true });
   } catch (err) {
-    next(err);
+    res.status(500).json({ success: false, error: err.message || 'Falha ao recarregar Nginx' });
   }
 });
 

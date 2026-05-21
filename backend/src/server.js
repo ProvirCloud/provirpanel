@@ -25,6 +25,7 @@ const nginxServersRoutes = require('./routes/nginx-servers');
 const gatewayRoutes = require('./routes/gateway');
 const securityAuditRoutes = require('./routes/security-audit');
 const publicStorageRoutes = require('./routes/public-storage');
+const stacksRoutes = require('./routes/stacks');
 const authMiddleware = require('./middleware/auth');
 const errorHandler = require('./middleware/errorHandler');
 const MetricsCollector = require('./services/MetricsCollector');
@@ -47,7 +48,20 @@ const appendNodeLog = (message) => {
   fs.appendFile(appLogsPath, `${JSON.stringify(entry)}\n`, () => {});
 };
 
-app.use(helmet());
+app.use(helmet({
+  contentSecurityPolicy: {
+    directives: {
+      defaultSrc: ["'self'", 'https:', 'data:'],
+      imgSrc: ["'self'", 'https:', 'data:', 'blob:'],
+      styleSrc: ["'self'", "'unsafe-inline'", 'https:'],
+      scriptSrc: ["'self'", "'unsafe-inline'", 'https:'],
+      connectSrc: ["'self'", 'https:', 'wss:'],
+      mediaSrc: ["'self'", 'https:', 'data:', 'blob:'],
+      frameSrc: ["'self'", 'https:', 'blob:'],
+      frameAncestors: ["'self'"]
+    }
+  }
+}));
 app.use(cors({
   origin: process.env.CORS_ORIGIN || true,
   credentials: true
@@ -77,6 +91,8 @@ app.use('/gateway', authMiddleware, gatewayRoutes);
 app.use('/api/gateway', authMiddleware, gatewayRoutes);
 app.use('/security', authMiddleware, securityAuditRoutes);
 app.use('/api/security', authMiddleware, securityAuditRoutes);
+app.use('/stacks', authMiddleware, stacksRoutes);
+app.use('/api/stacks', authMiddleware, stacksRoutes);
 app.use('/nginx', authMiddleware, nginxServersRoutes);
 app.use('/nginx', authMiddleware, nginxRoutes);
 app.use('/api/nginx', authMiddleware, nginxServersRoutes);

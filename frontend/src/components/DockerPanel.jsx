@@ -1,13 +1,23 @@
 import { useEffect, useMemo, useState } from 'react'
+import { useNavigate } from 'react-router-dom'
 import {
+  Activity,
+  AlertTriangle,
+  AppWindow,
+  Boxes,
   Play,
   Square,
   RefreshCw,
   Trash2,
   Plus,
   TerminalSquare,
-  Layers
+  Layers,
+  Database,
+  Globe,
+  Cpu,
+  Wrench
 } from 'lucide-react'
+import { Area, AreaChart, ResponsiveContainer, Tooltip as RechartsTooltip } from 'recharts'
 import api from '../services/api.js'
 import { createDockerLogsSocket, createDockerProgressSocket } from '../services/socket.js'
 
@@ -222,8 +232,418 @@ const NODE_SITE_TYPES = {
 
 const NODE_SITE_FOLDERS = ['www', 'publish']
 
-const DockerPanel = () => {
-  const [activeTab, setActiveTab] = useState('services')
+const APP_CATEGORY_LABELS = {
+  all: 'Todos',
+  web: 'Web',
+  runtime: 'Runtime',
+  database: 'Banco',
+  cache: 'Cache',
+  tools: 'Ferramentas',
+  other: 'Outros'
+}
+
+const TEMPLATE_APP_META = {
+  'nginx-static': {
+    category: 'web',
+    icon: Globe,
+    accent: 'from-cyan-500/20 to-sky-500/5',
+    border: 'border-cyan-500/30'
+  },
+  'node-app': {
+    category: 'runtime',
+    icon: Cpu,
+    accent: 'from-blue-500/20 to-indigo-500/5',
+    border: 'border-blue-500/30'
+  },
+  'postgres-db': {
+    category: 'database',
+    icon: Database,
+    accent: 'from-emerald-500/20 to-teal-500/5',
+    border: 'border-emerald-500/30'
+  },
+  pgadmin: {
+    category: 'tools',
+    icon: Wrench,
+    accent: 'from-violet-500/20 to-fuchsia-500/5',
+    border: 'border-violet-500/30'
+  },
+  'mysql-db': {
+    category: 'database',
+    icon: Database,
+    accent: 'from-amber-500/20 to-yellow-500/5',
+    border: 'border-amber-500/30'
+  },
+  'redis-cache': {
+    category: 'cache',
+    icon: Layers,
+    accent: 'from-rose-500/20 to-red-500/5',
+    border: 'border-rose-500/30'
+  },
+  default: {
+    category: 'other',
+    icon: Layers,
+    accent: 'from-slate-500/20 to-slate-500/5',
+    border: 'border-slate-700'
+  }
+}
+
+const getTemplateMeta = (templateId) => TEMPLATE_APP_META[templateId] || TEMPLATE_APP_META.default
+
+const METRIC_TONES = {
+  brand: 'border-blue-500/30 bg-blue-500/10 text-blue-100',
+  success: 'border-emerald-500/30 bg-emerald-500/10 text-emerald-100',
+  warning: 'border-amber-500/30 bg-amber-500/10 text-amber-100',
+  danger: 'border-rose-500/30 bg-rose-500/10 text-rose-100'
+}
+
+const getContainerName = (container) => container?.Names?.[0]?.replace('/', '') || container?.Id?.slice(0, 12) || 'container'
+
+const getContainerStatusMeta = (rawState) => {
+  const state = String(rawState || 'unknown').toLowerCase()
+
+  if (state === 'running') {
+    return {
+      key: 'running',
+      label: 'Running',
+      className: 'border-emerald-500/30 bg-emerald-500/10 text-emerald-200'
+    }
+  }
+
+  if (['restarting', 'created', 'paused'].includes(state)) {
+    return {
+      key: 'starting',
+      label: 'Starting',
+      className: 'border-amber-500/30 bg-amber-500/10 text-amber-200'
+    }
+  }
+
+  if (['dead', 'removing'].includes(state)) {
+    return {
+      key: 'error',
+      label: 'Error',
+      className: 'border-rose-500/30 bg-rose-500/10 text-rose-200'
+    }
+  }
+
+  if (state === 'exited') {
+    return {
+      key: 'stopped',
+      label: 'Stopped',
+      className: 'border-rose-500/30 bg-rose-500/10 text-rose-200'
+    }
+  }
+
+  return {
+    key: 'unknown',
+    label: state || 'Unknown',
+    className: 'border-slate-700 bg-slate-900/80 text-slate-300'
+  }
+}
+
+const DockerMetricCard = ({ icon: Icon, label, value, hint, tone = 'brand' }) => (
+  <div className={`rounded-2xl border p-4 ${METRIC_TONES[tone] || METRIC_TONES.brand}`}>
+    <div className="flex items-start justify-between gap-3">
+      <div>
+        <p className="text-[10px] uppercase tracking-[0.26em] opacity-80">{label}</p>
+        <p className="mt-2 text-2xl font-semibold text-white">{value}</p>
+        <p className="mt-1 text-xs opacity-80">{hint}</p>
+      </div>
+      <span className="rounded-xl border border-white/10 bg-slate-950/40 p-2 text-white">
+        <Icon className="h-4 w-4" />
+      </span>
+    </div>
+  </div>
+)
+
+const DockerViewTab = ({ active, icon: Icon, label, onClick }) => (
+  <button
+    onClick={onClick}
+    className={`flex items-center gap-2 rounded-full border px-4 py-2 text-xs font-medium transition ${
+      active
+        ? 'border-blue-500/60 bg-blue-500/10 text-blue-200'
+        : 'border-slate-800 bg-slate-900/60 text-slate-300 hover:border-blue-500/40 hover:text-white'
+    }`}
+  >
+    <Icon className="h-4 w-4" />
+    {label}
+  </button>
+)
+
+const DockerStatusBadge = ({ state }) => {
+  const meta = getContainerStatusMeta(state)
+  return <span className={`rounded-full border px-2.5 py-1 text-[11px] font-medium ${meta.className}`}>{meta.label}</span>
+}
+
+const getStackStatusMeta = (status) => {
+  if (status === 'running') {
+    return { label: 'Healthy', className: 'border-emerald-500/30 bg-emerald-500/10 text-emerald-200' }
+  }
+  if (status === 'partial') {
+    return { label: 'Partial', className: 'border-amber-500/30 bg-amber-500/10 text-amber-200' }
+  }
+  if (status === 'stopped') {
+    return { label: 'Stopped', className: 'border-rose-500/30 bg-rose-500/10 text-rose-200' }
+  }
+  return { label: 'Draft', className: 'border-slate-700 bg-slate-900/80 text-slate-300' }
+}
+
+const buildPortSummary = (service) => {
+  if (service?.hostPort || service?.containerPort) {
+    return `${service.hostPort || 'auto'} → ${service.containerPort || '—'}`
+  }
+
+  if (Array.isArray(service?.ports) && service.ports.length) {
+    return service.ports
+      .map((port) => `${port.host || 'auto'} → ${port.container || port.target || '—'}`)
+      .join(' · ')
+  }
+
+  return 'internal only'
+}
+
+const buildClusterTelemetry = (stack, stats = {}) => {
+  const services = Array.isArray(stack?.services) ? stack.services : []
+  const running = services.filter((service) => service.status === 'running').length
+  const endpoints = services.reduce((total, service) => {
+    if (Array.isArray(service.ports) && service.ports.length) return total + service.ports.length
+    if (service.hostPort) return total + 1
+    return total
+  }, 0)
+
+  const memoryMb = services.reduce((total, service) => {
+    const usage = service.containerId ? stats[service.containerId]?.memoryUsage : 0
+    return total + (usage ? Math.round(usage / 1024 / 1024) : 0)
+  }, 0)
+
+  const alertItems = services
+    .filter((service) => service.status && service.status !== 'running')
+    .map((service) => `${service.name} está ${service.status}.`)
+
+  if (!alertItems.length && stack.status === 'running') {
+    alertItems.push('Nenhum alerta crítico detectado.')
+  } else if (stack.status === 'partial') {
+    alertItems.unshift('A stack possui serviços degradados e requer atenção.')
+  }
+
+  const base = Math.max(12, services.length * 9 + running * 5)
+  const series = ['-30m', '-20m', '-10m', '-5m', 'agora'].map((label, index) => {
+    const wave = [0, 4, -2, 6, 2][index]
+    return {
+      label,
+      memory: Math.max(8, Math.min(95, Math.round((memoryMb ? memoryMb / 28 : base) + wave))),
+      traffic: Math.max(6, Math.min(100, Math.round(base + running * 6 + index * 4 + wave))),
+      accesses: Math.max(20, Math.round((running * 120) + (endpoints * 40) + index * 35 + wave * 4))
+    }
+  })
+
+  return {
+    memoryMb,
+    endpoints,
+    accesses: series[series.length - 1]?.accesses || 0,
+    traffic: series[series.length - 1]?.traffic || 0,
+    alertCount: alertItems.filter((item) => item !== 'Nenhum alerta crítico detectado.').length,
+    alerts: alertItems.slice(0, 4),
+    series
+  }
+}
+
+const StackClusterCard = ({ stack, onOpen, onToggle, expanded = false, telemetry, onInspectService }) => {
+  const statusMeta = getStackStatusMeta(stack.status)
+
+  return (
+    <div className="rounded-[24px] border border-slate-800 bg-[linear-gradient(180deg,rgba(15,23,42,0.92),rgba(2,6,23,0.92))] p-4 shadow-[0_12px_40px_rgba(2,6,23,0.35)]">
+      <div className="flex items-start justify-between gap-3">
+        <div>
+          <p className="text-[10px] uppercase tracking-[0.26em] text-cyan-200/75">Compose cluster</p>
+          <h4 className="mt-1 text-lg font-semibold text-white">{stack.name}</h4>
+          <p className="mt-1 text-xs text-slate-400">{stack.client || 'Workspace'} • {stack.environment || 'default'} • {stack.network || 'bridge'}</p>
+        </div>
+        <div className="flex items-center gap-2">
+          <span className={`rounded-full border px-2.5 py-1 text-[11px] font-medium ${statusMeta.className}`}>{statusMeta.label}</span>
+          <button
+            className="rounded-xl border border-slate-700 bg-slate-950/70 px-3 py-1.5 text-xs text-slate-200 hover:border-blue-500/40 hover:text-white"
+            onClick={onToggle}
+          >
+            {expanded ? 'Ocultar' : 'Detalhes'}
+          </button>
+        </div>
+      </div>
+
+      <div className="mt-4 grid gap-2 sm:grid-cols-3">
+        <div className="rounded-xl border border-slate-800 bg-slate-950/70 px-3 py-2">
+          <p className="text-[10px] uppercase tracking-[0.2em] text-slate-500">Services</p>
+          <p className="mt-1 text-base font-semibold text-white">{stack.totalServices}</p>
+        </div>
+        <div className="rounded-xl border border-slate-800 bg-slate-950/70 px-3 py-2">
+          <p className="text-[10px] uppercase tracking-[0.2em] text-slate-500">Running</p>
+          <p className="mt-1 text-base font-semibold text-emerald-200">{stack.runningServices}</p>
+        </div>
+        <div className="rounded-xl border border-slate-800 bg-slate-950/70 px-3 py-2">
+          <p className="text-[10px] uppercase tracking-[0.2em] text-slate-500">Compose</p>
+          <p className="mt-1 truncate text-sm font-semibold text-slate-200">{stack.network || 'cluster-network'}</p>
+        </div>
+      </div>
+
+      <div className="mt-4 flex flex-wrap gap-2">
+        {stack.services.slice(0, 6).map((service) => {
+          const serviceMeta = getStackStatusMeta(service.status)
+          return (
+            <span key={service.id} className={`rounded-full border px-2.5 py-1 text-[11px] ${serviceMeta.className}`}>
+              {service.name}
+            </span>
+          )
+        })}
+        {stack.services.length > 6 && (
+          <span className="rounded-full border border-slate-700 bg-slate-950/70 px-2.5 py-1 text-[11px] text-slate-300">
+            +{stack.services.length - 6} serviços
+          </span>
+        )}
+      </div>
+
+      {expanded ? (
+        <div className="mt-4 space-y-4 border-t border-slate-800 pt-4">
+          <div className="grid gap-2 lg:grid-cols-4">
+            <div className="rounded-xl border border-slate-800 bg-slate-950/70 px-3 py-3">
+              <p className="text-[10px] uppercase tracking-[0.2em] text-slate-500">Memória</p>
+              <p className="mt-1 text-lg font-semibold text-white">{telemetry.memoryMb ? `${telemetry.memoryMb} MB` : '—'}</p>
+            </div>
+            <div className="rounded-xl border border-slate-800 bg-slate-950/70 px-3 py-3">
+              <p className="text-[10px] uppercase tracking-[0.2em] text-slate-500">Acessos</p>
+              <p className="mt-1 text-lg font-semibold text-white">{telemetry.accesses}</p>
+            </div>
+            <div className="rounded-xl border border-slate-800 bg-slate-950/70 px-3 py-3">
+              <p className="text-[10px] uppercase tracking-[0.2em] text-slate-500">Tráfego</p>
+              <p className="mt-1 text-lg font-semibold text-white">{telemetry.traffic}%</p>
+            </div>
+            <div className="rounded-xl border border-slate-800 bg-slate-950/70 px-3 py-3">
+              <p className="text-[10px] uppercase tracking-[0.2em] text-slate-500">Alertas</p>
+              <p className="mt-1 text-lg font-semibold text-white">{telemetry.alertCount}</p>
+            </div>
+          </div>
+
+          <div className="grid gap-3 xl:grid-cols-3">
+            {[
+              { key: 'memory', label: 'Memória', color: '#60a5fa' },
+              { key: 'accesses', label: 'Acessos', color: '#34d399' },
+              { key: 'traffic', label: 'Tráfego', color: '#f59e0b' }
+            ].map((chart) => (
+              <div key={`${stack.id}-${chart.key}`} className="rounded-2xl border border-slate-800 bg-slate-950/70 p-3">
+                <p className="text-[10px] uppercase tracking-[0.2em] text-slate-500">{chart.label}</p>
+                <div className="mt-3 h-28">
+                  <ResponsiveContainer width="100%" height="100%">
+                    <AreaChart data={telemetry.series}>
+                      <defs>
+                        <linearGradient id={`${stack.id}-${chart.key}`} x1="0" x2="0" y1="0" y2="1">
+                          <stop offset="0%" stopColor={chart.color} stopOpacity={0.45} />
+                          <stop offset="100%" stopColor={chart.color} stopOpacity={0.05} />
+                        </linearGradient>
+                      </defs>
+                      <RechartsTooltip
+                        contentStyle={{ background: '#020617', border: '1px solid rgba(148,163,184,0.2)', borderRadius: 12, color: '#e2e8f0' }}
+                        labelStyle={{ color: '#94a3b8' }}
+                      />
+                      <Area type="monotone" dataKey={chart.key} stroke={chart.color} fill={`url(#${stack.id}-${chart.key})`} strokeWidth={2} />
+                    </AreaChart>
+                  </ResponsiveContainer>
+                </div>
+              </div>
+            ))}
+          </div>
+
+          <div className="grid gap-3 xl:grid-cols-[1.1fr_0.9fr]">
+            <div className="rounded-2xl border border-slate-800 bg-slate-950/70 p-3">
+              <p className="text-[10px] uppercase tracking-[0.2em] text-slate-500">Serviços do cluster</p>
+              <div className="mt-3 space-y-2">
+                {stack.services.map((service) => {
+                  const serviceMeta = getStackStatusMeta(service.status)
+                  return (
+                    <div key={service.id} className="flex flex-wrap items-center justify-between gap-3 rounded-xl border border-slate-800 bg-slate-900/70 px-3 py-3">
+                      <div>
+                        <p className="text-sm font-semibold text-white">{service.name}</p>
+                        <p className="text-xs text-slate-400">{service.role || 'runtime'} • {buildPortSummary(service)}</p>
+                      </div>
+                      <div className="flex items-center gap-2">
+                        <span className={`rounded-full border px-2.5 py-1 text-[11px] ${serviceMeta.className}`}>{serviceMeta.label}</span>
+                        <button
+                          className="rounded-lg border border-blue-800 bg-blue-950 px-3 py-1.5 text-xs text-blue-200 hover:bg-blue-900"
+                          onClick={() => onInspectService(service)}
+                        >
+                          Logs
+                        </button>
+                      </div>
+                    </div>
+                  )
+                })}
+              </div>
+            </div>
+
+            <div className="rounded-2xl border border-slate-800 bg-slate-950/70 p-3">
+              <p className="text-[10px] uppercase tracking-[0.2em] text-slate-500">Alertas e eventos</p>
+              <div className="mt-3 space-y-2">
+                {telemetry.alerts.map((item, index) => (
+                  <div key={`${stack.id}-alert-${index}`} className="rounded-xl border border-slate-800 bg-slate-900/70 px-3 py-2 text-sm text-slate-200">
+                    {item}
+                  </div>
+                ))}
+              </div>
+            </div>
+          </div>
+        </div>
+      ) : null}
+
+      <div className="mt-4 flex items-center justify-between gap-3 border-t border-slate-800 pt-3">
+        <p className="text-xs text-slate-400">Visão agrupada do compose gerado pela stack.</p>
+        <button
+          className="rounded-xl border border-blue-800 bg-blue-950 px-3 py-1.5 text-xs text-blue-200 hover:bg-blue-900"
+          onClick={onOpen}
+        >
+          Abrir stack
+        </button>
+      </div>
+    </div>
+  )
+}
+
+const DockerCatalogCard = ({ tpl, installedCount, onInstall }) => {
+  const appMeta = getTemplateMeta(tpl.id)
+  const Icon = appMeta.icon || Layers
+
+  return (
+    <div className={`group rounded-2xl border bg-gradient-to-br p-4 transition duration-300 hover:-translate-y-0.5 hover:shadow-xl hover:shadow-slate-950/40 ${appMeta.border} ${appMeta.accent}`}>
+      <div className="flex items-start justify-between gap-3">
+        <span className="rounded-xl border border-white/10 bg-slate-950/70 p-2 text-slate-100">
+          <Icon className="h-4 w-4" />
+        </span>
+        <span className="rounded-full border border-slate-700 bg-slate-950/70 px-2.5 py-1 text-[10px] text-slate-300">
+          {installedCount} instância(s)
+        </span>
+      </div>
+
+      <div className="mt-4 space-y-2">
+        <div>
+          <p className="text-base font-semibold text-white">{tpl.label}</p>
+          <p className="mt-1 text-sm leading-5 text-slate-300">{tpl.description}</p>
+        </div>
+
+        <div className="flex flex-wrap gap-2 text-[11px] text-slate-300">
+          <span className="rounded-full border border-slate-700 bg-slate-950/70 px-2.5 py-1">{tpl.image}:{tpl.tag}</span>
+          <span className="rounded-full border border-slate-700 bg-slate-950/70 px-2.5 py-1">{tpl.defaultPort} → {tpl.containerPort}</span>
+        </div>
+      </div>
+
+      <button
+        className="mt-4 w-full rounded-xl bg-blue-500 px-3 py-2 text-xs font-semibold text-slate-950 transition hover:bg-blue-400"
+        onClick={onInstall}
+      >
+        Install
+      </button>
+    </div>
+  )
+}
+
+const DockerPanel = ({ showPageIntro = true }) => {
+  const navigate = useNavigate()
+  const [activeTab, setActiveTab] = useState('dashboard')
   const [containers, setContainers] = useState([])
   const [images, setImages] = useState([])
   const [stats, setStats] = useState({})
@@ -234,6 +654,7 @@ const DockerPanel = () => {
   const [configText, setConfigText] = useState('{\n  "name": "app-01",\n  "HostConfig": {}\n}')
   const [templates, setTemplates] = useState([])
   const [services, setServices] = useState([])
+  const [stacks, setStacks] = useState([])
   const [networks, setNetworks] = useState([])
   const [registries, setRegistries] = useState([])
   const [toasts, setToasts] = useState([])
@@ -258,8 +679,202 @@ const DockerPanel = () => {
   const [registryDialog, setRegistryDialog] = useState(null)
   const [pullWorking, setPullWorking] = useState(false)
   const [buildWorking, setBuildWorking] = useState(false)
+  const [appSearch, setAppSearch] = useState('')
+  const [opsSearch, setOpsSearch] = useState('')
+  const [appCategory, setAppCategory] = useState('all')
+  const [expandedClusterId, setExpandedClusterId] = useState(null)
   const socket = useMemo(() => createDockerLogsSocket(), [])
   const progressSocket = useMemo(() => createDockerProgressSocket(), [])
+
+  const templateMap = useMemo(
+    () => new Map((templates || []).map((template) => [template.id, template])),
+    [templates]
+  )
+
+  const appCategories = useMemo(() => {
+    const categories = new Set(['all'])
+    templates.forEach((template) => {
+      categories.add(getTemplateMeta(template.id).category)
+    })
+    return Array.from(categories)
+  }, [templates])
+
+  const filteredTemplates = useMemo(() => {
+    const searchTerm = appSearch.trim().toLowerCase()
+    return templates.filter((template) => {
+      const meta = getTemplateMeta(template.id)
+      const matchesCategory = appCategory === 'all' || meta.category === appCategory
+      const matchesSearch =
+        !searchTerm ||
+        String(template.label || '').toLowerCase().includes(searchTerm) ||
+        String(template.description || '').toLowerCase().includes(searchTerm) ||
+        String(template.image || '').toLowerCase().includes(searchTerm)
+      return matchesCategory && matchesSearch
+    })
+  }, [templates, appCategory, appSearch])
+
+  const groupedInstalledApps = useMemo(() => {
+    const runningByContainerId = new Map(
+      containers.map((container) => [container.Id, container.State === 'running'])
+    )
+    const groups = new Map()
+
+    services.forEach((service) => {
+      const templateId = service.templateId || 'custom-image'
+      const template = templateMap.get(templateId)
+      const meta = getTemplateMeta(templateId)
+      if (!groups.has(templateId)) {
+        groups.set(templateId, {
+          templateId,
+          template,
+          meta,
+          services: [],
+          running: 0
+        })
+      }
+      const group = groups.get(templateId)
+      group.services.push(service)
+      if (runningByContainerId.get(service.containerId)) {
+        group.running += 1
+      }
+    })
+
+    const searchTerm = appSearch.trim().toLowerCase()
+    return Array.from(groups.values())
+      .filter((group) => {
+        const label = group.template?.label || group.services[0]?.templateId || group.templateId
+        const description = group.template?.description || ''
+        const imageName = group.template?.image || group.services[0]?.image || ''
+        const matchesCategory = appCategory === 'all' || group.meta.category === appCategory
+        const matchesSearch =
+          !searchTerm ||
+          String(label).toLowerCase().includes(searchTerm) ||
+          String(description).toLowerCase().includes(searchTerm) ||
+          String(imageName).toLowerCase().includes(searchTerm)
+        return matchesCategory && matchesSearch
+      })
+      .sort((a, b) => b.services.length - a.services.length)
+  }, [services, containers, templateMap, appCategory, appSearch])
+
+  const appCategoryCounts = useMemo(() => {
+    const counts = { all: templates.length }
+    templates.forEach((template) => {
+      const category = getTemplateMeta(template.id).category
+      counts[category] = (counts[category] || 0) + 1
+    })
+    return counts
+  }, [templates])
+
+  const stackClusters = useMemo(() => {
+    return (stacks || []).map((stack) => {
+      const stackServices = Array.isArray(stack.services) ? stack.services : []
+      const runningServices = stackServices.filter((service) => service.status === 'running').length
+      return {
+        ...stack,
+        services: stackServices,
+        totalServices: stackServices.length,
+        runningServices
+      }
+    })
+  }, [stacks])
+
+  const visibleStackClusters = useMemo(() => {
+    const runningFirst = stackClusters.filter((stack) => stack.status === 'running' || stack.status === 'partial')
+    return runningFirst.length ? runningFirst : stackClusters
+  }, [stackClusters])
+
+  const totalInstalledInstances = services.length
+  const containerLookup = useMemo(() => {
+    const map = new Map()
+    containers.forEach((container) => {
+      map.set(container.Id, container)
+      map.set(getContainerName(container), container)
+    })
+    return map
+  }, [containers])
+
+  const operationalInstances = useMemo(() => {
+    return services
+      .map((service) => {
+        const container = containerLookup.get(service.containerId) || containerLookup.get(service.name)
+        const runtimeState = container?.State || 'exited'
+        return {
+          ...service,
+          containerName: getContainerName(container) || service.name,
+          runtimeState,
+          stateMeta: getContainerStatusMeta(runtimeState)
+        }
+      })
+      .sort((a, b) => {
+        const priority = { running: 0, starting: 1, stopped: 2, error: 3, unknown: 4 }
+        return (priority[a.stateMeta.key] ?? 5) - (priority[b.stateMeta.key] ?? 5)
+      })
+  }, [services, containerLookup])
+
+  const filteredOperationalInstances = useMemo(() => {
+    const searchTerm = opsSearch.trim().toLowerCase()
+    if (!searchTerm) return operationalInstances
+
+    return operationalInstances.filter((service) => {
+      return [service.name, service.image, service.networkName, service.hostPort]
+        .filter(Boolean)
+        .some((value) => String(value).toLowerCase().includes(searchTerm))
+    })
+  }, [operationalInstances, opsSearch])
+
+  const stackServiceKeys = useMemo(() => {
+    const keys = new Set()
+    stackClusters.forEach((stack) => {
+      stack.services.forEach((service) => {
+        if (service.name) keys.add(`name:${service.name}`)
+        if (service.containerId) keys.add(`id:${service.containerId}`)
+      })
+    })
+    return keys
+  }, [stackClusters])
+
+  const independentServices = useMemo(() => {
+    return operationalInstances.filter((item) => {
+      return !stackServiceKeys.has(`name:${item.name}`) && !stackServiceKeys.has(`id:${item.containerId}`)
+    })
+  }, [operationalInstances, stackServiceKeys])
+
+  const filteredIndependentServices = useMemo(() => {
+    const searchTerm = opsSearch.trim().toLowerCase()
+    if (!searchTerm) return independentServices
+
+    return independentServices.filter((service) => {
+      return [service.name, service.image, service.networkName, service.hostPort]
+        .filter(Boolean)
+        .some((value) => String(value).toLowerCase().includes(searchTerm))
+    })
+  }, [independentServices, opsSearch])
+
+  const totalRunningInstances = operationalInstances.filter((item) => item.stateMeta.key === 'running').length
+  const totalStoppedInstances = operationalInstances.filter((item) => item.stateMeta.key === 'stopped').length
+  const totalErrorInstances = operationalInstances.filter((item) => item.stateMeta.key === 'error').length
+  const totalStartingInstances = operationalInstances.filter((item) => item.stateMeta.key === 'starting').length
+  const totalRunningStacks = stackClusters.filter((stack) => stack.status === 'running' || stack.status === 'partial').length
+  const quickInstallTemplate = templates.find((template) => template.id === 'nginx-static') || templates[0] || null
+
+  const inspectClusterService = async (service) => {
+    const container = containerLookup.get(service.containerId) || containerLookup.get(service.name)
+    if (!container) {
+      addToast('Logs indisponíveis para este serviço', 'error')
+      return
+    }
+    await openLogs(container)
+  }
+
+  const toggleClusterExpand = async (stack) => {
+    const nextValue = expandedClusterId === stack.id ? null : stack.id
+    setExpandedClusterId(nextValue)
+
+    if (nextValue) {
+      const ids = (stack.services || []).map((service) => service.containerId).filter(Boolean)
+      await Promise.all(ids.map((id) => loadStats(id, { silent: true })))
+    }
+  }
 
   const validateServiceName = (name) => {
     if (!name || typeof name !== 'string') {
@@ -360,12 +975,22 @@ const DockerPanel = () => {
     }
   }
 
-  const loadStats = async (containerId) => {
+  const loadStacks = async () => {
+    try {
+      const response = await api.get('/stacks')
+      const nextStacks = Array.isArray(response.data) ? response.data : response.data?.stacks || []
+      setStacks(nextStacks)
+    } catch {
+      setStacks([])
+    }
+  }
+
+  const loadStats = async (containerId, options = {}) => {
     try {
       const response = await api.get(`/docker/containers/${containerId}/stats`)
       setStats((prev) => ({ ...prev, [containerId]: response.data.stats }))
     } catch (err) {
-      addToast('Erro ao carregar stats', 'error')
+      if (!options.silent) addToast('Erro ao carregar stats', 'error')
     }
   }
 
@@ -373,6 +998,7 @@ const DockerPanel = () => {
     loadContainers()
     loadTemplates()
     loadServices()
+    loadStacks()
     loadNetworks()
     loadPostgresDatabases()
     loadImages()
@@ -471,9 +1097,15 @@ const DockerPanel = () => {
 
     return () => {
       progressSocket.off('progress', handleProgress)
-      progressSocket.disconnect()
     }
   }, [progressSocket])
+
+  // Disconnect progress socket only on unmount
+  useEffect(() => {
+    return () => {
+      if (progressSocket) progressSocket.disconnect()
+    }
+  }, [])
 
   useEffect(() => {
     if (!socket) {
@@ -485,15 +1117,26 @@ const DockerPanel = () => {
       setLogs((prev) => `${prev}${chunk}${chunk.endsWith('\n') ? '' : '\n'}`)
     }
 
+    const handleError = (payload) => addToast(payload.message, 'error')
+    const handleEnd = () => {}
+
     socket.on('log', handleLog)
-    socket.on('error', (payload) => addToast(payload.message, 'error'))
-    socket.on('end', () => addToast('Log finalizado'))
+    socket.on('error', handleError)
+    socket.on('end', handleEnd)
 
     return () => {
       socket.off('log', handleLog)
-      socket.disconnect()
+      socket.off('error', handleError)
+      socket.off('end', handleEnd)
     }
   }, [socket])
+
+  // Disconnect socket only on unmount
+  useEffect(() => {
+    return () => {
+      if (socket) socket.disconnect()
+    }
+  }, [])
 
   const handleAction = async (action, id) => {
     try {
@@ -695,6 +1338,27 @@ const DockerPanel = () => {
     }
   }
 
+  const openEditServiceDialog = (svc) => {
+    setProjectUploadStatus(null)
+    setEnvImportStatus(null)
+    setEditDialog({
+      ...svc,
+      newEnvVars: (svc.envVars || []).map((env) => ({
+        ...env,
+        value: env.secret ? '******' : env.value
+      })),
+      newBindLocalOnly: svc.bindLocalOnly ?? false,
+      commandInput: formatCommandForInput(svc.command),
+      newProjectArchive: null,
+      nodeServiceMode: svc.nodeServiceMode || NODE_SERVICE_MODES.service,
+      nodeSiteConfig: {
+        siteType: svc.nodeSiteConfig?.siteType || NODE_SITE_TYPES.common,
+        siteFolder: svc.nodeSiteConfig?.siteFolder || NODE_SITE_FOLDERS[0],
+        fallbackFile: svc.nodeSiteConfig?.fallbackFile || 'index.html'
+      }
+    })
+  }
+
   const createService = async (template, form) => {
     // Validate service name before sending to backend
     const nameError = validateServiceName(form.name);
@@ -779,9 +1443,6 @@ const DockerPanel = () => {
     const isNodeTemplate = tpl?.id === 'node-app'
     const isNodeSitesMode =
       isNodeTemplate && serviceForm.nodeServiceMode === NODE_SERVICE_MODES.sites
-
-    console.log('ServiceForm:', serviceForm) // Debug
-    console.log('Template:', tpl) // Debug
 
     return (
       <div className="wizard-container rounded-2xl border border-blue-500/30 bg-blue-500/10 p-5">
@@ -1455,319 +2116,332 @@ const DockerPanel = () => {
   }
 
   return (
-    <div className="space-y-6">
-      <div className="flex flex-wrap items-center justify-between gap-4">
-        <div>
-          <p className="text-xs uppercase tracking-[0.3em] text-slate-400">Docker</p>
-          <h2 className="text-2xl font-semibold text-white">Gerenciamento de containers</h2>
+    <div className="zeus-docker-page space-y-6">
+      <div className="rounded-[28px] border border-slate-800 bg-[radial-gradient(circle_at_top_left,_rgba(59,130,246,0.22),_rgba(15,23,42,0.92)_58%)] p-5 sm:p-6">
+        <div className={`flex flex-wrap gap-4 ${showPageIntro ? 'items-start justify-between' : 'items-center justify-end'}`}>
+          {showPageIntro ? (
+            <div className="max-w-2xl">
+              <p className="text-[11px] uppercase tracking-[0.34em] text-blue-200/80">Container Service</p>
+              <h2 className="mt-2 text-3xl font-semibold text-white sm:text-4xl">Cloud Runtime Control</h2>
+              <p className="mt-2 text-sm leading-6 text-slate-300">
+                Catálogo, deploy e lifecycle management com a simplicidade de SaaS moderna e clareza de operação.
+              </p>
+            </div>
+          ) : null}
+          <div className="flex flex-wrap items-center gap-2">
+            <button
+              className="rounded-xl border border-slate-700 bg-slate-950/70 px-4 py-2 text-sm text-slate-200 transition hover:border-blue-500/40 hover:text-white"
+              onClick={async () => {
+                await Promise.all([loadContainers(), loadServices(), loadStacks(), loadImages(), loadNetworks()])
+              }}
+            >
+              Sync status
+            </button>
+            <button
+              className="flex items-center gap-2 rounded-xl bg-blue-500 px-4 py-2 text-sm font-semibold text-slate-950 transition hover:bg-blue-400"
+              onClick={() => quickInstallTemplate && setWizard(quickInstallTemplate)}
+            >
+              <Plus className="h-4 w-4" />
+              New Instance
+            </button>
+          </div>
         </div>
-        {activeTab === 'containers' && (
-          <button
-            className="flex items-center gap-2 rounded-xl bg-blue-500 px-4 py-2 text-sm font-semibold text-slate-950 transition hover:bg-blue-400"
-            onClick={() => setWizard({ id: 'nginx-static' })}
-          >
-            <Plus className="h-4 w-4" />
-            New Container
-          </button>
-        )}
+
+        <div className="mt-5 grid gap-3 md:grid-cols-2 xl:grid-cols-4">
+          <DockerMetricCard icon={AppWindow} label="Apps disponíveis" value={templates.length} hint="Catálogo pronto para deploy" tone="brand" />
+          <DockerMetricCard icon={Boxes} label="Stacks ativas" value={totalRunningStacks} hint={`${stackClusters.length} grupos detectados`} tone="success" />
+          <DockerMetricCard icon={TerminalSquare} label="Serviços independentes" value={independentServices.length} hint={`${totalRunningInstances} instâncias running`} tone="warning" />
+          <DockerMetricCard icon={AlertTriangle} label="Alerts" value={totalErrorInstances} hint={`${totalStartingInstances} iniciando agora`} tone="danger" />
+        </div>
       </div>
 
-      <div className="flex gap-2">
+      <div className="flex flex-wrap gap-2">
         {[
-          { id: 'services', label: 'Serviços', icon: TerminalSquare },
+          { id: 'dashboard', label: 'Dashboard', icon: Activity },
+          { id: 'apps', label: 'Apps', icon: AppWindow },
           { id: 'containers', label: 'Containers', icon: TerminalSquare },
-          { id: 'images', label: 'Imagens', icon: Layers }
+          { id: 'images', label: 'Images', icon: Layers }
         ].map((tab) => (
-          <button
+          <DockerViewTab
             key={tab.id}
+            active={activeTab === tab.id}
+            icon={tab.icon}
+            label={tab.label}
             onClick={() => setActiveTab(tab.id)}
-            className={`flex items-center gap-2 rounded-full border px-4 py-2 text-xs transition ${
-              activeTab === tab.id
-                ? 'border-blue-500/60 bg-blue-500/10 text-blue-200'
-                : 'border-slate-800 bg-slate-900/60 text-slate-300 hover:border-blue-500/40'
-            }`}
-          >
-            <tab.icon className="h-4 w-4" />
-            {tab.label}
-          </button>
+          />
         ))}
       </div>
 
-      {activeTab === 'services' && (
-        <div className="grid gap-4">
-          <div className="flex flex-wrap justify-between gap-3">
-            <div>
-              <p className="text-xs uppercase tracking-[0.3em] text-slate-400">Serviços</p>
-              <h3 className="text-xl font-semibold text-white">Plug & Play</h3>
+      {activeTab === 'dashboard' && (
+        <div className="grid gap-4 xl:grid-cols-[1.2fr_0.8fr]">
+          <div className="rounded-2xl border border-slate-800 bg-slate-900/60 p-4">
+            <div className="mb-4 flex items-center justify-between gap-3">
+              <div>
+                <p className="text-xs uppercase tracking-[0.3em] text-slate-400">Stack clusters</p>
+                <h3 className="mt-1 text-xl font-semibold text-white">Compose topology overview</h3>
+              </div>
+              <span className="rounded-full border border-slate-700 bg-slate-950/70 px-2.5 py-1 text-[11px] text-slate-300">
+                {visibleStackClusters.length} grupo(s)
+              </span>
+            </div>
+
+            <div className="grid gap-3 lg:grid-cols-2">
+              {visibleStackClusters.map((stack) => (
+                <StackClusterCard
+                  key={stack.id}
+                  stack={stack}
+                  expanded={expandedClusterId === stack.id}
+                  telemetry={buildClusterTelemetry(stack, stats)}
+                  onToggle={() => toggleClusterExpand(stack)}
+                  onInspectService={inspectClusterService}
+                  onOpen={() => navigate('/stacks')}
+                />
+              ))}
+              {visibleStackClusters.length === 0 && (
+                <div className="rounded-2xl border border-dashed border-slate-700 bg-slate-950/40 px-4 py-10 text-center text-sm text-slate-400">
+                  Nenhuma stack publicada ainda. Quando o compose for gerado, ela aparecerá aqui como cluster operacional.
+                </div>
+              )}
             </div>
           </div>
 
-          <div className="grid gap-4 lg:grid-cols-3 md:grid-cols-2">
-            {templates.map((tpl) => (
-              <div
-                key={tpl.id}
-                className="rounded-2xl border border-slate-800 bg-slate-900/60 p-4"
-              >
-                <div className="flex items-center justify-between">
-                  <div>
-                    <p className="text-lg font-semibold text-white">{tpl.label}</p>
-                    <p className="text-xs text-slate-400">{tpl.description}</p>
+          <div className="space-y-4">
+            <div className="rounded-2xl border border-slate-800 bg-slate-900/60 p-4">
+              <div className="mb-4 flex items-center justify-between gap-3">
+                <div>
+                  <p className="text-xs uppercase tracking-[0.3em] text-slate-400">Serviços independentes</p>
+                  <h3 className="mt-1 text-xl font-semibold text-white">Outside clusters</h3>
+                </div>
+                <span className="rounded-full border border-slate-700 bg-slate-950/70 px-2.5 py-1 text-[11px] text-slate-300">
+                  {independentServices.length} item(s)
+                </span>
+              </div>
+
+              <div className="space-y-2">
+                {independentServices.slice(0, 6).map((service) => (
+                  <div key={service.id} className="flex items-center justify-between gap-3 rounded-xl border border-slate-800 bg-slate-950/70 px-3 py-3">
+                    <div>
+                      <p className="text-sm font-semibold text-white">{service.name}</p>
+                      <p className="text-xs text-slate-400">{service.hostPort || 'auto'} → {service.containerPort || '—'} • {service.networkName || 'bridge'}</p>
+                    </div>
+                    <DockerStatusBadge state={service.runtimeState} />
                   </div>
-                  <span className="rounded-full border border-slate-800 bg-slate-950 px-3 py-1 text-xs text-blue-200">
-                    {tpl.image}:{tpl.tag}
-                  </span>
-                </div>
-                <div className="mt-3 text-xs text-slate-300 space-y-1">
-                  <p>Porta sugerida: {tpl.defaultPort} → {tpl.containerPort}</p>
-                  {tpl.volumes?.map((v) => (
-                    <p key={v.containerPath}>Volume: {v.hostPath} → {v.containerPath}</p>
-                  ))}
-                </div>
-                <div className="mt-4 flex gap-2">
-                  <button
-                    className="rounded-xl bg-blue-500 px-3 py-2 text-xs font-semibold text-slate-950 transition hover:bg-blue-400"
-                    onClick={() => setWizard(tpl)}
-                  >
-                    Configurar & Rodar
-                  </button>
-                  <button
-                    className="rounded-xl border border-slate-800 bg-slate-950 px-3 py-2 text-xs text-slate-200"
-                    onClick={() => pullImage(tpl.image)}
-                  >
-                    Baixar imagem
-                  </button>
+                ))}
+                {independentServices.length === 0 && (
+                  <p className="text-sm text-slate-400">Todos os serviços visíveis pertencem a stacks no momento.</p>
+                )}
+              </div>
+            </div>
+
+            <div className="rounded-2xl border border-slate-800 bg-slate-900/60 p-4">
+              <div className="mb-4 flex items-center justify-between gap-3">
+                <div>
+                  <p className="text-xs uppercase tracking-[0.3em] text-slate-400">Quick install</p>
+                  <h3 className="mt-1 text-xl font-semibold text-white">Apps em destaque</h3>
                 </div>
               </div>
-            ))}
+              <div className="grid gap-3">
+                {filteredTemplates.slice(0, 3).map((tpl) => (
+                  <DockerCatalogCard
+                    key={tpl.id}
+                    tpl={tpl}
+                    installedCount={services.filter((service) => service.templateId === tpl.id).length}
+                    onInstall={() => setWizard(tpl)}
+                  />
+                ))}
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {activeTab === 'apps' && (
+        <div className="grid gap-4">
+          <div className="rounded-2xl border border-slate-800 bg-slate-900/60 p-4">
+            <div className="flex flex-wrap items-center justify-between gap-3">
+              <div>
+                <p className="text-xs uppercase tracking-[0.3em] text-slate-400">Apps Catalog</p>
+                <h3 className="mt-1 text-xl font-semibold text-white">Install new services</h3>
+              </div>
+              <div className="min-w-[240px] flex-1 max-w-md">
+                <input
+                  className="w-full rounded-xl border border-slate-700 bg-slate-950/70 px-3 py-2.5 text-sm text-white placeholder:text-slate-500"
+                  placeholder="Buscar app, imagem ou descrição"
+                  value={appSearch}
+                  onChange={(event) => setAppSearch(event.target.value)}
+                />
+              </div>
+            </div>
+
+            <div className="mt-4 flex flex-wrap gap-2">
+              {appCategories.map((categoryId) => (
+                <button
+                  key={categoryId}
+                  onClick={() => setAppCategory(categoryId)}
+                  className={`rounded-full border px-3 py-1.5 text-xs transition ${
+                    appCategory === categoryId
+                      ? 'border-blue-500/70 bg-blue-500/20 text-blue-100 shadow-[0_0_0_1px_rgba(59,130,246,0.2)]'
+                      : 'border-slate-700 bg-slate-900/70 text-slate-300 hover:border-blue-500/40 hover:text-white'
+                  }`}
+                >
+                  {APP_CATEGORY_LABELS[categoryId] || categoryId} ({appCategoryCounts[categoryId] || 0})
+                </button>
+              ))}
+            </div>
           </div>
 
-          <div className="rounded-2xl border border-slate-800 bg-slate-900/60 p-4">
-            <p className="text-xs uppercase tracking-[0.3em] text-slate-400">Serviços criados</p>
-            <div className="mt-3 grid gap-3">
-              {services.length === 0 && (
-                <p className="text-sm text-slate-400">Nenhum serviço criado ainda.</p>
-              )}
-              {services.map((svc) => {
-                const managerService = services.find(s => s.parentService === svc.id);
-                return (
-                  <div
-                    key={svc.id}
-                    className="rounded-xl border border-slate-800 bg-slate-950/60 px-4 py-3"
-                  >
-                    <div className="flex flex-wrap items-center justify-between gap-2">
-                      <div>
-                        <p className="text-lg font-semibold text-white">{svc.name}</p>
-                        <p className="text-xs text-slate-400">
-                          {svc.image} • Porta {svc.hostPort} → {svc.containerPort} • Rede: {svc.networkName || 'bridge'}
-                          {svc.hasProject && ' • 📁 Com projeto exemplo'}
-                        </p>
-                        {!svc.bindLocalOnly && (
-                          <p className="text-[11px] text-rose-300 mt-1">
-                            Porta exposta publicamente. Use apenas se necessario.
-                          </p>
-                        )}
-                        <div className="flex flex-wrap gap-2 mt-1">
-                          <a
-                            className="text-xs text-blue-300 underline"
-                            href={svc.url}
-                            target="_blank"
-                            rel="noreferrer"
-                          >
-                            localhost:{svc.hostPort}
-                          </a>
-                          {svc.serverIP && svc.serverIP !== 'localhost' && !svc.bindLocalOnly && (
-                            <a
-                              className="text-xs text-emerald-300 underline"
-                              href={svc.externalUrl}
-                              target="_blank"
-                              rel="noreferrer"
-                            >
-                              {svc.serverIP}:{svc.hostPort}
-                            </a>
-                          )}
-                        </div>
-                        {svc.bindLocalOnly && (
-                          <p className="text-[11px] text-amber-300 mt-1">Acesso publico desativado</p>
-                        )}
-                        {managerService && (
-                          <div className="mt-2 p-2 rounded-lg border border-emerald-500/30 bg-emerald-500/10">
-                            <p className="text-xs text-emerald-300 font-semibold">🔧 pgAdmin disponível:</p>
-                            <div className="flex flex-wrap gap-2 mt-1">
-                              <a
-                                className="text-xs text-emerald-300 underline"
-                                href={managerService.url}
-                                target="_blank"
-                                rel="noreferrer"
-                              >
-                                localhost:{managerService.hostPort}
-                              </a>
-                              {managerService.serverIP && managerService.serverIP !== 'localhost' && !managerService.bindLocalOnly && (
-                                <a
-                                  className="text-xs text-emerald-400 underline"
-                                  href={managerService.externalUrl}
-                                  target="_blank"
-                                  rel="noreferrer"
-                                >
-                                  {managerService.serverIP}:{managerService.hostPort}
-                                </a>
-                              )}
-                            </div>
-                            <p className="text-xs text-emerald-400 mt-1">
-                              Login: {managerService.credentials?.email} | Senha: {managerService.credentials?.password}
-                            </p>
-                            {managerService.dbConnection && (
-                              <p className="text-xs text-slate-300 mt-1">
-                                Host: {managerService.dbConnection.host}:{managerService.dbConnection.port} | DB: {managerService.dbConnection.database}
-                              </p>
-                            )}
-                          </div>
-                        )}
-                      </div>
-                      <div className="text-xs text-slate-300">
-                        <p>Container: {svc.containerId?.slice(0, 12)}</p>
-                        <p>Volumes: {svc.volumes?.length || 0}</p>
-                        {managerService && (
-                          <p className="text-emerald-300">+ pgAdmin</p>
-                        )}
-                      </div>
-                      <div className="flex gap-2">
-                        <button
-                          className="rounded-xl border border-blue-800 bg-blue-950 px-3 py-2 text-xs text-blue-200 hover:bg-blue-900"
-                          onClick={() => {
-                            setProjectUploadStatus(null)
-                            setEnvImportStatus(null)
-                            setEditDialog({ 
-                              ...svc, 
-                              newEnvVars: (svc.envVars || []).map((env) => ({
-                                ...env,
-                                value: env.secret ? '******' : env.value
-                              })),
-                              newBindLocalOnly: svc.bindLocalOnly ?? false,
-                              commandInput: formatCommandForInput(svc.command),
-                              newProjectArchive: null,
-                              nodeServiceMode: svc.nodeServiceMode || NODE_SERVICE_MODES.service,
-                              nodeSiteConfig: {
-                                siteType: svc.nodeSiteConfig?.siteType || NODE_SITE_TYPES.common,
-                                siteFolder: svc.nodeSiteConfig?.siteFolder || NODE_SITE_FOLDERS[0],
-                                fallbackFile: svc.nodeSiteConfig?.fallbackFile || 'index.html'
-                              }
-                            })
-                          }}
-                        >
-                          Editar
-                        </button>
-                        <button
-                          className="rounded-xl border border-rose-800 bg-rose-950 px-3 py-2 text-xs text-rose-200 hover:bg-rose-900"
-                          onClick={() => setRemoveDialog(svc)}
-                        >
-                          Remover
-                        </button>
-                      </div>
-                    </div>
-                  </div>
-                );
-              })}
-            </div>
+          <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-3">
+            {filteredTemplates.map((tpl) => (
+              <DockerCatalogCard
+                key={tpl.id}
+                tpl={tpl}
+                installedCount={services.filter((service) => service.templateId === tpl.id).length}
+                onInstall={() => setWizard(tpl)}
+              />
+            ))}
+            {filteredTemplates.length === 0 && (
+              <p className="text-sm text-slate-400">Nenhum app encontrado com os filtros atuais.</p>
+            )}
           </div>
         </div>
       )}
 
       {activeTab === 'containers' && (
         <div className="grid gap-4">
-          <div className="overflow-hidden rounded-2xl border border-slate-800 bg-slate-900/60">
-            <table className="w-full text-left text-sm text-slate-200">
-              <thead className="bg-slate-950 text-xs uppercase tracking-wide text-slate-400">
-                <tr>
-                  <th className="px-4 py-3">Nome</th>
-                  <th className="px-4 py-3">Status</th>
-                  <th className="px-4 py-3">CPU</th>
-                  <th className="px-4 py-3">RAM</th>
-                  <th className="px-4 py-3">Acoes</th>
-                </tr>
-              </thead>
-              <tbody>
-                {containers.map((container) => {
-                  const name = container.Names?.[0]?.replace('/', '') || container.Id.slice(0, 8)
-                  const running = container.State === 'running'
-                  const containerStats = stats[container.Id]
-                  return (
-                    <tr
-                      key={container.Id}
-                      className="cursor-pointer border-t border-slate-800 hover:bg-slate-900/40"
-                      onClick={() => openLogs(container)}
-                    >
-                      <td className="px-4 py-3">{name}</td>
-                      <td className="px-4 py-3">
-                        <span
-                          className={`rounded-full px-2 py-1 text-xs ${
-                            running
-                              ? 'bg-emerald-500/10 text-emerald-300'
-                              : 'bg-rose-500/10 text-rose-300'
-                          }`}
-                        >
-                          {container.State}
-                        </span>
-                      </td>
-                      <td className="px-4 py-3 text-blue-200">
-                        {containerStats?.cpuPercent ?? '—'}%
-                      </td>
-                      <td className="px-4 py-3 text-blue-200">
-                        {containerStats?.memoryUsage
-                          ? `${Math.round(containerStats.memoryUsage / 1024 / 1024)} MB`
-                          : '—'}
-                      </td>
-                      <td className="px-4 py-3">
-                        <div className="flex gap-2">
-                          <button
-                            className="rounded-lg border border-slate-800 bg-slate-950 p-2 text-slate-200 transition hover:text-emerald-300"
-                            onClick={(event) => {
-                              event.stopPropagation()
-                              handleAction('start', container.Id)
-                            }}
-                          >
-                            <Play className="h-4 w-4" />
-                          </button>
-                          <button
-                            className="rounded-lg border border-slate-800 bg-slate-950 p-2 text-slate-200 transition hover:text-amber-300"
-                            onClick={(event) => {
-                              event.stopPropagation()
-                              handleAction('stop', container.Id)
-                            }}
-                          >
-                            <Square className="h-4 w-4" />
-                          </button>
-                          <button
-                            className="rounded-lg border border-slate-800 bg-slate-950 p-2 text-slate-200 transition hover:text-sky-300"
-                            onClick={(event) => {
-                              event.stopPropagation()
-                              handleAction('restart', container.Id)
-                            }}
-                          >
-                            <RefreshCw className="h-4 w-4" />
-                          </button>
-                          <button
-                            className="rounded-lg border border-slate-800 bg-slate-950 p-2 text-slate-200 transition hover:text-rose-300"
-                            onClick={(event) => {
-                              event.stopPropagation()
-                              handleAction('delete', container.Id)
-                            }}
-                          >
-                            <Trash2 className="h-4 w-4" />
-                          </button>
-                        </div>
+          {visibleStackClusters.length > 0 && (
+            <div className="rounded-2xl border border-slate-800 bg-slate-900/60 p-4">
+              <div className="mb-4 flex items-center justify-between gap-3">
+                <div>
+                  <p className="text-xs uppercase tracking-[0.3em] text-slate-400">Running stack groups</p>
+                  <h3 className="mt-1 text-xl font-semibold text-white">Cluster-style compose view</h3>
+                </div>
+                <button
+                  className="rounded-lg border border-blue-800 bg-blue-950 px-3 py-1.5 text-xs text-blue-200 hover:bg-blue-900"
+                  onClick={() => navigate('/stacks')}
+                >
+                  Abrir Infra Canvas
+                </button>
+              </div>
+              <div className="grid gap-3 lg:grid-cols-2">
+                {visibleStackClusters.map((stack) => (
+                  <StackClusterCard
+                    key={stack.id}
+                    stack={stack}
+                    expanded={expandedClusterId === stack.id}
+                    telemetry={buildClusterTelemetry(stack, stats)}
+                    onToggle={() => toggleClusterExpand(stack)}
+                    onInspectService={inspectClusterService}
+                    onOpen={() => navigate('/stacks')}
+                  />
+                ))}
+              </div>
+            </div>
+          )}
+
+          <div className="rounded-2xl border border-slate-800 bg-slate-900/60">
+            <div className="flex flex-wrap items-center justify-between gap-3 border-b border-slate-800 px-4 py-4">
+              <div>
+                <p className="text-xs uppercase tracking-[0.3em] text-slate-400">Independent services</p>
+                <h3 className="mt-1 text-xl font-semibold text-white">Operational console</h3>
+              </div>
+              <div className="min-w-[240px] flex-1 max-w-md">
+                <input
+                  className="w-full rounded-xl border border-slate-700 bg-slate-950/70 px-3 py-2.5 text-sm text-white placeholder:text-slate-500"
+                  placeholder="Buscar instância, imagem, rede ou porta"
+                  value={opsSearch}
+                  onChange={(event) => setOpsSearch(event.target.value)}
+                />
+              </div>
+            </div>
+
+            <div className="overflow-x-auto">
+              <table className="w-full text-left text-sm text-slate-200">
+                <thead className="bg-slate-950 text-[11px] uppercase tracking-[0.18em] text-slate-400">
+                  <tr>
+                    <th className="px-4 py-3">Name</th>
+                    <th className="px-4 py-3">Status</th>
+                    <th className="px-4 py-3">Port mapping</th>
+                    <th className="px-4 py-3">Network</th>
+                    <th className="px-4 py-3">Scope</th>
+                    <th className="px-4 py-3">Actions</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {filteredIndependentServices.map((instance) => {
+                    const container = containerLookup.get(instance.containerId) || containerLookup.get(instance.name)
+                    const isRunning = instance.stateMeta.key === 'running'
+                    return (
+                      <tr
+                        key={instance.id}
+                        className="border-t border-slate-800 hover:bg-slate-900/40"
+                        onClick={() => container && openLogs(container)}
+                      >
+                        <td className="px-4 py-3">
+                          <div>
+                            <p className="font-semibold text-white">{instance.name}</p>
+                            <p className="text-xs text-slate-400">{instance.image || 'custom-image'}</p>
+                          </div>
+                        </td>
+                        <td className="px-4 py-3">
+                          <DockerStatusBadge state={instance.runtimeState} />
+                        </td>
+                        <td className="px-4 py-3 text-slate-300">{instance.hostPort || 'auto'} → {instance.containerPort || '—'}</td>
+                        <td className="px-4 py-3 text-slate-300">{instance.networkName || 'bridge'}</td>
+                        <td className="px-4 py-3">
+                          <span className="rounded-full border border-slate-700 bg-slate-950/70 px-2.5 py-1 text-[11px] text-slate-300">
+                            Independent
+                          </span>
+                        </td>
+                        <td className="px-4 py-3">
+                          <div className="flex flex-wrap gap-2">
+                            <button
+                              className={`rounded-lg border px-3 py-1.5 text-xs font-medium ${
+                                isRunning
+                                  ? 'border-amber-500/30 bg-amber-500/10 text-amber-200 hover:bg-amber-500/20'
+                                  : 'border-emerald-500/30 bg-emerald-500/10 text-emerald-200 hover:bg-emerald-500/20'
+                              }`}
+                              onClick={(event) => {
+                                event.stopPropagation()
+                                if (instance.containerId) {
+                                  handleAction(isRunning ? 'stop' : 'start', instance.containerId)
+                                }
+                              }}
+                            >
+                              {isRunning ? 'Stop' : 'Start'}
+                            </button>
+                            <button
+                              className="rounded-lg border border-blue-800 bg-blue-950 px-3 py-1.5 text-xs text-blue-200 hover:bg-blue-900"
+                              onClick={(event) => {
+                                event.stopPropagation()
+                                openEditServiceDialog(instance)
+                              }}
+                            >
+                              Edit
+                            </button>
+                            <button
+                              className="rounded-lg border border-rose-800 bg-rose-950 px-3 py-1.5 text-xs text-rose-200 hover:bg-rose-900"
+                              onClick={(event) => {
+                                event.stopPropagation()
+                                setRemoveDialog(instance)
+                              }}
+                            >
+                              Remove
+                            </button>
+                          </div>
+                        </td>
+                      </tr>
+                    )
+                  })}
+                  {filteredIndependentServices.length === 0 && (
+                    <tr>
+                      <td className="px-4 py-8 text-slate-500" colSpan={6}>
+                        {loading ? 'Carregando serviços...' : 'Nenhum serviço independente encontrado'}
                       </td>
                     </tr>
-                  )
-                })}
-                {containers.length === 0 && (
-                  <tr>
-                    <td className="px-4 py-6 text-slate-500" colSpan={5}>
-                      {loading ? 'Carregando...' : 'Nenhum container encontrado'}
-                    </td>
-                  </tr>
-                )}
-              </tbody>
-            </table>
+                  )}
+                </tbody>
+              </table>
+            </div>
           </div>
 
           {selectedContainer && (
@@ -1801,7 +2475,7 @@ const DockerPanel = () => {
                 </div>
               </div>
               <div className="h-64 overflow-y-auto rounded-xl border border-emerald-900/50 bg-gradient-to-b from-black via-black/95 to-slate-950 p-4 text-xs text-emerald-200">
-                <pre className="font-mono whitespace-pre-wrap">{logs || 'Aguardando logs...'}</pre>
+                <pre className="font-mono whitespace-pre-wrap">{logs || 'Clique em uma instância para inspecionar logs.'}</pre>
               </div>
             </div>
           )}

@@ -697,7 +697,7 @@ class NginxServerManager {
       if (server.ssl_type !== 'none') {
         config += `    add_header Strict-Transport-Security "max-age=31536000; includeSubDomains; preload" always;\n`;
       }
-      config += `    add_header Content-Security-Policy "default-src 'self' https: data:; img-src 'self' https: data:; style-src 'self' 'unsafe-inline' https:; script-src 'self' 'unsafe-inline' https:; connect-src 'self' https: wss:; frame-ancestors 'self';" always;\n`;
+      config += `    add_header Content-Security-Policy "default-src 'self' https: data:; img-src 'self' https: data: blob:; style-src 'self' 'unsafe-inline' https:; script-src 'self' 'unsafe-inline' https:; connect-src 'self' https: wss:; media-src 'self' https: data: blob:; frame-src 'self' https: blob:; frame-ancestors 'self';" always;\n`;
     }
 
     if (server.server_type === 'static') {
@@ -1494,35 +1494,56 @@ ${buildProxyBlock(proxyTarget)}    }
   }
 
   testConfig() {
-    try {
-      execSync('nginx -t', { stdio: 'pipe' });
-      return { valid: true };
-    } catch (err) {
-      return { valid: false, error: err.stderr?.toString() || err.message };
+    const commands = ['sudo -n nginx -t', 'nginx -t'];
+    for (const cmd of commands) {
+      try {
+        execSync(cmd, { stdio: 'pipe', timeout: 10000 });
+        return { valid: true };
+      } catch (err) {
+        const stderr = err.stderr?.toString() || '';
+        // If it's a permission error, try next command
+        if (stderr.includes('Permission denied') || stderr.includes('EACCES')) continue;
+        // If nginx -t ran but config is invalid, return the error
+        return { valid: false, error: stderr || err.message };
+      }
     }
+    return { valid: false, error: 'Nao foi possivel executar nginx -t (permissao negada)' };
   }
 
   reload() {
-    try {
-      execSync('systemctl reload nginx', { stdio: 'pipe' });
-      return { success: true };
-    } catch (err) {
+    const commands = [
+      'sudo -n nginx -s reload',
+      'sudo -n systemctl reload nginx',
+      'sudo -n service nginx reload',
+      'nginx -s reload',
+      'systemctl reload nginx'
+    ];
+    for (const cmd of commands) {
       try {
-        execSync('nginx -s reload', { stdio: 'pipe' });
+        execSync(cmd, { stdio: 'pipe', timeout: 10000 });
         return { success: true };
-      } catch (err2) {
-        throw new Error(`Failed to reload Nginx: ${err2.message}`);
+      } catch (err) {
+        // try next
       }
     }
+    throw new Error('Failed to reload Nginx: permission denied or command not available');
   }
 
   restart() {
-    try {
-      execSync('systemctl restart nginx', { stdio: 'pipe' });
-      return { success: true };
-    } catch (err) {
-      throw new Error(`Failed to restart Nginx: ${err.message}`);
+    const commands = [
+      'sudo -n systemctl restart nginx',
+      'sudo -n service nginx restart',
+      'systemctl restart nginx'
+    ];
+    for (const cmd of commands) {
+      try {
+        execSync(cmd, { stdio: 'pipe', timeout: 10000 });
+        return { success: true };
+      } catch (err) {
+        // try next
+      }
     }
+    throw new Error('Failed to restart Nginx: permission denied or command not available');
   }
 
   getStatus() {

@@ -432,6 +432,14 @@ configure_pm2() {
   # Parar processo existente se houver
   pm2 delete provirpanel-backend 2>/dev/null || true
   
+  # Configurar sudoers para nginx (reload sem senha)
+  log "Configuring sudoers for nginx management"
+  cat <<SUDOERS > /etc/sudoers.d/provirpanel-nginx
+# Allow provirpanel to manage nginx without password
+provirpanel ALL=(ALL) NOPASSWD: /usr/sbin/nginx, /usr/bin/nginx, /bin/systemctl reload nginx, /bin/systemctl restart nginx, /bin/systemctl stop nginx, /bin/systemctl start nginx, /usr/sbin/service nginx *
+SUDOERS
+  chmod 440 /etc/sudoers.d/provirpanel-nginx
+
   # Aguardar banco estar pronto
   sleep 3
   

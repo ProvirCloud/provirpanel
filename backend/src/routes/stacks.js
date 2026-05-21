@@ -349,7 +349,11 @@ router.post('/:id/sync', async (req, res) => {
 
 // ─── Start / Stop Stack (Server-Sent Events para progresso) ───────────────────
 
+<<<<<<< HEAD
 router.all('/:id/start', async (req, res) => {
+=======
+router.post('/:id/start', async (req, res) => {
+>>>>>>> 9ded154d7a310dc316d1d63cc8376a8dfae7d42f
   res.setHeader('Content-Type', 'text/event-stream');
   res.setHeader('Cache-Control', 'no-cache');
   res.setHeader('Connection', 'keep-alive');
@@ -388,7 +392,11 @@ router.all('/:id/start', async (req, res) => {
   res.end();
 });
 
+<<<<<<< HEAD
 router.all('/:id/stop', async (req, res) => {
+=======
+router.post('/:id/stop', async (req, res) => {
+>>>>>>> 9ded154d7a310dc316d1d63cc8376a8dfae7d42f
   res.setHeader('Content-Type', 'text/event-stream');
   res.setHeader('Cache-Control', 'no-cache');
   res.setHeader('Connection', 'keep-alive');
@@ -535,7 +543,11 @@ router.delete('/:id/services/:svcId', (req, res) => {
 
 // ─── Start / Stop / Restart de Serviço Individual (SSE) ───────────────────────
 
+<<<<<<< HEAD
 router.all('/:id/services/:svcId/start', async (req, res) => {
+=======
+router.post('/:id/services/:svcId/start', async (req, res) => {
+>>>>>>> 9ded154d7a310dc316d1d63cc8376a8dfae7d42f
   res.setHeader('Content-Type', 'text/event-stream');
   res.setHeader('Cache-Control', 'no-cache');
   res.setHeader('Connection', 'keep-alive');

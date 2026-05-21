@@ -7,14 +7,6 @@ log() {
   printf "\n[update] %s\n" "$1"
 }
 
-run_as_root() {
-  if [[ "${EUID}" -eq 0 ]]; then
-    "$@"
-  else
-    sudo "$@"
-  fi
-}
-
 ensure_env_var() {
   local file="$1"
   local key="$2"
@@ -32,15 +24,15 @@ install_certbot() {
   fi
 
   if command -v apt-get >/dev/null 2>&1; then
-    run_as_root apt-get update -y
-    run_as_root apt-get install -y certbot python3-certbot-nginx || run_as_root apt-get install -y certbot || true
+    apt-get update -y
+    apt-get install -y certbot python3-certbot-nginx || apt-get install -y certbot || true
   elif command -v dnf >/dev/null 2>&1; then
-    run_as_root dnf install -y certbot python3-certbot-nginx || run_as_root dnf install -y certbot || true
+    dnf install -y certbot python3-certbot-nginx || dnf install -y certbot || true
   elif command -v yum >/dev/null 2>&1; then
-    run_as_root yum install -y certbot python3-certbot-nginx || run_as_root yum install -y certbot || true
+    yum install -y certbot python3-certbot-nginx || yum install -y certbot || true
   elif command -v zypper >/dev/null 2>&1; then
-    run_as_root zypper refresh
-    run_as_root zypper install -y certbot python3-certbot-nginx || run_as_root zypper install -y certbot || true
+    zypper refresh
+    zypper install -y certbot python3-certbot-nginx || zypper install -y certbot || true
   fi
 
   if command -v certbot >/dev/null 2>&1; then
@@ -49,6 +41,67 @@ install_certbot() {
     log "Aviso: nao foi possivel instalar o Certbot automaticamente"
   fi
 }
+
+configure_sudoers() {
+  log "Configurando sudoers para nginx"
+  cat <<'SUDOERS' > /etc/sudoers.d/provirpanel-nginx
+# Allow provirpanel to manage nginx without password
+provirpanel ALL=(ALL) NOPASSWD: /usr/sbin/nginx, /usr/bin/nginx, /bin/systemctl reload nginx, /bin/systemctl restart nginx, /bin/systemctl stop nginx, /bin/systemctl start nginx, /usr/sbin/service nginx *
+SUDOERS
+  chmod 440 /etc/sudoers.d/provirpanel-nginx
+}
+
+configure_nginx_permissions() {
+  log "Configurando permissoes do Nginx para o backend"
+
+  # O backend (provirpanel) precisa escrever configs diretamente
+  if [[ -d /etc/nginx/sites-available ]]; then
+    chown -R root:provirpanel /etc/nginx/sites-available
+    chmod -R 775 /etc/nginx/sites-available
+  fi
+  if [[ -d /etc/nginx/sites-enabled ]]; then
+    chown -R root:provirpanel /etc/nginx/sites-enabled
+    chmod -R 775 /etc/nginx/sites-enabled
+  fi
+  if [[ -d /etc/nginx/conf.d ]]; then
+    chown -R root:provirpanel /etc/nginx/conf.d
+    chmod -R 775 /etc/nginx/conf.d
+  fi
+
+  # Diretório de backups
+  mkdir -p /etc/nginx/provirpanel-backups
+  chown provirpanel:provirpanel /etc/nginx/provirpanel-backups
+  chmod 755 /etc/nginx/provirpanel-backups
+
+  # SSL storage
+  mkdir -p /etc/nginx/ssl
+  chown root:provirpanel /etc/nginx/ssl
+  chmod 775 /etc/nginx/ssl
+}
+
+test_and_reload_nginx() {
+  log "Testando configuracao do Nginx"
+  if nginx -t 2>&1; then
+    log "Nginx config OK, recarregando"
+    nginx -s reload 2>/dev/null || systemctl reload nginx 2>/dev/null || true
+  else
+    log "AVISO: Nginx config invalida, reload ignorado"
+  fi
+}
+
+seed_blueprints() {
+  local data_dir="${INSTALL_DIR}/backend/data"
+  local seed_file="${INSTALL_DIR}/backend/src/data/blueprints-seed.json"
+  local target_file="${data_dir}/blueprints.json"
+
+  if [[ ! -f "${target_file}" ]] && [[ -f "${seed_file}" ]]; then
+    log "Criando blueprints.json a partir do seed"
+    mkdir -p "${data_dir}"
+    cp "${seed_file}" "${target_file}"
+  fi
+}
+
+# ─── Main ──────────────────────────────────────────────────────────────────────
 
 log "Atualizando ProvirPanel"
 
@@ -61,15 +114,15 @@ cd "${INSTALL_DIR}"
 
 log "Verificando dependencias de extracao"
 if command -v apt-get >/dev/null 2>&1; then
-  run_as_root apt-get update -y
-  run_as_root apt-get install -y unzip tar
+  apt-get update -y
+  apt-get install -y unzip tar build-essential python3
 elif command -v dnf >/dev/null 2>&1; then
-  run_as_root dnf install -y unzip tar
+  dnf install -y unzip tar gcc gcc-c++ make python3
 elif command -v yum >/dev/null 2>&1; then
-  run_as_root yum install -y unzip tar
+  yum install -y unzip tar gcc gcc-c++ make python3
 elif command -v zypper >/dev/null 2>&1; then
-  run_as_root zypper refresh
-  run_as_root zypper install -y unzip tar
+  zypper refresh
+  zypper install -y unzip tar gcc gcc-c++ make python3
 fi
 
 install_certbot
@@ -139,13 +192,27 @@ log "Compilando frontend"
 cd frontend && npm run build && cd ..
 
 log "Atualizando arquivos estáticos"
-sudo cp -r frontend/dist/* /var/www/panel/
-sudo chown -R www-data:www-data /var/www/panel
-sudo chmod -R 755 /var/www/panel
+cp -r frontend/dist/* /var/www/panel/
+chown -R www-data:www-data /var/www/panel
+chmod -R 755 /var/www/panel
+
+# Permissões do nginx (sempre atualiza)
+configure_sudoers
+configure_nginx_permissions
+
+# Seed blueprints se não existir
+seed_blueprints
+
+# Corrigir ownership do projeto
+chown -R provirpanel:provirpanel "${INSTALL_DIR}"
+
+# Testar e recarregar Nginx
+test_and_reload_nginx
 
 log "Reiniciando backend"
 pm2 delete provirpanel-backend 2>/dev/null || true
-pm2 start backend/src/server.js --name provirpanel-backend
+cd "${INSTALL_DIR}" && pm2 start backend/src/server.js --name provirpanel-backend --env production
 pm2 save
 
-log "Atualização concluída"
+log "Atualização concluída com sucesso"
+log "Painel: http://$(hostname -I 2>/dev/null | awk '{print $1}' || echo 'localhost')/admin/"

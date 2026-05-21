@@ -6,9 +6,13 @@ const path = require('path');
 const fs = require('fs');
 const axios = require('axios');
 const StorageManager = require('../services/StorageManager');
+const { StorageEnvironmentManager, DEFAULT_PERMISSIONS } = require('../services/StorageEnvironmentManager');
+const { MultiStorageService, UnsupportedStorageProviderError } = require('../services/MultiStorageService');
 
 const router = express.Router();
 const storageManager = new StorageManager();
+const environmentManager = new StorageEnvironmentManager();
+const multiStorage = new MultiStorageService({ environmentManager });
 const upload = multer({ storage: multer.memoryStorage() });
 const EMAIL_ASSETS_DIR = '/email-assets';
 const MAX_IMAGE_BYTES = 5 * 1024 * 1024;
@@ -42,56 +46,159 @@ const mimeToExt = (mime) => {
   return '';
 };
 
-router.get('/', async (req, res, next) => {
+const requireAdmin = (req, res) => {
+  if (req.user?.role !== 'admin') {
+    res.status(403).json({ message: 'Forbidden' });
+    return false;
+  }
+  return true;
+};
+
+const getEnvironmentId = (req) => req.query.environmentId || req.body?.environmentId || null;
+
+const getEnvironmentOrFail = (req) => multiStorage.getEnvironment(getEnvironmentId(req));
+
+const assertPermission = (req, action) => {
+  const environment = getEnvironmentOrFail(req);
+  multiStorage.assertPermission(environment.id, req.user?.role || 'viewer', action);
+  return environment;
+};
+
+const getDownloadName = (targetPath = '/', fallback = 'download') => path.basename(targetPath) || fallback;
+const IMAGE_MIME_MAP = {
+  '.png': 'image/png',
+  '.jpg': 'image/jpeg',
+  '.jpeg': 'image/jpeg',
+  '.gif': 'image/gif',
+  '.webp': 'image/webp',
+  '.svg': 'image/svg+xml'
+};
+
+const buildUnsupportedReadPayload = (req, environment, extra = {}) => ({
+  unsupported: true,
+  message: `O provider ${environment.provider} ainda nao esta habilitado neste painel.`,
+  environment,
+  environments: environmentManager.getEnvironmentView(req.user?.role || 'viewer').environments,
+  ...extra
+});
+
+const withEnvironment = (handler) => async (req, res, next) => {
   try {
-    const items = await storageManager.listFiles(req.query.path || '/');
-    res.json({ items });
+    await handler(req, res, next);
   } catch (err) {
     next(err);
   }
+};
+
+router.get('/providers', (req, res) => {
+  res.json(environmentManager.getEnvironmentView(req.user?.role || 'viewer'));
 });
 
-router.get('/tree', async (req, res, next) => {
+router.post('/environments', withEnvironment(async (req, res) => {
+  if (!requireAdmin(req, res)) return;
+  await multiStorage.validateEnvironmentConfig(req.body || {});
+  const environment = environmentManager.createEnvironment({
+    name: req.body?.name,
+    provider: req.body?.provider,
+    isActive: req.body?.isActive !== false,
+    config: req.body?.config || {},
+    permissions: req.body?.permissions || DEFAULT_PERMISSIONS
+  });
+  res.status(201).json({ environment });
+}));
+
+router.put('/environments/:id', withEnvironment(async (req, res) => {
+  if (!requireAdmin(req, res)) return;
+  await multiStorage.validateEnvironmentConfig(req.body || {});
+  const environment = environmentManager.updateEnvironment(req.params.id, {
+    name: req.body?.name,
+    provider: req.body?.provider,
+    isActive: req.body?.isActive !== false,
+    config: req.body?.config || {},
+    permissions: req.body?.permissions || DEFAULT_PERMISSIONS
+  });
+  res.json({ environment });
+}));
+
+router.delete('/environments/:id', withEnvironment(async (req, res) => {
+  if (!requireAdmin(req, res)) return;
+  environmentManager.deleteEnvironment(req.params.id);
+  res.json({ status: 'deleted' });
+}));
+
+router.get('/', withEnvironment(async (req, res) => {
+  const environment = assertPermission(req, 'list');
   try {
-    const projects = await storageManager.listProjects();
-    const tree = projects.map((project) => ({
-      name: project.name,
-      path: project.path
-    }));
-    res.json({ tree });
+    const result = await multiStorage.listFiles(environment.id, req.query.path || '/', {
+      pageSize: req.query.pageSize,
+      pageToken: req.query.pageToken
+    });
+    res.json({ items: result.items || [], pagination: result.pagination || null, environment });
   } catch (err) {
-    next(err);
+    if (err instanceof UnsupportedStorageProviderError) {
+      return res.json(buildUnsupportedReadPayload(req, environment, {
+        items: [],
+        pagination: { pageSize: 0, nextPageToken: null, hasMore: false }
+      }));
+    }
+    throw err;
   }
-});
+}));
 
-router.get('/projects', async (req, res, next) => {
+router.get('/tree', withEnvironment(async (req, res) => {
+  const environment = assertPermission(req, 'list');
   try {
-    const projects = await storageManager.listProjects();
-    res.json({ projects });
+    const tree = await multiStorage.listTree(environment.id);
+    res.json({
+      tree,
+      environment,
+      environments: environmentManager.getEnvironmentView(req.user?.role || 'viewer').environments
+    });
   } catch (err) {
-    next(err);
+    if (err instanceof UnsupportedStorageProviderError) {
+      return res.json(buildUnsupportedReadPayload(req, environment, { tree: [] }));
+    }
+    throw err;
   }
-});
+}));
 
-router.get('/stats', (req, res) => {
-  const stats = storageManager.getStorageStats();
-  res.json({ stats });
-});
-
-router.post('/upload', upload.array('files'), async (req, res, next) => {
+router.get('/projects', withEnvironment(async (req, res) => {
+  const environment = assertPermission(req, 'list');
   try {
-    const destination = req.body.path || '/';
-    const files = req.files || [];
-    const uploaded = await Promise.all(
-      files.map((file) => storageManager.uploadFile(file, destination))
-    );
-    res.json({ uploaded });
+    const projects = await multiStorage.listTree(environment.id);
+    res.json({ projects, environment });
   } catch (err) {
-    next(err);
+    if (err instanceof UnsupportedStorageProviderError) {
+      return res.json(buildUnsupportedReadPayload(req, environment, { projects: [] }));
+    }
+    throw err;
   }
-});
+}));
 
-router.get('/email-images', async (req, res, next) => {
+router.get('/stats', withEnvironment(async (req, res) => {
+  const environment = assertPermission(req, 'list');
+  try {
+    const stats = multiStorage.getStats(environment.id);
+    res.json({ stats, environment });
+  } catch (err) {
+    if (err instanceof UnsupportedStorageProviderError) {
+      return res.json(buildUnsupportedReadPayload(req, environment, {
+        stats: { used: 0, total: 0 }
+      }));
+    }
+    throw err;
+  }
+}));
+
+router.post('/upload', upload.array('files'), withEnvironment(async (req, res) => {
+  const environment = assertPermission(req, 'upload');
+  const destination = req.body.path || '/';
+  const files = req.files || [];
+  const uploaded = await multiStorage.uploadFiles(environment.id, files, destination);
+  res.json({ uploaded, environment });
+}));
+
+router.get('/email-images', withEnvironment(async (req, res) => {
   try {
     const items = await storageManager.listFiles(EMAIL_ASSETS_DIR);
     const images = items
@@ -105,315 +212,233 @@ router.get('/email-images', async (req, res, next) => {
     if (err.message === 'Invalid path' || err.code === 'ENOENT') {
       return res.json({ images: [] });
     }
-    return next(err);
+    throw err;
   }
-});
+}));
 
-router.post('/email-images/upload', upload.single('file'), async (req, res, next) => {
+router.post('/email-images/upload', upload.single('file'), withEnvironment(async (req, res) => {
+  const file = req.file;
+  if (!file) {
+    return res.status(400).json({ message: 'file is required' });
+  }
+  if (!file.mimetype || !file.mimetype.startsWith('image/')) {
+    return res.status(400).json({ message: 'file must be an image' });
+  }
+  if (file.size > MAX_IMAGE_BYTES) {
+    return res.status(400).json({ message: 'image too large' });
+  }
+  const assetsDir = storageManager.safeResolve(EMAIL_ASSETS_DIR);
+  await fs.promises.mkdir(assetsDir, { recursive: true });
+
+  const ext = mimeToExt(file.mimetype) || path.extname(file.originalname).toLowerCase();
+  if (!ALLOWED_IMAGE_EXT.includes(ext)) {
+    return res.status(400).json({ message: 'unsupported image type' });
+  }
+  const safeBase = sanitizeFilename(path.basename(file.originalname, path.extname(file.originalname)));
+  const filename = ensureUniqueName(assetsDir, `${safeBase}${ext}`);
+  const targetPath = path.join(assetsDir, filename);
+  await fs.promises.writeFile(targetPath, file.buffer);
+
+  const publicPath = path.join(EMAIL_ASSETS_DIR, filename);
+  return res.json({
+    image: {
+      name: filename,
+      path: publicPath,
+      publicUrl: `/api/public/storage/image?path=${encodeURIComponent(publicPath)}`
+    }
+  });
+}));
+
+router.post('/email-images/from-url', withEnvironment(async (req, res) => {
+  const { url } = req.body || {};
+  if (!url) {
+    return res.status(400).json({ message: 'url is required' });
+  }
+
+  let parsed;
   try {
-    const file = req.file;
-    if (!file) {
-      return res.status(400).json({ message: 'file is required' });
-    }
-    if (!file.mimetype || !file.mimetype.startsWith('image/')) {
-      return res.status(400).json({ message: 'file must be an image' });
-    }
-    if (file.size > MAX_IMAGE_BYTES) {
-      return res.status(400).json({ message: 'image too large' });
-    }
-    const assetsDir = storageManager.safeResolve(EMAIL_ASSETS_DIR);
-    await fs.promises.mkdir(assetsDir, { recursive: true });
-
-    const ext = mimeToExt(file.mimetype) || path.extname(file.originalname).toLowerCase();
-    if (!ALLOWED_IMAGE_EXT.includes(ext)) {
-      return res.status(400).json({ message: 'unsupported image type' });
-    }
-    const safeBase = sanitizeFilename(path.basename(file.originalname, path.extname(file.originalname)));
-    const filename = ensureUniqueName(assetsDir, `${safeBase}${ext}`);
-    const targetPath = path.join(assetsDir, filename);
-    await fs.promises.writeFile(targetPath, file.buffer);
-
-    const publicPath = path.join(EMAIL_ASSETS_DIR, filename);
-    return res.json({
-      image: {
-        name: filename,
-        path: publicPath,
-        publicUrl: `/api/public/storage/image?path=${encodeURIComponent(publicPath)}`
-      }
-    });
+    parsed = new URL(url);
   } catch (err) {
-    return next(err);
+    return res.status(400).json({ message: 'invalid url' });
   }
-});
 
-router.post('/email-images/from-url', async (req, res, next) => {
-  try {
-    const { url } = req.body || {};
-    if (!url) {
-      return res.status(400).json({ message: 'url is required' });
-    }
-    let parsed;
-    try {
-      parsed = new URL(url);
-    } catch (err) {
-      return res.status(400).json({ message: 'invalid url' });
-    }
+  const response = await axios.get(parsed.toString(), {
+    responseType: 'arraybuffer',
+    timeout: 10000,
+    maxContentLength: MAX_IMAGE_BYTES
+  });
 
-    const response = await axios.get(parsed.toString(), {
-      responseType: 'arraybuffer',
-      timeout: 10000,
-      maxContentLength: MAX_IMAGE_BYTES
-    });
-
-    const contentType = response.headers['content-type'] || '';
-    if (!contentType.startsWith('image/')) {
-      return res.status(400).json({ message: 'url is not an image' });
-    }
-
-    const contentLength = Number(response.headers['content-length'] || 0);
-    if (contentLength && contentLength > MAX_IMAGE_BYTES) {
-      return res.status(400).json({ message: 'image too large' });
-    }
-
-    const buffer = Buffer.from(response.data);
-    if (buffer.length > MAX_IMAGE_BYTES) {
-      return res.status(400).json({ message: 'image too large' });
-    }
-
-    const assetsDir = storageManager.safeResolve(EMAIL_ASSETS_DIR);
-    await fs.promises.mkdir(assetsDir, { recursive: true });
-
-    const extFromMime = mimeToExt(contentType);
-    const extFromUrl = path.extname(parsed.pathname).toLowerCase();
-    const ext = ALLOWED_IMAGE_EXT.includes(extFromMime)
-      ? extFromMime
-      : ALLOWED_IMAGE_EXT.includes(extFromUrl)
-        ? extFromUrl
-        : '.png';
-
-    const baseName = sanitizeFilename(path.basename(parsed.pathname, path.extname(parsed.pathname)) || 'remote-image');
-    const filename = ensureUniqueName(assetsDir, `${baseName}${ext}`);
-    const targetPath = path.join(assetsDir, filename);
-    await fs.promises.writeFile(targetPath, buffer);
-
-    const publicPath = path.join(EMAIL_ASSETS_DIR, filename);
-    return res.json({
-      image: {
-        name: filename,
-        path: publicPath,
-        publicUrl: `/api/public/storage/image?path=${encodeURIComponent(publicPath)}`
-      }
-    });
-  } catch (err) {
-    return next(err);
+  const contentType = response.headers['content-type'] || '';
+  if (!contentType.startsWith('image/')) {
+    return res.status(400).json({ message: 'url is not an image' });
   }
-});
 
-router.post('/create', async (req, res, next) => {
-  try {
-    const { path: basePath = '/', name, type } = req.body || {};
-    if (!name || !type) {
-      return res.status(400).json({ message: 'name and type are required' });
-    }
-    const targetPath = path.join(basePath, name);
-    if (type === 'folder') {
-      await storageManager.createFolder(targetPath);
-    } else {
-      const resolved = storageManager.safeResolve(targetPath);
-      await require('fs').promises.writeFile(resolved, '');
-    }
-    return res.json({ status: 'created' });
-  } catch (err) {
-    return next(err);
+  const contentLength = Number(response.headers['content-length'] || 0);
+  if (contentLength && contentLength > MAX_IMAGE_BYTES) {
+    return res.status(400).json({ message: 'image too large' });
   }
-});
 
-router.post('/extract', async (req, res, next) => {
-  try {
-    const { path: archivePath, destinationPath } = req.body || {};
-    if (!archivePath) {
-      return res.status(400).json({ message: 'path is required' });
-    }
-    const extracted = await storageManager.extractArchive(archivePath, destinationPath);
-    return res.json({ status: 'extracted', extracted });
-  } catch (err) {
-    if (err.message === 'Unsupported archive format') {
-      return res.status(400).json({ message: err.message });
-    }
-    return next(err);
+  const buffer = Buffer.from(response.data);
+  if (buffer.length > MAX_IMAGE_BYTES) {
+    return res.status(400).json({ message: 'image too large' });
   }
-});
 
-router.delete('/', async (req, res, next) => {
-  try {
-    await storageManager.deleteFile(req.query.path);
-    res.json({ status: 'deleted' });
-  } catch (err) {
-    next(err);
-  }
-});
+  const assetsDir = storageManager.safeResolve(EMAIL_ASSETS_DIR);
+  await fs.promises.mkdir(assetsDir, { recursive: true });
 
-router.get('/download', async (req, res, next) => {
-  try {
-    const targetPath = storageManager.safeResolve(req.query.path);
-    res.download(targetPath);
-  } catch (err) {
-    next(err);
-  }
-});
+  const extFromMime = mimeToExt(contentType);
+  const extFromUrl = path.extname(parsed.pathname).toLowerCase();
+  const ext = ALLOWED_IMAGE_EXT.includes(extFromMime)
+    ? extFromMime
+    : ALLOWED_IMAGE_EXT.includes(extFromUrl)
+      ? extFromUrl
+      : '.png';
 
-router.get('/preview', async (req, res, next) => {
-  try {
-    const targetPath = storageManager.safeResolve(req.query.path);
-    const ext = path.extname(targetPath).toLowerCase();
-    if (!['.png', '.jpg', '.jpeg', '.gif', '.webp', '.svg'].includes(ext)) {
-      return res.status(400).json({ message: 'Not an image' });
-    }
-    return res.sendFile(targetPath);
-  } catch (err) {
-    return next(err);
-  }
-});
+  const baseName = sanitizeFilename(path.basename(parsed.pathname, path.extname(parsed.pathname)) || 'remote-image');
+  const filename = ensureUniqueName(assetsDir, `${baseName}${ext}`);
+  const targetPath = path.join(assetsDir, filename);
+  await fs.promises.writeFile(targetPath, buffer);
 
-router.get('/pdf', async (req, res, next) => {
-  try {
-    const targetPath = storageManager.safeResolve(req.query.path);
-    const ext = path.extname(targetPath).toLowerCase();
-    if (ext !== '.pdf') {
-      return res.status(400).json({ message: 'Not a pdf' });
+  const publicPath = path.join(EMAIL_ASSETS_DIR, filename);
+  res.json({
+    image: {
+      name: filename,
+      path: publicPath,
+      publicUrl: `/api/public/storage/image?path=${encodeURIComponent(publicPath)}`
     }
-    res.setHeader('Content-Type', 'application/pdf');
-    return res.sendFile(targetPath);
-  } catch (err) {
-    return next(err);
-  }
-});
+  });
+}));
 
-router.get('/media', async (req, res, next) => {
-  try {
-    const targetPath = storageManager.safeResolve(req.query.path);
-    const ext = path.extname(targetPath).toLowerCase();
-    const mimeMap = {
-      '.mp3': 'audio/mpeg',
-      '.wav': 'audio/wav',
-      '.ogg': 'audio/ogg',
-      '.flac': 'audio/flac',
-      '.mp4': 'video/mp4',
-      '.webm': 'video/webm',
-      '.avi': 'video/x-msvideo',
-      '.mkv': 'video/x-matroska'
-    };
-    const mime = mimeMap[ext];
-    if (!mime) {
-      return res.status(400).json({ message: 'Not a supported media type' });
-    }
-    res.setHeader('Content-Type', mime);
-    return res.sendFile(targetPath);
-  } catch (err) {
-    return next(err);
+router.post('/create', withEnvironment(async (req, res) => {
+  const environment = assertPermission(req, 'create');
+  const { path: basePath = '/', name, type } = req.body || {};
+  if (!name || !type) {
+    return res.status(400).json({ message: 'name and type are required' });
   }
-});
+  const targetPath = path.join(basePath, name);
+  const result = await multiStorage.createEntry(environment.id, targetPath, type);
+  res.json({ ...result, environment });
+}));
 
-router.get('/file', async (req, res, next) => {
-  try {
-    const targetPath = req.query.path;
-    
-    // Se o arquivo não tem extensão de diretório, tenta na raiz do projeto primeiro
-    if (targetPath && !targetPath.includes('/')) {
-      const projectRoot = path.resolve(process.cwd());
-      const absolutePath = path.join(projectRoot, targetPath);
-      
-      try {
-        const content = await require('fs').promises.readFile(absolutePath, 'utf8');
-        return res.json({ content });
-      } catch (err) {
-        // Se não encontrar na raiz, tenta no storage
-      }
-    }
-    
-    // Se o path começa com /, tenta ler do diretório do projeto
-    if (targetPath && targetPath.startsWith('/') && !targetPath.startsWith('/home')) {
-      const projectRoot = path.resolve(process.cwd());
-      const absolutePath = path.join(projectRoot, targetPath);
-      
-      if (absolutePath.startsWith(projectRoot)) {
-        try {
-          const content = await require('fs').promises.readFile(absolutePath, 'utf8');
-          return res.json({ content });
-        } catch (err) {
-          // Se não encontrar, tenta no storage normal
-        }
-      }
-    }
-    
-    // Fallback para o storage normal
-    try {
-      const content = await storageManager.readFile(targetPath);
-      res.json({ content });
-    } catch (err) {
-      res.status(404).json({ message: 'Arquivo não encontrado' });
-    }
-  } catch (err) {
-    next(err);
+router.post('/extract', withEnvironment(async (req, res) => {
+  const environment = assertPermission(req, 'write');
+  const { path: archivePath, destinationPath } = req.body || {};
+  if (!archivePath) {
+    return res.status(400).json({ message: 'path is required' });
   }
-});
+  const extracted = await multiStorage.extractArchive(environment.id, archivePath, destinationPath);
+  res.json({ status: 'extracted', extracted, environment });
+}));
 
-router.put('/file', async (req, res, next) => {
-  try {
-    const targetPath = req.query.path || req.body.path;
-    const content = req.body.content || req.body;
-    
-    if (!targetPath) {
-      return res.status(400).json({ message: 'path is required' });
-    }
-    
-    // Se o arquivo não tem extensão de diretório, tenta salvar na raiz do projeto primeiro
-    if (targetPath && !targetPath.includes('/')) {
-      const projectRoot = path.resolve(process.cwd());
-      const absolutePath = path.join(projectRoot, targetPath);
-      
-      try {
-        await require('fs').promises.writeFile(absolutePath, typeof content === 'string' ? content : JSON.stringify(content), 'utf8');
-        return res.json({ status: 'saved' });
-      } catch (err) {
-        // Se não conseguir, tenta no storage
-      }
-    }
-    
-    // Se o path começa com /, tenta salvar no diretório do projeto
-    if (targetPath.startsWith('/') && !targetPath.startsWith('/home')) {
-      const projectRoot = path.resolve(process.cwd());
-      const absolutePath = path.join(projectRoot, targetPath);
-      
-      if (absolutePath.startsWith(projectRoot)) {
-        try {
-          await require('fs').promises.writeFile(absolutePath, typeof content === 'string' ? content : JSON.stringify(content), 'utf8');
-          return res.json({ status: 'saved' });
-        } catch (err) {
-          // Se não conseguir, tenta no storage normal
-        }
-      }
-    }
-    
-    // Fallback para o storage normal
-    await storageManager.writeFile(targetPath, typeof content === 'string' ? content : JSON.stringify(content));
-    res.json({ status: 'saved' });
-  } catch (err) {
-    next(err);
-  }
-});
+router.delete('/', withEnvironment(async (req, res) => {
+  const environment = assertPermission(req, 'delete');
+  const result = await multiStorage.deleteEntry(environment.id, req.query.path);
+  res.json({ ...result, environment });
+}));
 
-router.post('/move', async (req, res, next) => {
-  try {
-    const { fromPath, toPath } = req.body || {};
-    if (!fromPath || !toPath) {
-      return res.status(400).json({ message: 'fromPath and toPath are required' });
-    }
-    await storageManager.moveFile(fromPath, toPath);
-    res.json({ status: 'moved' });
-  } catch (err) {
-    next(err);
+router.get('/download', withEnvironment(async (req, res) => {
+  const environment = assertPermission(req, 'download');
+  const file = await multiStorage.readBinaryFile(environment.id, req.query.path);
+  res.setHeader('Content-Type', file.contentType || 'application/octet-stream');
+  res.setHeader('Content-Disposition', `attachment; filename="${file.fileName || getDownloadName(req.query.path)}"`);
+  res.send(file.buffer);
+}));
+
+router.get('/preview', withEnvironment(async (req, res) => {
+  const environment = assertPermission(req, 'preview');
+  const targetPath = String(req.query.path || '');
+  const ext = path.extname(targetPath).toLowerCase();
+  if (!['.png', '.jpg', '.jpeg', '.gif', '.webp', '.svg'].includes(ext)) {
+    return res.status(400).json({ message: 'Not an image' });
   }
-});
+  const file = await multiStorage.readBinaryFile(environment.id, targetPath);
+  res.setHeader('Content-Type', file.contentType || IMAGE_MIME_MAP[ext] || 'application/octet-stream');
+  res.send(file.buffer);
+}));
+
+router.get('/pdf', withEnvironment(async (req, res) => {
+  const environment = assertPermission(req, 'preview');
+  const targetPath = String(req.query.path || '');
+  if (path.extname(targetPath).toLowerCase() !== '.pdf') {
+    return res.status(400).json({ message: 'Not a pdf' });
+  }
+  const file = await multiStorage.readBinaryFile(environment.id, targetPath);
+  res.setHeader('Content-Type', 'application/pdf');
+  res.send(file.buffer);
+}));
+
+router.get('/media', withEnvironment(async (req, res) => {
+  const environment = assertPermission(req, 'preview');
+  const targetPath = String(req.query.path || '');
+  const ext = path.extname(targetPath).toLowerCase();
+  const mimeMap = {
+    '.mp3': 'audio/mpeg',
+    '.wav': 'audio/wav',
+    '.ogg': 'audio/ogg',
+    '.flac': 'audio/flac',
+    '.mp4': 'video/mp4',
+    '.webm': 'video/webm',
+    '.avi': 'video/x-msvideo',
+    '.mkv': 'video/x-matroska'
+  };
+  const mime = mimeMap[ext];
+  if (!mime) {
+    return res.status(400).json({ message: 'Not a supported media type' });
+  }
+  const file = await multiStorage.readBinaryFile(environment.id, targetPath);
+  res.setHeader('Content-Type', mime);
+  res.send(file.buffer);
+}));
+
+router.get('/file', withEnvironment(async (req, res) => {
+  const environment = assertPermission(req, 'read');
+  const content = await multiStorage.readTextFile(environment.id, req.query.path);
+  res.json({ content, environment });
+}));
+
+router.put('/file', withEnvironment(async (req, res) => {
+  const environment = assertPermission(req, 'write');
+  const targetPath = req.query.path || req.body.path;
+  const content = req.body.content || req.body;
+  if (!targetPath) {
+    return res.status(400).json({ message: 'path is required' });
+  }
+  const result = await multiStorage.writeTextFile(
+    environment.id,
+    targetPath,
+    typeof content === 'string' ? content : JSON.stringify(content)
+  );
+  res.json({ ...result, environment });
+}));
+
+router.post('/move', withEnvironment(async (req, res) => {
+  const environment = assertPermission(req, 'move');
+  const { fromPath, toPath } = req.body || {};
+  if (!fromPath || !toPath) {
+    return res.status(400).json({ message: 'fromPath and toPath are required' });
+  }
+  const result = await multiStorage.moveEntry(environment.id, fromPath, toPath);
+  res.json({ ...result, environment });
+}));
+
+router.post('/copy', withEnvironment(async (req, res) => {
+  const sourceEnvironmentId = req.body?.sourceEnvironmentId;
+  const targetEnvironmentId = req.body?.targetEnvironmentId;
+  const sourcePath = req.body?.sourcePath;
+  const targetPath = req.body?.targetPath;
+  if (!sourceEnvironmentId || !targetEnvironmentId || !sourcePath) {
+    return res.status(400).json({ message: 'sourceEnvironmentId, targetEnvironmentId and sourcePath are required' });
+  }
+
+  multiStorage.assertPermission(sourceEnvironmentId, req.user?.role || 'viewer', 'read');
+  multiStorage.assertPermission(targetEnvironmentId, req.user?.role || 'viewer', 'write');
+  const result = await multiStorage.copyBetweenEnvironments({
+    sourceEnvironmentId,
+    sourcePath,
+    targetEnvironmentId,
+    targetPath
+  });
+  res.json(result);
+}));
 
 module.exports = router;

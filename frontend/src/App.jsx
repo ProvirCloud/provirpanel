@@ -1,5 +1,5 @@
-import { BrowserRouter, Routes, Route, Navigate } from 'react-router-dom'
-import { useCallback, useEffect, useState } from 'react'
+import { BrowserRouter, Navigate, Route, Routes } from 'react-router-dom'
+import { Suspense, useCallback, useEffect, useState } from 'react'
 import LoginPage from './pages/LoginPage.jsx'
 import MainLayout from './pages/MainLayout.jsx'
 import Dashboard from './components/Dashboard.jsx'
@@ -14,82 +14,90 @@ import ProvirGateway from './components/ProvirGateway.jsx'
 import SecurityAuditPanel from './components/SecurityAuditPanel.jsx'
 import NginxPanel from './components/NginxPanel.jsx'
 import NginxVisualManager from './components/NginxVisualManager.jsx'
+import NginxCanvasPage from './pages/NginxCanvasPage'
+import NginxVisualEditor from './pages/NginxVisualEditor'
+import NginxVisualEditorTest from './pages/NginxVisualEditorTest'
+import NginxVisualEditorFull from './pages/NginxVisualEditorFull'
+import ConsoleModulePage from './pages/ConsoleModulePage'
+import InfrastructureCanvasPage from './pages/InfrastructureCanvasPage'
+import StacksPanel from './components/StacksPanel.jsx'
 import api from './services/api.js'
+
+const RouteLoader = () => (
+  <div className="zeus-panel px-6 py-16 text-center text-[var(--color-text-muted)]">Carregando módulo...</div>
+)
+
+const ProtectedRoute = ({ loading, authenticated, children }) => {
+  if (loading) {
+    return <div className="zeus-shell flex min-h-screen items-center justify-center text-[var(--color-text-muted)]">Validando sessão...</div>
+  }
+  if (!authenticated) return <Navigate to="/login" replace />
+  return children
+}
+
+const PublicRoute = ({ loading, authenticated, children }) => {
+  if (loading) {
+    return <div className="zeus-shell flex min-h-screen items-center justify-center text-[var(--color-text-muted)]">Validando sessão...</div>
+  }
+  if (authenticated) return <Navigate to="/" replace />
+  return children
+}
+
+const ModulePage = ({ title, subtitle, children, showHeader = true }) => (
+  <Suspense fallback={<RouteLoader />}>
+    <ConsoleModulePage title={title} subtitle={subtitle} showHeader={showHeader}>
+      {children}
+    </ConsoleModulePage>
+  </Suspense>
+)
 
 const App = () => {
   const [authState, setAuthState] = useState({ loading: true, authenticated: false })
 
   const refreshAuth = useCallback(() => {
     let active = true
-    api
-      .get('/auth/me')
-      .then(() => {
-        if (active) setAuthState({ loading: false, authenticated: true })
-      })
-      .catch(() => {
-        localStorage.removeItem('provirpanel-token')
-        if (active) setAuthState({ loading: false, authenticated: false })
-      })
+    api.get('/auth/me').then(() => {
+      if (active) setAuthState({ loading: false, authenticated: true })
+    }).catch(() => {
+      localStorage.removeItem('provirpanel-token')
+      if (active) setAuthState({ loading: false, authenticated: false })
+    })
     return () => {
       active = false
     }
   }, [])
 
   useEffect(() => {
-    let cleanup = null
-    const handleAuthChange = (event) => {
-      if (event?.detail?.authenticated === false) {
-        setAuthState({ loading: false, authenticated: false })
-        return
-      }
-      if (event?.detail?.authenticated === true) {
-        setAuthState((prev) => ({ ...prev, loading: true }))
-      }
-      cleanup = refreshAuth()
-    }
-    handleAuthChange()
-    window.addEventListener('provirpanel-auth', handleAuthChange)
+    const stop = refreshAuth()
     return () => {
-      if (cleanup) cleanup()
-      window.removeEventListener('provirpanel-auth', handleAuthChange)
+      if (typeof stop === 'function') stop()
     }
   }, [refreshAuth])
 
-  const ProtectedRoute = ({ children }) => {
-    if (authState.loading) {
-      return (
-        <div className="zeus-shell flex min-h-screen items-center justify-center text-slate-700">
-          Validando sessao...
-        </div>
-      )
+  useEffect(() => {
+    const handler = (event) => {
+      if (event?.detail?.authenticated === true) {
+        setAuthState({ loading: false, authenticated: true })
+      } else if (event?.detail?.authenticated === false) {
+        setAuthState({ loading: false, authenticated: false })
+      } else {
+        refreshAuth()
+      }
     }
-    if (!authState.authenticated) {
-      return <Navigate to="/login" replace />
-    }
-    return children
-  }
-
-  const PublicRoute = ({ children }) => {
-    if (authState.loading) {
-      return (
-        <div className="zeus-shell flex min-h-screen items-center justify-center text-slate-700">
-          Validando sessao...
-        </div>
-      )
-    }
-    if (authState.authenticated) {
-      return <Navigate to="/" replace />
-    }
-    return children
-  }
+    window.addEventListener('provirpanel-auth', handler)
+    return () => window.removeEventListener('provirpanel-auth', handler)
+  }, [refreshAuth])
 
   return (
     <BrowserRouter basename="/admin">
       <Routes>
+        {/* Public test route - no authentication required */}
+        <Route path="/nginx-visual-test" element={<NginxVisualEditorTest />} />
+        
         <Route
           path="/login"
           element={
-            <PublicRoute>
+            <PublicRoute loading={authState.loading} authenticated={authState.authenticated}>
               <LoginPage />
             </PublicRoute>
           }
@@ -97,23 +105,28 @@ const App = () => {
         <Route
           path="/"
           element={
-            <ProtectedRoute>
+            <ProtectedRoute loading={authState.loading} authenticated={authState.authenticated}>
               <MainLayout />
             </ProtectedRoute>
           }
         >
           <Route index element={<Dashboard />} />
-          <Route path="terminal" element={<Terminal />} />
-          <Route path="docker" element={<DockerPanel />} />
-          <Route path="nginx" element={<NginxVisualManager />} />
-          <Route path="nginx-legacy" element={<NginxPanel />} />
-          <Route path="domains" element={<DomainsPanel />} />
-          <Route path="files" element={<FileManager />} />
-          <Route path="users" element={<UsersPanel />} />
-          <Route path="email" element={<EmailPanel />} />
-          <Route path="gateway" element={<ProvirGateway />} />
-          <Route path="security" element={<SecurityAuditPanel />} />
-          <Route path="logs" element={<LogsPanel />} />
+          <Route path="stacks" element={<InfrastructureCanvasPage />} />
+          <Route path="stacks/canvas" element={<ModulePage showHeader={false} title="Infrastructure Canvas" subtitle="Editor visual de stacks"><StacksPanel /></ModulePage>} />
+          <Route path="terminal" element={<ModulePage title="Terminal" subtitle="Acesso operacional aos ambientes conectados"><Terminal showPageIntro={false} /></ModulePage>} />
+          <Route path="docker" element={<ModulePage title="Container Service" subtitle="Serviços, containers e topologias dos ambientes"><DockerPanel showPageIntro={false} /></ModulePage>} />
+          <Route path="nginx" element={<NginxCanvasPage />} />
+          <Route path="nginx-visual" element={<NginxVisualEditor />} />
+          <Route path="nginx-visual-full" element={<NginxVisualEditorFull />} />
+          <Route path="nginx-advanced" element={<ModulePage title="Nginx Manager" subtitle="Rotas, proxy e publicação de aplicações"><NginxVisualManager showPageIntro={false} /></ModulePage>} />
+          <Route path="nginx-legacy" element={<ModulePage showHeader={false} title="Nginx Legacy" subtitle="Gestão avançada do ambiente Nginx"><NginxPanel /></ModulePage>} />
+          <Route path="domains" element={<ModulePage title="Cloudflare" subtitle="Domínios, e-mail, firewall e WAF com baseline Zeus"><DomainsPanel showPageIntro={false} /></ModulePage>} />
+          <Route path="files" element={<ModulePage title="Arquivos" subtitle="Storage, uploads e gestão de artefatos"><FileManager showPageIntro={false} /></ModulePage>} />
+          <Route path="users" element={<ModulePage title="Usuários" subtitle="Acessos e administração do workspace"><UsersPanel showPageIntro={false} /></ModulePage>} />
+          <Route path="email" element={<ModulePage title="E-mail" subtitle="Fluxos de comunicação e entrega transacional"><EmailPanel showPageIntro={false} /></ModulePage>} />
+          <Route path="gateway" element={<ModulePage title="Gateway" subtitle="Integrações, APIs e orquestração de borda"><ProvirGateway showPageIntro={false} /></ModulePage>} />
+          <Route path="security" element={<ModulePage title="Auditoria" subtitle="Governança, trilhas críticas e segurança"><SecurityAuditPanel showPageIntro={false} /></ModulePage>} />
+          <Route path="logs" element={<ModulePage title="Logs" subtitle="Observabilidade, eventos e troubleshooting"><LogsPanel showPageIntro={false} /></ModulePage>} />
         </Route>
         <Route path="*" element={<Navigate to="/" replace />} />
       </Routes>

@@ -140,14 +140,35 @@ class NginxManager {
   }
 
   // Salvar configuração editada
-  saveConfig(filename, content) {
+  saveConfig(filename, content, options = {}) {
     const filePath = this.resolveConfigPath(filename);
     if (!fs.existsSync(filePath)) {
-      throw new Error('Arquivo nao encontrado para edicao');
+      if (!this.isValidFilename(filename)) {
+        throw new Error('Nome de arquivo invalido');
+      }
+      const targetDir = this.getTargetDirForNewConfig();
+      const newPath = path.join(targetDir, filename);
+      fs.writeFileSync(newPath, content);
+      if (options.skipValidation) {
+        return { valid: true, created: true, skippedValidation: true };
+      }
+      const result = this.testConfig();
+      if (!result.valid) {
+        fs.unlinkSync(newPath);
+      }
+      return { ...result, created: true };
     }
     const backupPath = this.createBackup(filePath);
     fs.writeFileSync(filePath, content);
+    if (options.skipValidation) {
+      return { valid: true, backupPath, skippedValidation: true };
+    }
     const result = this.testConfig();
+    if (!result.valid) {
+      if (backupPath && fs.existsSync(backupPath)) {
+        fs.copyFileSync(backupPath, filePath);
+      }
+    }
     return { ...result, backupPath };
   }
 
@@ -446,16 +467,39 @@ server {
   }
 
   testConfig() {
-    try {
-      execSync('nginx -t', { stdio: 'pipe' });
-      return { valid: true };
-    } catch (err) {
-      return { valid: false, error: err.stderr?.toString() || err.message };
+    const commands = ['sudo -n nginx -t', 'nginx -t'];
+    for (const cmd of commands) {
+      try {
+        execSync(cmd, { stdio: 'pipe', timeout: 10000 });
+        return { valid: true };
+      } catch (err) {
+        const stderr = err.stderr?.toString() || '';
+        if (stderr.includes('Permission denied') || stderr.includes('EACCES')) continue;
+        return { valid: false, error: stderr || err.message };
+      }
     }
+    return { valid: false, error: 'Nao foi possivel executar nginx -t (permissao negada)' };
   }
 
   reload() {
-    execSync('systemctl reload nginx');
+    const commands = [
+      'sudo -n nginx -s reload',
+      'sudo -n systemctl reload nginx',
+      'sudo -n service nginx reload',
+      'nginx -s reload',
+      'systemctl reload nginx',
+      'service nginx reload'
+    ];
+    let lastError = null;
+    for (const cmd of commands) {
+      try {
+        execSync(cmd, { stdio: 'pipe', timeout: 10000 });
+        return;
+      } catch (err) {
+        lastError = err;
+      }
+    }
+    throw new Error(`Falha ao recarregar Nginx: ${lastError?.stderr?.toString()?.trim() || lastError?.message || 'permissao negada ou comando nao disponivel'}`);
   }
 
   getStatus() {

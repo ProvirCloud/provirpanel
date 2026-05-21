@@ -14,6 +14,8 @@ Inclui autenticação JWT, terminal web, métricas em tempo real, Docker manager
 - Metrics collector (CPU/RAM/DISCO/Processos) em tempo real
 - Storage manager com upload/download/preview/editor/rename/move
 - CI/CD basico com git pull/build/restart e rollback
+- Storage Hub multi-ambiente com permissao por provider/ambiente
+- Cloudflare control plane para DNS, Email Routing, firewall e WAF
 
 ### Frontend (React + Vite)
 - Login/rotas protegidas
@@ -127,6 +129,20 @@ Notas:
 - macOS usa socket local do Postgres: `DATABASE_URL=postgres://user@/cloudpainel`
 - Linux comum usa TCP: `postgres://user:pass@localhost:5432/cloudpainel`
 - `TERMINAL_OS_USER` define o usuario do SO para comandos admin no terminal
+- `CLOUDFLARE_API_TOKEN` deve ter permissoes de DNS, WAF, Zone Settings, Email Routing Rules e Firewall Access Rules
+
+## Cloudflare como edge padrao
+
+O modulo `/domains` agora opera o Cloudflare como camada padrao para todos os clientes:
+- sincronizacao de zonas da conta
+- baseline Zeus para SSL, HTTPS, posture de seguranca e regras padrao
+- gestao de DNS por zona
+- Email Routing com visualizacao dos registros obrigatorios
+- Access Rules para firewall
+- WAF custom rules via Ruleset Engine
+
+Persistencia local:
+- `backend/data/cloudflare-config.json`
 
 ## Rodando localmente
 
@@ -258,6 +274,30 @@ Endpoints:
 - `GET /storage/projects`
 - `GET /storage/stats`
 - `POST /storage/upload`
+
+## Storage Hub Multi-Cloud
+
+O modulo `Arquivos` agora foi estruturado para operar como hub multi-storage:
+- ambientes dinamicos por provider
+- permissoes por ambiente e por role (`admin`, `dev`, `viewer`)
+- abas por ambiente na UI
+- copia entre ambientes
+- operacoes comuns unificadas: listar, editar, mover, remover, criar, upload e download
+
+Persistencia:
+- `backend/data/storage-environments.json`
+
+Providers catalogados:
+- `local` (ativo)
+- `s3`
+- `onedrive`
+- `sharepoint`
+- `azureBlob`
+- `ftp`
+
+Observacao importante:
+- nesta primeira fase, o provider `local` esta operacional de ponta a ponta
+- os demais providers ja possuem catalogo, configuracao dinamica, permissoes e contrato de integracao, mas ainda retornam `Storage provider "<provider>" is not enabled yet` ate a implementacao concreta de cada conector
 - `POST /storage/create`
 - `DELETE /storage?path=/...`
 - `GET /storage/download`

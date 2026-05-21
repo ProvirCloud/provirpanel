@@ -254,7 +254,7 @@ const buildHtml = (blocks = [], meta = {}) => {
   return `${header}${body}${footer}`
 }
 
-const EmailPanel = () => {
+const EmailPanel = ({ showPageIntro = true }) => {
   const [activeTab, setActiveTab] = useState('smtp')
   const [configs, setConfigs] = useState([])
   const [templates, setTemplates] = useState([])
@@ -326,11 +326,13 @@ const EmailPanel = () => {
 
   return (
     <div className="space-y-6">
-      <div className="flex items-center justify-between">
-        <div>
-          <p className="text-xs uppercase tracking-[0.3em] text-slate-400">Emails</p>
-          <h2 className="text-2xl font-semibold text-white">SMTP & Templates</h2>
-        </div>
+      <div className={`flex flex-wrap gap-3 ${showPageIntro ? 'items-center justify-between' : 'items-center justify-end'}`}>
+        {showPageIntro ? (
+          <div>
+            <p className="text-xs uppercase tracking-[0.3em] text-slate-400">Emails</p>
+            <h2 className="text-2xl font-semibold text-white">SMTP & Templates</h2>
+          </div>
+        ) : null}
         <div className="flex gap-2">
           <button
             className={`rounded-xl px-4 py-2 text-sm font-semibold ${

@@ -69,7 +69,7 @@ const buildSecuritySnippet = ({ includeHsts, includeCsp, includeTlsMin }) => {
   }
   if (includeCsp) {
     lines.push(
-      'add_header Content-Security-Policy "default-src \'self\' https: data:; img-src \'self\' https: data:; style-src \'self\' \'unsafe-inline\' https:; script-src \'self\' \'unsafe-inline\' https:; connect-src \'self\' https: wss:; frame-ancestors \'self\';" always;'
+      'add_header Content-Security-Policy "default-src \'self\' https: data:; img-src \'self\' https: data: blob:; style-src \'self\' \'unsafe-inline\' https:; script-src \'self\' \'unsafe-inline\' https:; connect-src \'self\' https: wss:; media-src \'self\' https: data: blob:; frame-src \'self\' https: blob:; frame-ancestors \'self\';" always;'
     );
   }
   return `${lines.join('\n')}\n`;

@@ -9,6 +9,29 @@ const { promisify } = require('util');
 const execFileAsync = promisify(execFile);
 
 const ARCHIVE_SUFFIXES = ['.tar.gz', '.tgz', '.tar', '.zip'];
+const DEFAULT_PAGE_SIZE = 100;
+const MAX_PAGE_SIZE = 500;
+
+const normalizePageSize = (value) => {
+  const numeric = Number.parseInt(value, 10);
+  if (!Number.isFinite(numeric) || numeric <= 0) {
+    return DEFAULT_PAGE_SIZE;
+  }
+  return Math.min(numeric, MAX_PAGE_SIZE);
+};
+
+const encodePageToken = (offset) => Buffer.from(JSON.stringify({ offset }), 'utf8').toString('base64url');
+
+const decodePageToken = (token) => {
+  if (!token) return 0;
+  try {
+    const parsed = JSON.parse(Buffer.from(String(token), 'base64url').toString('utf8'));
+    const offset = Number.parseInt(parsed?.offset, 10);
+    return Number.isFinite(offset) && offset >= 0 ? offset : 0;
+  } catch (err) {
+    return 0;
+  }
+};
 
 class StorageManager {
   constructor(options = {}) {
@@ -34,7 +57,7 @@ class StorageManager {
     return resolved;
   }
 
-  async listFiles(targetPath = '/') {
+  async listFiles(targetPath = '/', options = {}) {
     const resolved = this.safeResolve(targetPath);
     const entries = await fsp.readdir(resolved, { withFileTypes: true });
     const items = await Promise.all(
@@ -55,11 +78,23 @@ class StorageManager {
         };
       })
     );
-    return items.sort((a, b) => {
+    const sorted = items.sort((a, b) => {
       if (a.isDir && !b.isDir) return -1;
       if (!a.isDir && b.isDir) return 1;
       return a.name.localeCompare(b.name);
     });
+    const pageSize = normalizePageSize(options.pageSize);
+    const offset = decodePageToken(options.pageToken);
+    const paginated = sorted.slice(offset, offset + pageSize);
+    const nextOffset = offset + pageSize;
+    return {
+      items: paginated,
+      pagination: {
+        pageSize,
+        nextPageToken: nextOffset < sorted.length ? encodePageToken(nextOffset) : null,
+        hasMore: nextOffset < sorted.length
+      }
+    };
   }
 
   async uploadFile(file, destination = '/') {
@@ -71,6 +106,13 @@ class StorageManager {
     const targetPath = path.join(targetDir, file.originalname);
     await fsp.writeFile(targetPath, file.buffer);
     return { path: path.join('/', path.relative(this.basePath, targetPath)) };
+  }
+
+  async createFile(targetPath, content = '') {
+    const resolved = this.safeResolve(targetPath);
+    await fsp.mkdir(path.dirname(resolved), { recursive: true });
+    await fsp.writeFile(resolved, content, 'utf8');
+    return true;
   }
 
   async deleteFile(targetPath) {
@@ -117,9 +159,30 @@ class StorageManager {
     return fsp.readFile(resolved, 'utf8');
   }
 
+  async readBinaryFile(targetPath) {
+    const resolved = this.safeResolve(targetPath);
+    const stats = await fsp.stat(resolved);
+    if (stats.isDirectory()) {
+      throw new Error('Cannot read directory');
+    }
+    return {
+      buffer: await fsp.readFile(resolved),
+      fileName: path.basename(resolved),
+      size: stats.size
+    };
+  }
+
   async writeFile(targetPath, content) {
     const resolved = this.safeResolve(targetPath);
+    await fsp.mkdir(path.dirname(resolved), { recursive: true });
     await fsp.writeFile(resolved, content, 'utf8');
+    return true;
+  }
+
+  async putBuffer(targetPath, buffer) {
+    const resolved = this.safeResolve(targetPath);
+    await fsp.mkdir(path.dirname(resolved), { recursive: true });
+    await fsp.writeFile(resolved, buffer);
     return true;
   }
 
@@ -248,6 +311,11 @@ class StorageManager {
       })
     );
     return projects.sort((a, b) => a.name.localeCompare(b.name));
+  }
+
+  async validateAccess() {
+    await fsp.mkdir(this.basePath, { recursive: true });
+    await fsp.access(this.basePath, fs.constants.R_OK | fs.constants.W_OK);
   }
 }
 
