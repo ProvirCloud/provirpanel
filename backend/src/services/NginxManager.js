@@ -140,16 +140,18 @@ class NginxManager {
   }
 
   // Salvar configuração editada
-  saveConfig(filename, content) {
+  saveConfig(filename, content, options = {}) {
     const filePath = this.resolveConfigPath(filename);
     if (!fs.existsSync(filePath)) {
-      // Create if it doesn't exist (upsert behavior)
       if (!this.isValidFilename(filename)) {
         throw new Error('Nome de arquivo invalido');
       }
       const targetDir = this.getTargetDirForNewConfig();
       const newPath = path.join(targetDir, filename);
       fs.writeFileSync(newPath, content);
+      if (options.skipValidation) {
+        return { valid: true, created: true, skippedValidation: true };
+      }
       const result = this.testConfig();
       if (!result.valid) {
         fs.unlinkSync(newPath);
@@ -158,9 +160,11 @@ class NginxManager {
     }
     const backupPath = this.createBackup(filePath);
     fs.writeFileSync(filePath, content);
+    if (options.skipValidation) {
+      return { valid: true, backupPath, skippedValidation: true };
+    }
     const result = this.testConfig();
     if (!result.valid) {
-      // Rollback on invalid config
       if (backupPath && fs.existsSync(backupPath)) {
         fs.copyFileSync(backupPath, filePath);
       }
