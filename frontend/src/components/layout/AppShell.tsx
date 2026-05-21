@@ -23,7 +23,7 @@ const routeMeta: Record<string, { title: string; context: string }> = {
   '/nginx': { title: 'Nginx Manager', context: 'Rotas, proxy e publicação de aplicações' },
   '/nginx-visual-full': { title: 'Nginx Visual Canvas', context: 'Visualize e configure o fluxo de tráfego do Nginx' },
   '/nginx-legacy': { title: 'Nginx Legacy', context: 'Gestão avançada do ambiente Nginx' },
-  '/domains': { title: 'Cloudflare', context: 'Domínios, e-mail, firewall e WAF gerenciados pelo edge padrão da Zeus' },
+  '/domains': { title: 'DNS & WAF', context: 'Domínios, DNS, firewall e regras de segurança' },
   '/gateway': { title: 'Gateway', context: 'Integrações, APIs e orquestração de borda' },
   '/security': { title: 'Auditoria', context: 'Governança, trilhas críticas e segurança' },
   '/users': { title: 'Usuários', context: 'Acessos e administração do workspace' },

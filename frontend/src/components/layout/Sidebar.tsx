@@ -26,7 +26,7 @@ const sections = [
     label: 'Infraestrutura',
     items: [
       { to: '/nginx', label: 'Nginx Manager', icon: Boxes },
-      { to: '/domains', label: 'Cloudflare', icon: Globe },
+      { to: '/domains', label: 'DNS & WAF', icon: Globe },
       { to: '/gateway', label: 'Gateway', icon: Route },
       { to: '/security', label: 'Auditoria', icon: SearchCheck },
     ],
