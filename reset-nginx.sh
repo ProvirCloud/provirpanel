@@ -73,6 +73,8 @@ cat <<NGINX > "${CONF_TARGET}"
 server {
     listen 80;
     server_name _;
+    client_max_body_size 500m;
+
 
     # API Backend
     location /api/ {

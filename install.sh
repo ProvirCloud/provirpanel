@@ -377,6 +377,8 @@ server {
     listen [::]:80 default_server;
     server_name _;
     
+    client_max_body_size 500m;
+
     # API Backend
     location /api/ {
         proxy_pass http://localhost:${PANEL_PORT}/;

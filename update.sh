@@ -207,6 +207,14 @@ seed_blueprints
 chown -R provirpanel:provirpanel "${INSTALL_DIR}"
 
 # Testar e recarregar Nginx
+
+# Garantir client_max_body_size no nginx do painel
+PANEL_NGINX="/etc/nginx/sites-available/provirpanel"
+if [ -f "$PANEL_NGINX" ] && ! grep -q "client_max_body_size" "$PANEL_NGINX"; then
+  sed -i "/server_name/a\    client_max_body_size 500m;" "$PANEL_NGINX"
+  log "Adicionado client_max_body_size 500m ao nginx do painel"
+fi
+
 test_and_reload_nginx
 
 log "Reiniciando backend"
