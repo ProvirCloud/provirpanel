@@ -215,8 +215,11 @@ cd "${INSTALL_DIR}" && pm2 start backend/src/server.js --name provirpanel-backen
 pm2 save
 
 # Garantir que PM2 inicie no boot
-pm2 startup systemd -u provirpanel --hp /home/provirpanel 2>/dev/null || pm2 startup 2>/dev/null || true
-systemctl enable pm2-provirpanel 2>/dev/null || true
+env PATH=$PATH:/usr/bin /usr/lib/node_modules/pm2/bin/pm2 startup systemd -u root --hp /root 2>/dev/null || true
+pm2 startup systemd 2>/dev/null || true
+pm2 save
+systemctl enable pm2-root 2>/dev/null || systemctl enable pm2 2>/dev/null || true
+systemctl start pm2-root 2>/dev/null || systemctl start pm2 2>/dev/null || true
 
 log "Atualização concluída com sucesso"
 log "Painel: http://$(hostname -I 2>/dev/null | awk '{print $1}' || echo 'localhost')/admin/"
