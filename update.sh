@@ -214,5 +214,9 @@ pm2 delete provirpanel-backend 2>/dev/null || true
 cd "${INSTALL_DIR}" && pm2 start backend/src/server.js --name provirpanel-backend --env production
 pm2 save
 
+# Garantir que PM2 inicie no boot
+pm2 startup systemd -u provirpanel --hp /home/provirpanel 2>/dev/null || pm2 startup 2>/dev/null || true
+systemctl enable pm2-provirpanel 2>/dev/null || true
+
 log "Atualização concluída com sucesso"
 log "Painel: http://$(hostname -I 2>/dev/null | awk '{print $1}' || echo 'localhost')/admin/"
