@@ -1,5 +1,6 @@
 import { BrowserRouter, Navigate, Route, Routes } from 'react-router-dom'
 import { Suspense, useCallback, useEffect, useState } from 'react'
+import TaskBar from './components/layout/TaskBar'
 import LoginPage from './pages/LoginPage.jsx'
 import MainLayout from './pages/MainLayout.jsx'
 import Dashboard from './components/Dashboard.jsx'
@@ -90,6 +91,7 @@ const App = () => {
 
   return (
     <BrowserRouter basename="/admin">
+      <TaskBar />
       <Routes>
         {/* Public test route - no authentication required */}
         <Route path="/nginx-visual-test" element={<NginxVisualEditorTest />} />
