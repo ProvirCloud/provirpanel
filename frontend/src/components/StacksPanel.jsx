@@ -4910,6 +4910,7 @@ export default function StacksPanel() {
     } catch (err) {
       addToast(err.response?.data?.error || "Erro ao adicionar servico", "error")
     }
+  }
 
   const saveService = async (form) => {
     try {
