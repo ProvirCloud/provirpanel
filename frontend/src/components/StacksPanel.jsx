@@ -3700,15 +3700,33 @@ const AddServiceModal = ({ onAdd, onClose, stageKey = null }) => {
     if (!buildName.trim() || !dockerfile.trim()) return
     setBuilding(true)
     setBuildLog(['\ud83d\udd28 Iniciando build...'])
+
+    // Show progress messages while waiting
+    const progressInterval = setInterval(() => {
+      setBuildLog((prev) => {
+        const msgs = [
+          '\ud83d\udce6 Enviando contexto para o Docker...',
+          '\u2699\ufe0f  Processando camadas do Dockerfile...',
+          '\ud83d\udd04 Executando comandos RUN...',
+          '\ud83d\udcbe Salvando camadas intermediarias...',
+        ]
+        const nextIdx = prev.length - 1
+        if (nextIdx < msgs.length) return [...prev, msgs[nextIdx]]
+        return prev
+      })
+    }, 3000)
+
     try {
       const formData = new FormData()
       formData.append('imageName', buildName.trim())
       formData.append('dockerfileContent', dockerfile)
       if (contextFile) {
         formData.append('contextArchive', contextFile)
+        setBuildLog((prev) => [...prev, `\ud83d\udcc1 Enviando ${contextFile.name} (${(contextFile.size / 1024 / 1024).toFixed(1)} MB)...`])
       }
       const res = await api.post('/docker/images/build', formData, {
-        headers: { 'Content-Type': 'multipart/form-data' }
+        headers: { 'Content-Type': 'multipart/form-data' },
+        timeout: 600000
       })
       const progress = res.data?.progress || []
       setBuildLog((prev) => [...prev, ...progress, '\u2705 Build conclu\u00eddo!'])
@@ -3728,7 +3746,7 @@ const AddServiceModal = ({ onAdd, onClose, stageKey = null }) => {
       const progress = err.response?.data?.progress || []
       setBuildLog((prev) => [...prev, ...progress, `\u274c Falha: ${msg}`])
     } finally {
-      setBuilding(false)
+      clearInterval(progressInterval); setBuilding(false)
     }
   }
 
@@ -3859,13 +3877,25 @@ const AddServiceModal = ({ onAdd, onClose, stageKey = null }) => {
                   <input type="file" accept=".zip,.tar,.tar.gz,.tgz" style={{ display: 'none' }} onChange={(e) => { setContextFile(e.target.files?.[0] || null); e.target.value = '' }} />
                 </label>
               </div>
-              {buildLog.length > 0 && (
-                <div style={{ borderRadius: 10, border: '1px solid rgba(255,255,255,0.08)', background: '#050a14', padding: '10px 12px', maxHeight: 150, overflowY: 'auto' }}>
-                  {buildLog.map((line, i) => (
-                    <div key={i} style={{ fontSize: 10, fontFamily: 'ui-monospace,monospace', color: '#94a3b8', lineHeight: 1.7 }}>{line}</div>
-                  ))}
-                </div>
-              )}
+              {/* Build log */}
+              <div style={{ borderRadius: 10, border: '1px solid rgba(255,255,255,0.08)', background: '#050a14', padding: '10px 12px', minHeight: building ? 120 : 0, maxHeight: 250, overflowY: 'auto', display: buildLog.length > 0 || building ? 'block' : 'none' }}>
+                {building && buildLog.length === 0 && (
+                  <div style={{ display: 'flex', alignItems: 'center', gap: 8, padding: '8px 0' }}>
+                    <div style={{ width: 14, height: 14, borderRadius: '50%', border: '2px solid rgba(139,92,246,0.3)', borderTopColor: '#8b5cf6', animation: 'spin 1s linear infinite' }} />
+                    <span style={{ fontSize: 11, color: '#a78bfa' }}>Preparando build...</span>
+                  </div>
+                )}
+                {buildLog.map((line, i) => (
+                  <div key={i} style={{ fontSize: 10, fontFamily: 'ui-monospace,monospace', color: line.includes('\u2705') ? '#86efac' : line.includes('\u274c') ? '#fca5a5' : '#94a3b8', lineHeight: 1.7 }}>{line}</div>
+                ))}
+                {building && buildLog.length > 0 && (
+                  <div style={{ display: 'flex', alignItems: 'center', gap: 8, padding: '6px 0', borderTop: '1px solid rgba(255,255,255,0.05)', marginTop: 6 }}>
+                    <div style={{ width: 12, height: 12, borderRadius: '50%', border: '2px solid rgba(139,92,246,0.3)', borderTopColor: '#8b5cf6', animation: 'spin 1s linear infinite' }} />
+                    <span style={{ fontSize: 10, color: '#a78bfa' }}>Build em andamento...</span>
+                  </div>
+                )}
+              </div>
+              <style>{`@keyframes spin { to { transform: rotate(360deg) } }`}</style>
               <button onClick={handleBuildImage} disabled={building || !buildName.trim() || !dockerfile.trim()}
                 style={{ padding: '10px 16px', borderRadius: 10, border: 'none', fontSize: 12, fontWeight: 600, cursor: building ? 'wait' : 'pointer', color: '#fff', background: (building || !buildName.trim() || !dockerfile.trim()) ? 'rgba(255,255,255,0.06)' : 'linear-gradient(135deg,#8b5cf6,#6d28d9)', boxShadow: (building || !buildName.trim() || !dockerfile.trim()) ? 'none' : '0 4px 14px rgba(139,92,246,0.4)', opacity: (building || !buildName.trim() || !dockerfile.trim()) ? 0.4 : 1 }}>
                 {building ? 'Construindo...' : '\ud83d\udd28 Build da Imagem'}
