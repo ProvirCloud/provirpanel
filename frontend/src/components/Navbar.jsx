@@ -1,4 +1,5 @@
 import { useEffect, useRef, useState } from 'react'
+import { useTask } from '../app/providers/task-provider'
 import {
   CircleUser,
   Shield,
@@ -14,6 +15,8 @@ import logoIcon from '../assets/images/logoicon.webp'
 
 const Navbar = ({ onLogout, onChangePassword, onCreateUser, onManageMfa, username = 'admin' }) => {
   const [open, setOpen] = useState(false)
+  const [showNotif, setShowNotif] = useState(false)
+  const taskCtx = useTask()
   const [theme, setTheme] = useState('dark')
   const menuRef = useRef(null)
 
@@ -33,7 +36,7 @@ const Navbar = ({ onLogout, onChangePassword, onCreateUser, onManageMfa, usernam
 
   useEffect(() => {
     const handler = (e) => {
-      if (menuRef.current && !menuRef.current.contains(e.target)) setOpen(false)
+      if (menuRef.current && !menuRef.current.contains(e.target)) setOpen(false); setShowNotif(false)
     }
     document.addEventListener('mousedown', handler)
     return () => document.removeEventListener('mousedown', handler)
@@ -69,15 +72,54 @@ const Navbar = ({ onLogout, onChangePassword, onCreateUser, onManageMfa, usernam
           <span>Zeus {theme === 'dark' ? 'Light' : 'Dark'}</span>
         </button>
 
-        {/* Notificações */}
-        <button
-          className="flex h-8 w-8 items-center justify-center rounded-md transition-colors"
-          style={{ color: 'var(--text-muted)', border: '1px solid transparent' }}
-          onMouseEnter={e => { e.currentTarget.style.background = 'rgba(56,162,255,0.10)'; e.currentTarget.style.borderColor = 'rgba(99,185,255,0.28)'; e.currentTarget.style.color = 'var(--text-primary)' }}
-          onMouseLeave={e => { e.currentTarget.style.background = 'transparent'; e.currentTarget.style.color = 'var(--text-muted)' }}
-        >
-          <Bell size={15} />
-        </button>
+        {/* Notificações / Histórico de operações */}
+        <div className="relative">
+          <button
+            onClick={() => setShowNotif(v => !v)}
+            className="flex h-8 w-8 items-center justify-center rounded-md transition-colors relative"
+            style={{ color: 'var(--text-muted)', border: '1px solid transparent' }}
+            onMouseEnter={e => { e.currentTarget.style.background = 'rgba(56,162,255,0.10)'; e.currentTarget.style.borderColor = 'rgba(99,185,255,0.28)'; e.currentTarget.style.color = 'var(--text-primary)' }}
+            onMouseLeave={e => { e.currentTarget.style.background = 'transparent'; e.currentTarget.style.color = 'var(--text-muted)' }}
+          >
+            <Bell size={15} />
+            {taskCtx && taskCtx.tasks.length > 0 && (
+              <span style={{ position: 'absolute', top: 4, right: 4, width: 6, height: 6, borderRadius: '50%', background: '#3b82f6', boxShadow: '0 0 6px rgba(59,130,246,0.8)' }} />
+            )}
+          </button>
+          {showNotif && taskCtx && (
+            <div style={{ position: 'absolute', right: 0, top: '100%', marginTop: 6, width: 340, maxHeight: '70vh', overflowY: 'auto', borderRadius: 12, border: '1px solid var(--border-default)', background: 'var(--bg-elevated)', boxShadow: '0 16px 48px rgba(0,0,0,0.5)', zIndex: 50 }}>
+              <div style={{ padding: '10px 14px', borderBottom: '1px solid var(--border-subtle)', display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
+                <span style={{ fontSize: 12, fontWeight: 600, color: 'var(--text-primary)' }}>Operações</span>
+                <span style={{ fontSize: 10, color: 'var(--text-muted)' }}>{taskCtx.getHistory().length} registros</span>
+              </div>
+              {taskCtx.tasks.length > 0 && (
+                <div style={{ padding: '8px 14px', borderBottom: '1px solid var(--border-subtle)' }}>
+                  {taskCtx.tasks.map((t) => (
+                    <div key={t.id} style={{ display: 'flex', alignItems: 'center', gap: 8, padding: '4px 0', fontSize: 11, color: 'var(--text-secondary)' }}>
+                      <span style={{ width: 6, height: 6, borderRadius: '50%', background: '#3b82f6', animation: 'pulse 1.5s infinite', flexShrink: 0 }} />
+                      {t.label}
+                    </div>
+                  ))}
+                </div>
+              )}
+              <div style={{ padding: '6px 8px' }}>
+                {taskCtx.getHistory().length === 0 && (
+                  <div style={{ textAlign: 'center', padding: '16px 0', fontSize: 11, color: 'var(--text-muted)' }}>Nenhuma operação registrada</div>
+                )}
+                {taskCtx.getHistory().slice(0, 30).map((t, i) => (
+                  <div key={`${t.id}-${i}`} style={{ display: 'flex', gap: 8, padding: '6px 8px', borderRadius: 6 }}>
+                    <span style={{ marginTop: 2, flexShrink: 0, fontSize: 11 }}>{t.status === 'success' ? '\u2705' : '\u274c'}</span>
+                    <div style={{ flex: 1, minWidth: 0 }}>
+                      <div style={{ fontSize: 11, color: 'var(--text-primary)', fontWeight: 500 }}>{t.label}</div>
+                      <div style={{ fontSize: 9, color: 'var(--text-muted)', marginTop: 1 }}>{new Date(t.startedAt).toLocaleString('pt-BR')}</div>
+                      {t.error && <div style={{ fontSize: 9, color: '#f87171', marginTop: 2, fontFamily: 'ui-monospace,monospace', wordBreak: 'break-all' }}>{t.error}</div>}
+                    </div>
+                  </div>
+                ))}
+              </div>
+            </div>
+          )}
+        </div>
 
         {/* User menu */}
         <div className="relative" ref={menuRef}>
