@@ -1969,11 +1969,7 @@ const GroupConfigPanel = ({ role, label, config = {}, onSave, onClose }) => {
 
   const addFile = (e) => {
     const file = e.target.files?.[0]; if (!file) return
-    const reader = new FileReader()
-    reader.onload = (ev) => {
-      upd('files', [...form.files, { name: file.name, size: file.size, type: file.type, data: ev.target.result }])
-    }
-    reader.readAsDataURL(file)
+    upd("files", [...form.files, { name: file.name, size: file.size, type: file.type, file }])
   }
   const removeFile = (i) => upd('files', form.files.filter((_, j) => j !== i))
 
@@ -3070,12 +3066,8 @@ const ServiceConfigPanel = ({ service, stack, onSave, onDelete, onClose }) => {
 
   const addProjectFile = (e) => {
     const file = e.target.files?.[0]; if (!file) return
-    const reader = new FileReader()
-    reader.onload = (ev) => {
-      upd('projectFiles', [...form.projectFiles, { name: file.name, size: file.size, type: file.type, data: ev.target.result }])
-    }
-    reader.readAsDataURL(file)
-    e.target.value = ''
+    upd("projectFiles", [...form.projectFiles, { name: file.name, size: file.size, type: file.type, file }])
+    e.target.value = ""
   }
   const removeProjectFile = (i) => upd('projectFiles', form.projectFiles.filter((_, j) => j !== i))
 
