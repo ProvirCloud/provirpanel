@@ -3643,6 +3643,8 @@ const AddServiceModal = ({ onAdd, onClose, stageKey = null }) => {
   const [dockerfile, setDockerfile] = useState('')
   const [buildName, setBuildName] = useState('')
   const [building, setBuilding] = useState(false)
+  const [serverImages, setServerImages] = useState([])
+  const [imagesLoaded, setImagesLoaded] = useState(false)
   const [buildLog, setBuildLog] = useState([])
   const [contextFile, setContextFile] = useState(null)
   const [confirmCancel, setConfirmCancel] = useState(false)
@@ -3651,6 +3653,26 @@ const AddServiceModal = ({ onAdd, onClose, stageKey = null }) => {
     image: '', tag: 'latest',
     ports: [], volumes: [], env: [], command: [], dependencies: []
   })
+
+
+  useEffect(() => {
+    api.get("/docker/images").then((r) => {
+      const raw = Array.isArray(r.data?.images) ? r.data.images : []
+      const entries = []
+      raw.forEach((img) => {
+        const tags = Array.isArray(img.RepoTags) ? img.RepoTags.filter((t) => t && t !== "<none>:<none>") : []
+        if (!tags.length) return
+        tags.forEach((tag) => {
+          const [repo, ver] = tag.split(":")
+          const name = repo.split("/").pop()
+          if (!name || name === "none") return
+          entries.push({ id: img.Id, repo, name, tag: ver || "latest", size: img.Size })
+        })
+      })
+      setServerImages(entries)
+      setImagesLoaded(true)
+    }).catch(() => setImagesLoaded(true))
+  }, [])
 
   const filteredCatalog = stageHint
     ? SERVICE_CATALOG.filter((s) => {
@@ -3765,6 +3787,43 @@ const AddServiceModal = ({ onAdd, onClose, stageKey = null }) => {
   const removeVolume = (i) => upd('volumes', form.volumes.filter((_, j) => j !== i))
   const setVolume = (i, k, v) => { const a = [...form.volumes]; a[i] = { ...a[i], [k]: v }; upd('volumes', a) }
 
+  const suggestPort = async () => {
+    try {
+      const res = await api.get('/docker/available-port?start=3000')
+      const port = res.data?.available
+      if (port) {
+        const existing = form.ports.length ? [...form.ports] : [{ host: '', container: '' }]
+        existing[0] = { ...existing[0], host: port }
+        upd('ports', existing)
+      }
+    } catch { /* ignore */ }
+  }
+
+  const loadEnvFile = (e) => {
+    const file = e.target.files?.[0]
+    if (!file) return
+    const reader = new FileReader()
+    reader.onload = (ev) => {
+      const text = ev.target.result || ''
+      const parsed = text.split('\n')
+        .map((line) => line.trim())
+        .filter((line) => line && !line.startsWith('#'))
+        .map((line) => {
+          const idx = line.indexOf('=')
+          if (idx <= 0) return null
+          const key = line.slice(0, idx).trim()
+          let value = line.slice(idx + 1).trim()
+          if ((value.startsWith('"') && value.endsWith('"')) || (value.startsWith("'") && value.endsWith("'")))
+            value = value.slice(1, -1)
+          return { key, value, secret: /password|secret|token|key|auth/i.test(key) }
+        })
+        .filter(Boolean)
+      upd('env', [...form.env.filter((e) => e.key), ...parsed.filter((p) => !form.env.some((e) => e.key === p.key))])
+    }
+    reader.readAsText(file)
+    e.target.value = ''
+  }
+
   const requiredEnvs = selectedCatalog?.requiredEnv || []
   const missingRequired = requiredEnvs.filter((key) => {
     const entry = form.env.find((e) => e.key === key)
@@ -3837,6 +3896,34 @@ const AddServiceModal = ({ onAdd, onClose, stageKey = null }) => {
                 </button>
               </div>
             </div>
+
+              {/* Server images */}
+              {imagesLoaded && serverImages.length > 0 && (
+                <div style={{ marginTop: 12 }}>
+                  <div style={{ fontSize: 10, fontWeight: 600, letterSpacing: "0.08em", textTransform: "uppercase", color: "#64748b", marginBottom: 8 }}>Imagens no servidor</div>
+                  <div style={{ display: "flex", flexDirection: "column", gap: 4, maxHeight: 160, overflowY: "auto" }}>
+                    {serverImages.slice(0, 20).map((img) => {
+                      const cfg = SERVICE_ROLES[inferRoleFromImage(img.name)] || SERVICE_ROLES.runtime
+                      const Icon = cfg.icon
+                      return (
+                        <button key={`${img.repo}:${img.tag}`} onClick={() => {
+                          setSelectedCatalog(null)
+                          setMode("custom")
+                          setForm({ name: img.name, role: inferRoleFromImage(img.name), image: img.repo, tag: img.tag, ports: [], volumes: [], env: [], command: [], dependencies: [] })
+                          setStep(2)
+                        }}
+                          style={{ display: "flex", alignItems: "center", gap: 8, padding: "7px 10px", borderRadius: 9, border: "1px solid rgba(255,255,255,0.07)", background: "rgba(255,255,255,0.02)", cursor: "pointer", textAlign: "left" }}>
+                          <Icon size={13} style={{ color: cfg.color, flexShrink: 0 }} />
+                          <span style={{ fontSize: 11, color: "#f1f5f9", fontWeight: 500 }}>{img.name}</span>
+                          <span style={{ fontSize: 10, color: "#475569", fontFamily: "ui-monospace,monospace" }}>:{img.tag}</span>
+                          <span style={{ fontSize: 9, color: "#334155", marginLeft: "auto" }}>{img.size ? (img.size / 1024 / 1024).toFixed(0) + " MB" : ""}</span>
+                        </button>
+                      )
+                    })}
+                  </div>
+                </div>
+              )}
+
           )}
 
           {/* STEP 2: Configure */}
@@ -3934,6 +4021,7 @@ const AddServiceModal = ({ onAdd, onClose, stageKey = null }) => {
                 <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 8 }}>
                   <label style={{ fontSize: 10, fontWeight: 600, letterSpacing: '0.08em', textTransform: 'uppercase', color: '#64748b' }}>Variáveis de ambiente</label>
                   <button onClick={addEnv} style={{ fontSize: 10, color: '#7dd3fc', background: 'rgba(56,189,248,0.08)', border: '1px solid rgba(56,189,248,0.2)', borderRadius: 7, padding: '3px 9px', cursor: 'pointer' }}>+ Var</button>
+                  <label style={{ fontSize: 10, color: "#a78bfa", background: "rgba(139,92,246,0.08)", border: "1px solid rgba(139,92,246,0.2)", borderRadius: 7, padding: "3px 9px", cursor: "pointer", display: "flex", alignItems: "center", gap: 4 }}><Upload size={9} /> .env<input type="file" accept=".env,text/plain" style={{ display: "none" }} onChange={loadEnvFile} /></label>
                 </div>
                 <div style={{ display: 'flex', flexDirection: 'column', gap: 5 }}>
                   {form.env.map((e, i) => {
@@ -3968,6 +4056,7 @@ const AddServiceModal = ({ onAdd, onClose, stageKey = null }) => {
                 <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 8 }}>
                   <label style={{ fontSize: 10, fontWeight: 600, letterSpacing: '0.08em', textTransform: 'uppercase', color: '#64748b' }}>Portas</label>
                   <button onClick={addPort} style={{ fontSize: 10, color: '#7dd3fc', background: 'rgba(56,189,248,0.08)', border: '1px solid rgba(56,189,248,0.2)', borderRadius: 7, padding: '3px 9px', cursor: 'pointer' }}>+ Porta</button>
+                  <button onClick={suggestPort} style={{ fontSize: 10, color: "#a78bfa", background: "rgba(139,92,246,0.08)", border: "1px solid rgba(139,92,246,0.2)", borderRadius: 7, padding: "3px 9px", cursor: "pointer" }}>Sugerir porta</button>
                 </div>
                 <div style={{ display: 'flex', flexDirection: 'column', gap: 5 }}>
                   {form.ports.map((p, i) => (
