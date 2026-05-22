@@ -1781,6 +1781,20 @@ router.post('/services', async (req, res, next) => {
   }
 });
 
+
+router.post("/containers/:id/start", async (req, res, next) => {
+  try {
+    const container = dockerManager.docker.getContainer(req.params.id);
+    await container.start();
+    res.json({ status: "started" });
+  } catch (err) {
+    if (err.statusCode === 304) {
+      return res.json({ status: "already running" });
+    }
+    next(err);
+  }
+});
+
 router.post('/containers/:id/stop', async (req, res, next) => {
   try {
     await dockerManager.stopContainer(req.params.id);

@@ -461,6 +461,27 @@ class StackManager {
     await this._ensureNetwork(stack.network);
 
     const imageFull = `${svc.image}:${svc.tag || 'latest'}`;
+
+    // Try to reuse existing stopped container
+    const baseContainerName = `provir-${stackId.slice(0, 8)}-${svc.name}`.replace(/[^a-zA-Z0-9_.-]/g, '-');
+    try {
+      const existing = this.docker.getContainer(baseContainerName);
+      const info = await existing.inspect();
+      if (info && info.State) {
+        if (info.State.Running) {
+          if (onProgress) onProgress(`✅ ${svc.name} já está rodando`);
+          this._updateServiceStatus(stackId, serviceId, [info.Id], 'running');
+          return info.Id;
+        }
+        // Stopped — just start it
+        if (onProgress) onProgress(`▶️  Reiniciando container existente ${svc.name}...`);
+        await existing.start();
+        if (onProgress) onProgress(`✅ ${svc.name} iniciado (${info.Id.slice(0, 12)})`);
+        this._updateServiceStatus(stackId, serviceId, [info.Id], 'running');
+        return info.Id;
+      }
+    } catch { /* container not found, create new */ }
+
     const exists = await this._imageExists(imageFull);
     if (!exists) {
       if (onProgress) onProgress(`⬇️  Baixando imagem ${imageFull}...`);

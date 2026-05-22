@@ -1141,7 +1141,7 @@ const DockerPanel = ({ showPageIntro = true }) => {
   const handleAction = async (action, id) => {
     try {
       if (action === 'start') {
-        await api.post(`/docker/containers/${id}/restart`)
+        await api.post(`/docker/containers/${id}/start`)
       }
       if (action === 'stop') {
         await api.post(`/docker/containers/${id}/stop`)
@@ -1154,6 +1154,7 @@ const DockerPanel = ({ showPageIntro = true }) => {
       }
       addToast('Operacao concluida')
       loadContainers()
+      loadServices()
     } catch (err) {
       addToast('Erro na operacao', 'error')
     }
