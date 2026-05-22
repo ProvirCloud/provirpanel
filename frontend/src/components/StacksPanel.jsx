@@ -3644,6 +3644,8 @@ const AddServiceModal = ({ onAdd, onClose, stageKey = null }) => {
   const [buildName, setBuildName] = useState('')
   const [building, setBuilding] = useState(false)
   const [buildLog, setBuildLog] = useState([])
+  const [contextFile, setContextFile] = useState(null)
+  const [confirmCancel, setConfirmCancel] = useState(false)
   const [form, setForm] = useState({
     name: '', role: stageHint?.defaultRole || 'runtime',
     image: '', tag: 'latest',
@@ -3699,9 +3701,14 @@ const AddServiceModal = ({ onAdd, onClose, stageKey = null }) => {
     setBuilding(true)
     setBuildLog(['\ud83d\udd28 Iniciando build...'])
     try {
-      const res = await api.post('/docker/images/build', {
-        imageName: buildName.trim(),
-        dockerfileContent: dockerfile
+      const formData = new FormData()
+      formData.append('imageName', buildName.trim())
+      formData.append('dockerfileContent', dockerfile)
+      if (contextFile) {
+        formData.append('contextArchive', contextFile)
+      }
+      const res = await api.post('/docker/images/build', formData, {
+        headers: { 'Content-Type': 'multipart/form-data' }
       })
       const progress = res.data?.progress || []
       setBuildLog((prev) => [...prev, ...progress, '\u2705 Build conclu\u00eddo!'])
@@ -3751,7 +3758,7 @@ const AddServiceModal = ({ onAdd, onClose, stageKey = null }) => {
 
   return (
     <div style={{ position: 'fixed', inset: 0, zIndex: 50, display: 'flex', alignItems: 'center', justifyContent: 'center', background: 'rgba(0,0,0,0.65)', backdropFilter: 'blur(6px)' }}
-      onMouseDown={(e) => { if (e.target === e.currentTarget) onClose() }}>
+      onMouseDown={(e) => { if (e.target === e.currentTarget) { if (building) { setConfirmCancel(true) } else { onClose() } } }}>
       <div style={{ width: '100%', maxWidth: 560, maxHeight: '90vh', display: 'flex', flexDirection: 'column', margin: '0 16px', borderRadius: 20, border: '1px solid rgba(255,255,255,0.1)', background: 'linear-gradient(160deg,#080f1e,#060c18)', boxShadow: '0 40px 100px rgba(0,0,0,0.8)' }}>
 
         {/* Header */}
@@ -3829,6 +3836,28 @@ const AddServiceModal = ({ onAdd, onClose, stageKey = null }) => {
                   rows={12}
                   style={{ ...inp, fontFamily: 'ui-monospace,monospace', fontSize: 11, lineHeight: 1.6, resize: 'vertical', minHeight: 180 }}
                   placeholder={'FROM node:20-alpine\nWORKDIR /app\nCOPY package*.json ./\nRUN npm install\nCOPY . .\nEXPOSE 3000\nCMD ["node", "server.js"]'} />
+              </div>
+              <div>
+                <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 6 }}>
+                  <label style={{ fontSize: 10, fontWeight: 600, letterSpacing: '0.08em', textTransform: 'uppercase', color: '#64748b' }}>Contexto do build (opcional)</label>
+                </div>
+                <label style={{ display: 'flex', alignItems: 'center', gap: 8, padding: '10px 12px', borderRadius: 10, border: '1px dashed rgba(139,92,246,0.3)', background: 'rgba(139,92,246,0.04)', cursor: 'pointer' }}>
+                  <Upload size={14} style={{ color: '#a78bfa', flexShrink: 0 }} />
+                  <div style={{ flex: 1 }}>
+                    <div style={{ fontSize: 11, color: contextFile ? '#c4b5fd' : '#64748b' }}>
+                      {contextFile ? contextFile.name : 'Carregar arquivo .zip ou .tar.gz'}
+                    </div>
+                    <div style={{ fontSize: 9, color: '#475569', marginTop: 2 }}>
+                      {contextFile ? `${(contextFile.size / 1024 / 1024).toFixed(1)} MB` : 'Arquivos do projeto que o Dockerfile referencia (COPY, ADD)'}
+                    </div>
+                  </div>
+                  {contextFile && (
+                    <button onClick={(e) => { e.preventDefault(); setContextFile(null) }} style={{ background: 'none', border: 'none', color: '#f87171', cursor: 'pointer', padding: 2 }}>
+                      <X size={12} />
+                    </button>
+                  )}
+                  <input type="file" accept=".zip,.tar,.tar.gz,.tgz" style={{ display: 'none' }} onChange={(e) => { setContextFile(e.target.files?.[0] || null); e.target.value = '' }} />
+                </label>
               </div>
               {buildLog.length > 0 && (
                 <div style={{ borderRadius: 10, border: '1px solid rgba(255,255,255,0.08)', background: '#050a14', padding: '10px 12px', maxHeight: 150, overflowY: 'auto' }}>
@@ -4007,7 +4036,27 @@ const AddServiceModal = ({ onAdd, onClose, stageKey = null }) => {
           )}
         </div>
       </div>
+      {confirmCancel && (
+        <div style={{ position: "fixed", inset: 0, zIndex: 60, display: "flex", alignItems: "center", justifyContent: "center", background: "rgba(0,0,0,0.75)", backdropFilter: "blur(4px)" }}>
+          <div style={{ background: "#0f172a", border: "1px solid rgba(255,255,255,0.12)", borderRadius: 14, padding: "24px", maxWidth: 340, textAlign: "center" }}>
+            <div style={{ fontSize: 14, fontWeight: 600, color: "#f1f5f9", marginBottom: 8 }}>Cancelar build?</div>
+            <div style={{ fontSize: 12, color: "#94a3b8", marginBottom: 18, lineHeight: 1.5 }}>O processo de build esta em andamento. Deseja cancelar e fechar?</div>
+            <div style={{ display: "flex", gap: 10, justifyContent: "center" }}>
+              <button onClick={() => setConfirmCancel(false)}
+                style={{ fontSize: 12, padding: "8px 18px", borderRadius: 9, border: "1px solid rgba(255,255,255,0.1)", background: "rgba(255,255,255,0.05)", color: "#cbd5e1", cursor: "pointer" }}>
+                Continuar
+              </button>
+              <button onClick={() => { setBuilding(false); setConfirmCancel(false); onClose() }}
+                style={{ fontSize: 12, padding: "8px 18px", borderRadius: 9, border: "none", background: "linear-gradient(135deg,#dc2626,#b91c1c)", color: "#fff", cursor: "pointer", fontWeight: 600 }}>
+                Cancelar build
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
     </div>
+
   )
 }
 
