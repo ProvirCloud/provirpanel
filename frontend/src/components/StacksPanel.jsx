@@ -10,7 +10,6 @@ import {
 } from 'lucide-react'
 import api from '../services/api.js'
 import { useTheme } from '../app/providers/theme-provider'
-import { useTask } from "../app/providers/task-provider"
 import SERVICE_CATALOG from '../data/serviceCatalog.js'
 
 // ─── Constantes ───────────────────────────────────────────────────────────────
@@ -4631,7 +4630,6 @@ const LaymanHelpModal = ({ model, onClose }) => (
 
 export default function StacksPanel() {
   const location = useLocation()
-  const { runTask } = useTask()
   const navigate = useNavigate()
   const [stacks, setStacks] = useState([])
   const [blueprints, setBlueprints] = useState([])
@@ -4889,16 +4887,14 @@ export default function StacksPanel() {
 
   const addService = async (serviceData) => {
     try {
-      await runTask(`Adicionando servico ${serviceData.name || ""}`, async () => {
-        const { data } = await api.post(`/stacks/${selectedStack.id}/services`, serviceData)
-        setModal(null)
-        setAddServiceStage(null)
-        const updated = await api.get(`/stacks/${selectedStack.id}`)
-        setStacks((s) => s.map((x) => x.id === updated.data.id ? updated.data : x))
-        setSelectedStack(updated.data)
-        setSelectedService(data)
-        addToast(`Servico "${data.name}" adicionado`)
-      })
+      const { data } = await api.post(`/stacks/${selectedStack.id}/services`, serviceData)
+      setModal(null)
+      setAddServiceStage(null)
+      const updated = await api.get(`/stacks/${selectedStack.id}`)
+      setStacks((s) => s.map((x) => x.id === updated.data.id ? updated.data : x))
+      setSelectedStack(updated.data)
+      setSelectedService(data)
+      addToast(`Servico "${data.name}" adicionado`)
     } catch (err) {
       addToast(err.response?.data?.error || "Erro ao adicionar servico", "error")
     }
@@ -4906,15 +4902,13 @@ export default function StacksPanel() {
 
   const saveService = async (form) => {
     try {
-      await runTask(`Salvando servico ${form.name || selectedService?.name || ""}`, async () => {
-        await api.put(`/stacks/${selectedStack.id}/services/${selectedService.id}`, form)
-        const updated = await api.get(`/stacks/${selectedStack.id}`)
-        setStacks((s) => s.map((x) => x.id === updated.data.id ? updated.data : x))
-        setSelectedStack(updated.data)
-        const updatedSvc = updated.data.services.find((s) => s.id === selectedService.id)
-        if (updatedSvc) setSelectedService(updatedSvc)
-        addToast("Servico atualizado")
-      })
+      await api.put(`/stacks/${selectedStack.id}/services/${selectedService.id}`, form)
+      const updated = await api.get(`/stacks/${selectedStack.id}`)
+      setStacks((s) => s.map((x) => x.id === updated.data.id ? updated.data : x))
+      setSelectedStack(updated.data)
+      const updatedSvc = updated.data.services.find((s) => s.id === selectedService.id)
+      if (updatedSvc) setSelectedService(updatedSvc)
+      addToast("Servico atualizado")
     } catch (err) {
       addToast(err.response?.data?.error || "Erro ao salvar", "error")
     }

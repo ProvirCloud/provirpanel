@@ -1,4 +1,4 @@
-import { createContext, useCallback, useContext, useRef, useState } from 'react'
+import { createContext, useCallback, useContext, useMemo, useRef, useState } from 'react'
 
 const TaskContext = createContext({ tasks: [], history: [], runTask: async (_, fn) => fn(), startTask: () => '', completeTask: () => {}, failTask: () => {} })
 
@@ -65,7 +65,7 @@ export function TaskProvider({ children }) {
     }
   }, [startTask, completeTask, failTask])
 
-  const value = { tasks, runTask, startTask, completeTask, failTask, getHistory, historyVersion }
+  const value = useMemo(() => ({ tasks, runTask, startTask, completeTask, failTask, getHistory, historyVersion }), [tasks, historyVersion, runTask, startTask, completeTask, failTask, getHistory])
 
   return <TaskContext.Provider value={value}>{children}</TaskContext.Provider>
 }
