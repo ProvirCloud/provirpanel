@@ -3895,9 +3895,6 @@ const AddServiceModal = ({ onAdd, onClose, stageKey = null }) => {
                   + Build com Dockerfile
                 </button>
               </div>
-            </div>
-
-              {/* Server images */}
               {imagesLoaded && serverImages.length > 0 && (
                 <div style={{ marginTop: 12 }}>
                   <div style={{ fontSize: 10, fontWeight: 600, letterSpacing: "0.08em", textTransform: "uppercase", color: "#64748b", marginBottom: 8 }}>Imagens no servidor</div>
@@ -3923,6 +3920,8 @@ const AddServiceModal = ({ onAdd, onClose, stageKey = null }) => {
                   </div>
                 </div>
               )}
+
+            </div>
 
           )}
 
