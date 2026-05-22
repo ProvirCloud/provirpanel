@@ -127,7 +127,7 @@ const STAGE_SERVICE_HINTS = {
     label: 'Loadbalance',
     defaultRole: 'entry-point',
     allowedRoles: ['entry-point'],
-    presetNames: ['nginx']
+    presetNames: ['nginx', 'website']
   },
   frontend: {
     label: 'Front-End Principal',

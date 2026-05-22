@@ -161,6 +161,18 @@ export const SERVICE_CATALOG = [
     requiredEnv: [],
     command: ['--api.insecure=true', '--providers.docker=true'],
   },
+  {
+    id: 'website',
+    name: 'Website',
+    image: 'nginx',
+    tag: '1.25-alpine',
+    role: 'entry-point',
+    description: 'Site estático pronto para receber um .zip com HTML/CSS/JS',
+    ports: [{ host: 80, container: 80 }],
+    volumes: [{ host: './site', container: '/usr/share/nginx/html' }],
+    env: [],
+    requiredEnv: [],
+  },
 ]
 
 export default SERVICE_CATALOG
