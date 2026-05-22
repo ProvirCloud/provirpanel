@@ -66,7 +66,7 @@ app.use(cors({
   origin: process.env.CORS_ORIGIN || true,
   credentials: true
 }));
-app.use(express.json({ limit: '100mb' }));
+app.use(express.json({ limit: '500mb' }));
 
 app.use('/public/storage', publicStorageRoutes);
 app.use('/api/public/storage', publicStorageRoutes);
