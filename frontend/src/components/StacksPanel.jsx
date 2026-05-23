@@ -10,6 +10,7 @@ import {
 } from 'lucide-react'
 import api from '../services/api.js'
 import { useTheme } from '../app/providers/theme-provider'
+import { useConfirm } from "./ui/ConfirmModal"
 import SERVICE_CATALOG from '../data/serviceCatalog.js'
 
 // ─── Constantes ───────────────────────────────────────────────────────────────
@@ -4631,6 +4632,7 @@ const LaymanHelpModal = ({ model, onClose }) => (
 export default function StacksPanel() {
   const location = useLocation()
   const navigate = useNavigate()
+  const confirm = useConfirm()
   const [stacks, setStacks] = useState([])
   const [blueprints, setBlueprints] = useState([])
   const [loading, setLoading] = useState(true)
@@ -4763,7 +4765,7 @@ export default function StacksPanel() {
   }
 
   const deleteStack = async (id) => {
-    if (!confirm('Deletar esta stack? Os containers NÃO serão removidos automaticamente.')) return
+    const ok = await confirm({ title: 'Deletar stack', message: 'Todos os containers serão removidos. Deseja continuar?', confirmText: 'Deletar', variant: 'danger' }); if (!ok) return
     try {
       await api.delete(`/stacks/${id}`)
       setStacks((s) => s.filter((x) => x.id !== id))
@@ -4915,7 +4917,7 @@ export default function StacksPanel() {
   }
 
   const removeService = async (serviceId) => {
-    if (!confirm('Remover este serviço da stack?')) return
+    const ok2 = await confirm({ title: 'Remover serviu00e7o', message: 'Este serviu00e7o seru00e1 removido da stack. Deseja continuar?', confirmText: 'Remover', variant: 'danger' }); if (!ok2) return
     try {
       await api.delete(`/stacks/${selectedStack.id}/services/${serviceId}`)
       const updated = await api.get(`/stacks/${selectedStack.id}`)
