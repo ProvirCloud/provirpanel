@@ -115,7 +115,7 @@ const topologicalSort = (services) => {
  * Layout por camadas: entry-point (topo) → runtime (meio) → dados (base)
  */
 const autoPosition = (services) => {
-  const roleOrder = ['entry-point', 'runtime', 'database', 'cache', 'queue', 'storage', 'monitor'];
+  const roleOrder = ['entry-point', 'webapp', 'runtime', 'database', 'cache', 'queue', 'storage', 'monitor'];
   const CARD_W = 180;
   const CARD_H = 80;
   const GAP_X = 48;

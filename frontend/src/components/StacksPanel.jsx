@@ -82,6 +82,11 @@ const LAYMAN_ROLE_GUIDE = {
     purpose: 'Recebe as requisicoes da internet e distribui para os apps.',
     startup: 'Ligue primeiro para abrir a porta de entrada do sistema.'
   },
+  'webapp': {
+    title: 'WebApp / Front-End',
+    purpose: 'Exibe a interface visual para o usuario (HTML, CSS, JS).',
+    startup: 'Ligue apos o backend estar pronto para o front consumir a API.'
+  },
   'runtime': {
     title: 'Aplicacao / WebService',
     purpose: 'Executa a regra de negocio e responde as telas e APIs.',
@@ -114,7 +119,7 @@ const LAYMAN_ROLE_GUIDE = {
   }
 }
 
-const STARTUP_SEQUENCE = ['entry-point', 'database', 'storage', 'queue', 'cache', 'runtime', 'monitor']
+const STARTUP_SEQUENCE = ['entry-point', 'database', 'storage', 'queue', 'cache', 'runtime', 'webapp', 'monitor']
 
 const ASSEMBLY_FLOW_STAGES = [
   { key: 'loadbalance', label: 'Loadbalance', description: 'Entrada de trafego e roteamento' },
