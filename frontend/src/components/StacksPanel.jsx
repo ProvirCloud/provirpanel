@@ -24,7 +24,8 @@ const ENVIRONMENTS = [
 
 const SERVICE_ROLES = {
   'entry-point': { label: 'Entry Point', icon: Globe, color: '#10b981', bg: 'rgba(16,185,129,0.12)', border: 'rgba(16,185,129,0.35)', description: 'Nginx, Traefik, HAProxy' },
-  'runtime':     { label: 'Runtime',     icon: Code2,   color: '#3b82f6', bg: 'rgba(59,130,246,0.12)', border: 'rgba(59,130,246,0.35)', description: 'Node.js, Python, Java, PHP' },
+  'webapp':      { label: 'WebApp',      icon: Globe,   color: '#06b6d4', bg: 'rgba(6,182,212,0.12)', border: 'rgba(6,182,212,0.35)', description: 'React, Next.js, Vue, Angular' },
+  'runtime':     { label: 'WebService',  icon: Code2,   color: '#3b82f6', bg: 'rgba(59,130,246,0.12)', border: 'rgba(59,130,246,0.35)', description: 'Node.js, Python, Java, PHP' },
   'database':    { label: 'Database',    icon: Database, color: '#a855f7', bg: 'rgba(168,85,247,0.12)', border: 'rgba(168,85,247,0.35)', description: 'PostgreSQL, MySQL, MongoDB' },
   'cache':       { label: 'Cache',       icon: Zap,      color: '#f59e0b', bg: 'rgba(245,158,11,0.12)', border: 'rgba(245,158,11,0.35)', description: 'Redis, Memcached' },
   'queue':       { label: 'Queue',       icon: List,     color: '#f97316', bg: 'rgba(249,115,22,0.12)', border: 'rgba(249,115,22,0.35)', description: 'RabbitMQ, Kafka, Celery' },
@@ -55,7 +56,8 @@ const CATEGORY_ICONS = { web: Globe, cms: Server, architecture: GitBranch }
 
 const CANVAS_LANES = [
   { key: 'entry-point', label: 'Load Balancer', hint: 'Ingress, gateway, reverse proxy' },
-  { key: 'runtime', label: 'Aplicacao / WebService', hint: 'Java, Node.js, Next.js, APIs' },
+  { key: 'webapp', label: 'WebApp / Front-End', hint: 'React, Next.js, Vue, Angular, sites' },
+  { key: 'runtime', label: 'WebService / Back-End', hint: 'Java, Node.js, Python, PHP, APIs' },
   { key: 'cache', label: 'Cache', hint: 'Redis, Memcached, Valkey' },
   { key: 'queue', label: 'Queue', hint: 'RabbitMQ, Kafka, brokers' },
   { key: 'database', label: 'Banco de Dados', hint: 'PostgreSQL, MySQL, MongoDB' },
@@ -65,7 +67,8 @@ const CANVAS_LANES = [
 
 const CANVAS_ROLE_HINTS = {
   'entry-point': ['nginx', 'traefik', 'haproxy', 'envoy', 'caddy', 'gateway', 'ingress', 'loadbalancer', 'load-balancer', 'proxy'],
-  'runtime': ['node', 'next', 'nestjs', 'express', 'java', 'spring', 'quarkus', 'tomcat', 'python', 'django', 'flask', 'fastapi', 'php', 'laravel', 'dotnet', 'aspnet', 'go', 'api', 'webservice', 'app'],
+  'webapp': ['react', 'vue', 'angular', 'svelte', 'nextjs', 'nuxt', 'vite', 'webpack', 'frontend', 'front-end', 'webapp', 'website', 'static-site'],
+  'runtime': ['node', 'next', 'nestjs', 'express', 'java', 'spring', 'quarkus', 'tomcat', 'python', 'django', 'flask', 'fastapi', 'php', 'laravel', 'dotnet', 'aspnet', 'go', 'api', 'webservice', 'backend', 'back-end', 'app'],
   'cache': ['redis', 'memcached', 'valkey', 'cache'],
   'queue': ['rabbitmq', 'kafka', 'nats', 'activemq', 'queue', 'broker', 'worker', 'bullmq'],
   'database': ['postgres', 'postgresql', 'mysql', 'mariadb', 'mongo', 'mongodb', 'sqlserver', 'mssql', 'oracle', 'db', 'database'],
@@ -132,9 +135,9 @@ const STAGE_SERVICE_HINTS = {
   },
   frontend: {
     label: 'Front-End Principal',
-    defaultRole: 'runtime',
-    allowedRoles: ['runtime'],
-    presetNames: ['node', 'python', 'php']
+    defaultRole: 'webapp',
+    allowedRoles: ['webapp', 'runtime'],
+    presetNames: ['website', 'node', 'python', 'php']
   },
   data: {
     label: 'Cache • Banco de dados • NoSQL',
@@ -181,7 +184,7 @@ const inferAssemblyStage = (service) => {
     return 'loadbalance'
   }
 
-  if (
+  if (role === "webapp" ||
     (role === 'runtime' && hasAny(['front', 'frontend', 'next', 'react', 'vue', 'angular', 'web'])) ||
     hasAny(['frontend', 'webapp', 'nextjs'])
   ) {

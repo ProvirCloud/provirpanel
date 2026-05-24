@@ -166,7 +166,7 @@ export const SERVICE_CATALOG = [
     name: 'Website',
     image: 'nginx',
     tag: '1.25-alpine',
-    role: 'entry-point',
+    role: 'webapp',
     description: 'Site estático pronto para receber um .zip com HTML/CSS/JS',
     ports: [{ host: 80, container: 80 }],
     volumes: [{ host: './site', container: '/usr/share/nginx/html' }],
