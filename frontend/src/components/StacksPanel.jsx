@@ -834,6 +834,14 @@ const DIAG_PR   = 6     // port radius
 
 const GROUP_COLORS = ['#f97316', '#3b82f6', '#10b981', '#a855f7', '#f43f5e', '#06b6d4', '#eab308', '#ec4899']
 
+const findLaneForGroup = (g) => {
+  const byLabel = CANVAS_LANES.find((l) => l.label === g.label)
+  if (byLabel) return byLabel
+  const idMatch = g.id?.match?.(/^grp-auto-(.+)$/)
+  if (idMatch) return CANVAS_LANES.find((l) => l.key === idMatch[1]) || null
+  return null
+}
+
 const DiagramCanvas = ({
   stack, selectedServiceId,
   onServiceClick, onAddService,
@@ -897,7 +905,7 @@ const DiagramCanvas = ({
         const role = inferServiceCanvasRole(svc)
         // Look in currently-known groups (currentGroups = fresh state, not closure)
         const allGroups = [...currentGroups, ...addedGroups]
-        let matchGrp = allGroups.find((g) => CANVAS_LANES.find((l) => l.label === g.label)?.key === role)
+        let matchGrp = allGroups.find((g) => findLaneForGroup(g)?.key === role)
 
         // Create the group for this role if none exists yet
         if (!matchGrp) {
@@ -955,7 +963,7 @@ const DiagramCanvas = ({
       const currentPos = pos  // captured from closure at effect-run time (stable enough for sizing)
       const PAD = 24
       return prev.map((grp) => {
-        const grpRole = CANVAS_LANES.find((l) => l.label === grp.label)?.key
+        const grpRole = findLaneForGroup(grp)?.key
         if (!grpRole) return grp
         const grpSvcs = services.filter((svc) => inferServiceCanvasRole(svc) === grpRole)
         if (!grpSvcs.length) return grp
@@ -1040,7 +1048,7 @@ const DiagramCanvas = ({
           if (g.id !== groupResize.id) return g
           // Compute minimum size so no child service is clipped
           const PAD = 6, HEADER_H = 28
-          const grpRole = CANVAS_LANES.find((l) => l.label === g.label)?.key
+          const grpRole = findLaneForGroup(g)?.key
           const children = grpRole
             ? services.filter((s) => inferServiceCanvasRole(s) === grpRole && !freeIds.has(s.id))
             : []
@@ -1119,7 +1127,7 @@ const DiagramCanvas = ({
 
   const updateGroup = (id, patch) => setGroups((prev) => prev.map((g) => g.id === id ? { ...g, ...patch } : g))
   const deleteGroup = (grp) => {
-    const grpRole = CANVAS_LANES.find((l) => l.label === grp.label)?.key
+    const grpRole = findLaneForGroup(grp)?.key
     const grpSvcs = grpRole ? services.filter((svc) => inferServiceCanvasRole(svc) === grpRole) : []
     const msg = grpSvcs.length
       ? `Remover grupo "${grp.label}" e seus ${grpSvcs.length} serviço(s)?`
@@ -1241,8 +1249,11 @@ const DiagramCanvas = ({
   const roleToGrp = useMemo(() => {
     const map = {}
     groups.forEach((g) => {
-      const lane = CANVAS_LANES.find((l) => l.label === g.label)
-      if (lane && !map[lane.key]) map[lane.key] = g
+      const lane = findLaneForGroup(g)
+      if (lane && !map[lane.key]) { map[lane.key] = g; return }
+      // Fallback: match by group id pattern (grp-auto-ROLE)
+      const idMatch = g.id?.match?.(/^grp-auto-(.+)$/)
+      if (idMatch && !map[idMatch[1]]) map[idMatch[1]] = g
     })
     return map
   }, [groups])
@@ -1331,7 +1342,7 @@ const DiagramCanvas = ({
       >
         {/* ── Groups + their services (groups have no z-index so children use canvas stacking context) ── */}
         {groups.map((grp) => {
-          const grpRole    = CANVAS_LANES.find((l) => l.label === grp.label)?.key
+          const grpRole    = findLaneForGroup(grp)?.key
           const grpServices = grpRole ? services.filter((svc) => inferServiceCanvasRole(svc) === grpRole && !freeIds.has(svc.id)) : []
           const isCollapsed = !!grp.collapsed
           // When collapsed, show only the header pill (28px tall)
@@ -1633,7 +1644,7 @@ const DiagramCanvas = ({
               <div style={{ padding: '5px 14px 4px', fontSize: 10, color: '#475569', fontWeight: 600, textTransform: 'uppercase', letterSpacing: '0.08em' }}>{ctxMenu.grp.label}</div>
               {sep}
               {item(<Settings size={12} />, 'Configurar camada', () => {
-                const grpRole = CANVAS_LANES.find((l) => l.label === ctxMenu.grp.label)?.key
+                const grpRole = findLaneForGroup(ctxMenu.grp)?.key
                 if (grpRole && onGroupConfigClick) onGroupConfigClick(grpRole, ctxMenu.grp.label)
                 setCtxMenu(null)
               })}
