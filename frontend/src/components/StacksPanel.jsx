@@ -218,7 +218,7 @@ const inferAssemblyStage = (service) => {
 
 const inferServiceCanvasRole = (service) => {
   const explicitRole = service.role
-  if (explicitRole && explicitRole !== 'runtime' && SERVICE_ROLES[explicitRole]) return explicitRole
+  if (explicitRole && SERVICE_ROLES[explicitRole]) return explicitRole
 
   const fingerprint = [service.name, service.image, service.tag, service.templateId, service.role]
     .filter(Boolean)
