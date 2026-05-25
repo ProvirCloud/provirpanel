@@ -3647,7 +3647,7 @@ const inferRoleFromImage = (imageName) => {
   return 'runtime'
 }
 
-const AddServiceModal = ({ onAdd, onClose, stageKey = null }) => {
+const AddServiceModal = ({ onAdd, onClose, stageKey = null, stack = null }) => {
   const stageHint = stageKey ? STAGE_SERVICE_HINTS[stageKey] : null
   const [step, setStep] = useState(1) // 1=choose, 2=configure, 3=confirm
   const [selectedCatalog, setSelectedCatalog] = useState(null)
@@ -3801,8 +3801,27 @@ const AddServiceModal = ({ onAdd, onClose, stageKey = null }) => {
 
   const suggestPort = async () => {
     try {
+      // Collect ports already used in this stack (even if not running)
+      const stackPorts = new Set()
+      const currentStack = stack
+      if (currentStack?.services) {
+        for (const svc of currentStack.services) {
+          for (const p of (svc.ports || [])) {
+            if (p.host) stackPorts.add(Number(p.host))
+          }
+        }
+      }
+      // Also exclude ports in current form
+      for (const p of form.ports) {
+        if (p.host) stackPorts.add(Number(p.host))
+      }
+
       const res = await api.get('/docker/available-port?start=3000')
-      const port = res.data?.available
+      let port = res.data?.available
+      // If suggested port conflicts with stack, find next
+      while (port && stackPorts.has(port)) {
+        port++
+      }
       if (port) {
         const existing = form.ports.length ? [...form.ports] : [{ host: '', container: '' }]
         existing[0] = { ...existing[0], host: port }
@@ -5122,6 +5141,7 @@ export default function StacksPanel() {
         <AddServiceModal
           stageKey={addServiceStage}
           onAdd={addService}
+          stack={selectedStack}
           onClose={() => {
             setModal(null)
             setAddServiceStage(null)

@@ -173,6 +173,21 @@ export const SERVICE_CATALOG = [
     env: [],
     requiredEnv: [],
   },
+  {
+    id: 'pgadmin',
+    name: 'pgAdmin',
+    image: 'dpage/pgadmin4',
+    tag: 'latest',
+    role: 'monitor',
+    description: 'Interface web para gerenciar PostgreSQL',
+    ports: [{ host: 5050, container: 80 }],
+    volumes: [{ host: 'pgadmin-data', container: '/var/lib/pgadmin' }],
+    env: [
+      { key: 'PGADMIN_DEFAULT_EMAIL', value: 'admin@admin.com', secret: false },
+      { key: 'PGADMIN_DEFAULT_PASSWORD', value: '', secret: true },
+    ],
+    requiredEnv: ['PGADMIN_DEFAULT_PASSWORD'],
+  },
 ]
 
 export default SERVICE_CATALOG
