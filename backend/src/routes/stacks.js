@@ -691,6 +691,70 @@ router.get("/:id/services/:svcId/logs", async (req, res) => {
 });
 
 
+
+// ─── Upload de arquivos para serviço ──────────────────────────────────────────
+
+const multer = require("multer");
+const os = require("os");
+const stackUpload = multer({ dest: os.tmpdir() });
+
+router.post("/:id/services/:svcId/upload", stackUpload.single("file"), async (req, res) => {
+  try {
+    const stack = stackManager.getStack(req.params.id);
+    const svc = stack.services.find((s) => s.id === req.params.svcId);
+    if (!svc) return res.status(404).json({ error: "Servico nao encontrado" });
+    if (!req.file) return res.status(400).json({ error: "Arquivo obrigatorio" });
+
+    // Determine target directory from service volume
+    const volume = (svc.volumes || [])[0];
+    let targetDir = volume?.host || `/tmp/provir-svc-${svc.id}`;
+    // If volume host is a named volume (no / or ./), use a local path
+    if (!targetDir.startsWith("/") && !targetDir.startsWith("./")) {
+      targetDir = `/var/lib/docker/volumes/${targetDir}/_data`;
+    }
+
+    const fsp = require("fs/promises");
+    const { execSync } = require("child_process");
+    await fsp.mkdir(targetDir, { recursive: true });
+
+    const archivePath = req.file.path;
+    const originalName = req.file.originalname || "";
+    const lower = originalName.toLowerCase();
+
+    // Extract archive
+    if (lower.endsWith(".zip")) {
+      execSync(`unzip -o "${archivePath}" -d "${targetDir}"`, { stdio: "pipe" });
+    } else if (lower.endsWith(".tar.gz") || lower.endsWith(".tgz")) {
+      execSync(`tar -xzf "${archivePath}" -C "${targetDir}"`, { stdio: "pipe" });
+    } else if (lower.endsWith(".tar")) {
+      execSync(`tar -xf "${archivePath}" -C "${targetDir}"`, { stdio: "pipe" });
+    } else {
+      // Single file — just copy
+      await fsp.copyFile(archivePath, require("path").join(targetDir, originalName));
+    }
+
+    // Cleanup temp file
+    await fsp.unlink(archivePath).catch(() => {});
+
+    // Flatten single root directory
+    const entries = await fsp.readdir(targetDir, { withFileTypes: true });
+    const dirs = entries.filter((e) => e.isDirectory() && e.name !== "__MACOSX");
+    const files = entries.filter((e) => e.isFile() && e.name !== ".DS_Store");
+    if (dirs.length === 1 && files.length === 0) {
+      const rootDir = require("path").join(targetDir, dirs[0].name);
+      const nested = await fsp.readdir(rootDir);
+      for (const entry of nested) {
+        await fsp.rename(require("path").join(rootDir, entry), require("path").join(targetDir, entry));
+      }
+      await fsp.rmdir(rootDir).catch(() => {});
+    }
+
+    res.json({ success: true, targetDir, file: originalName });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
 // ─── Canvas Positions ──────────────────────────────────────────────────────────
 
 router.post('/:id/positions', (req, res) => {

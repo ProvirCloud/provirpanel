@@ -3083,12 +3083,20 @@ const ServiceConfigPanel = memo(({ service, stack, onSave, onDelete, onClose }) 
     </div>
   )
 
-  const addProjectFile = (e) => {
+  const addProjectFile = async (e) => {
     const file = e.target.files?.[0]; if (!file) return
-    upd("projectFiles", [...form.projectFiles, { name: file.name, size: file.size, type: file.type, file }])
     e.target.value = ""
+    upd("projectFiles", [...form.projectFiles, { name: file.name, size: file.size, type: file.type, uploading: true }])
+    try {
+      const formData = new FormData()
+      formData.append("file", file)
+      await api.post(`/stacks/${stack.id}/services/${service.id}/upload`, formData, { headers: { "Content-Type": "multipart/form-data" }, timeout: 300000 })
+      upd("projectFiles", [...form.projectFiles, { name: file.name, size: file.size, type: file.type, uploaded: true }])
+    } catch (err) {
+      upd("projectFiles", form.projectFiles.filter((f) => f.name !== file.name))
+    }
   }
-  const removeProjectFile = (i) => upd('projectFiles', form.projectFiles.filter((_, j) => j !== i))
+  const removeProjectFile = (i) => upd("projectFiles", form.projectFiles.filter((_, j) => j !== i))
 
   // badge counts for tabs
   const tabBadge = {
@@ -4584,22 +4592,30 @@ const ComposeModal = ({ stack, onClose }) => {
 // ─── Progress Log (SSE) ────────────────────────────────────────────────────────
 
 const ProgressLog = ({ messages, onClose, title }) => (
-  <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 backdrop-blur-sm">
-    <div className="w-full max-w-lg rounded-2xl border border-white/10 bg-slate-900 shadow-2xl">
-      <div className="flex items-center justify-between border-b border-white/8 px-5 py-4">
-        <h3 className="text-sm font-semibold text-white">{title}</h3>
+  <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/70 backdrop-blur-sm">
+    <div className="w-full max-w-2xl rounded-[20px] border border-[#30363d] bg-[#0d1117] shadow-[0_32px_80px_rgba(0,0,0,0.7)]" style={{ maxHeight: "85vh", display: "flex", flexDirection: "column" }}>
+      <div className="flex items-center justify-between border-b border-[#30363d] px-5 py-3">
+        <div className="flex items-center gap-3">
+          <div className="flex gap-1.5">
+            <span className="h-3 w-3 rounded-full bg-[#f87171]" />
+            <span className="h-3 w-3 rounded-full bg-[#fbbf24]" />
+            <span className="h-3 w-3 rounded-full bg-[#34d399]" />
+          </div>
+          <span className="text-[13px] font-medium text-[#c9d1d9]">{title || "Terminal"}</span>
+        </div>
+        <button onClick={onClose} className="text-[#6e7681] hover:text-[#c9d1d9] transition"><X size={15} /></button>
       </div>
-      <div className="max-h-64 overflow-y-auto p-4">
-        <div className="space-y-1 font-mono text-xs">
+      <div className="flex-1 overflow-y-auto p-4" style={{ maxHeight: "70vh" }}>
+        <pre className="font-mono text-[12px] leading-[1.7] whitespace-pre-wrap">
           {messages.map((m, i) => (
-            <div key={i} className={m.includes('❌') ? 'text-rose-300' : m.includes('✅') ? 'text-emerald-300' : 'text-slate-400'}>
+            <div key={i} style={{ color: m.includes("\u274c") || m.includes("ERROR") || m.includes("error") ? "#fca5a5" : m.includes("\u2705") || m.includes("sucesso") || m.includes("success") ? "#86efac" : m.includes("\u26a0") || m.includes("WARN") ? "#fcd34d" : m.includes("\ud83d") ? "#93c5fd" : "#8b949e" }}>
               {m}
             </div>
           ))}
-        </div>
+        </pre>
       </div>
-      <div className="flex justify-end border-t border-white/8 px-5 py-4">
-        <button onClick={onClose} className="rounded-xl border border-white/10 px-4 py-2 text-xs text-slate-300 hover:text-white">Fechar</button>
+      <div className="flex justify-end border-t border-[#30363d] px-5 py-3">
+        <button onClick={onClose} className="rounded-lg border border-[#30363d] bg-[#161b22] px-4 py-2 text-[12px] text-[#c9d1d9] hover:border-[#58a6ff]/50 transition">Fechar</button>
       </div>
     </div>
   </div>
@@ -4940,19 +4956,23 @@ export default function StacksPanel() {
     }
   }
 
-  const saveService = async (form) => {
+  const saveService = useCallback(async (form) => {
     try {
-      await api.put(`/stacks/${selectedStack.id}/services/${selectedService.id}`, form)
-      const updated = await api.get(`/stacks/${selectedStack.id}`)
-      setStacks((s) => s.map((x) => x.id === updated.data.id ? updated.data : x))
-      setSelectedStack(updated.data)
-      const updatedSvc = updated.data.services.find((s) => s.id === selectedService.id)
-      if (updatedSvc) setSelectedService(updatedSvc)
+      // Strip File objects from projectFiles before sending as JSON
+      const payload = {
+        ...form,
+        projectFiles: (form.projectFiles || []).map(({ file, ...rest }) => rest)
+      }
+      await api.put(`/stacks/${selectedStack.id}/services/${selectedService.id}`, payload)
       addToast("Servico atualizado")
+      // Reload stack in background without changing selectedService reference
+      api.get(`/stacks/${selectedStack.id}`).then((res) => {
+        setStacks((s) => s.map((x) => x.id === res.data.id ? res.data : x))
+      })
     } catch (err) {
       addToast(err.response?.data?.error || "Erro ao salvar", "error")
     }
-  }
+  }, [selectedStack?.id, selectedService?.id, addToast])
 
   const removeService = async (serviceId) => {
     const ok2 = await confirm({ title: 'Remover serviu00e7o', message: 'Este serviu00e7o seru00e1 removido da stack. Deseja continuar?', confirmText: 'Remover', variant: 'danger' }); if (!ok2) return
