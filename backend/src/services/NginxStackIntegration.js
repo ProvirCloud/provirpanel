@@ -62,7 +62,7 @@ class NginxStackIntegration {
     const filePath = path.join(this.sitesAvailable, filename);
 
     const locations = services.map((svc) => {
-      const port = svc.exposedPort || svc.ports?.[0]?.container || 3000;
+      const port = svc.exposedPort || svc.ports?.[0]?.host || svc.ports?.[0]?.container || 3000;
       const host = svc.bindLocalOnly !== false ? '127.0.0.1' : '0.0.0.0';
       const pathPrefix = svc.pathPrefix || `/${svc.name}/`;
       return `    location ${pathPrefix} {
@@ -79,9 +79,14 @@ class NginxStackIntegration {
     }).join('\n\n');
 
     const config = `# ProvirPanel Stack: ${stack.name} (${stack.id.slice(0, 8)})
-# Auto-generated — do not edit manually
+# Auto-generated - do not edit manually
+
+server {
+    listen 80;
+    server_name _;
 
 ${locations}
+}
 `;
 
     this._writeConfig(filePath, config);
@@ -96,7 +101,7 @@ ${locations}
     const subdomain = svc.subdomain || svc.name;
     const filename = `provir-${subdomain}.conf`;
     const filePath = path.join(this.sitesAvailable, filename);
-    const port = svc.exposedPort || svc.ports?.[0]?.container || 3000;
+    const port = svc.exposedPort || svc.ports?.[0]?.host || svc.ports?.[0]?.container || 3000;
     const host = svc.bindLocalOnly !== false ? '127.0.0.1' : '0.0.0.0';
 
     const config = `# ProvirPanel Stack: ${stack.name} — Service: ${svc.name}

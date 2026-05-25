@@ -652,6 +652,45 @@ router.post('/:id/services/:svcId/restart', async (req, res) => {
   }
 });
 
+// ─── Logs de serviço da stack ─────────────────────────────────────────────────
+
+router.get("/:id/services/:svcId/logs", async (req, res) => {
+  try {
+    const stack = stackManager.getStack(req.params.id);
+    const svc = stack.services.find((s) => s.id === req.params.svcId);
+    if (!svc) return res.status(404).json({ error: "Servico nao encontrado" });
+
+    const containerId = svc.containerId || (svc.containerIds && svc.containerIds[0]);
+    if (!containerId) return res.json({ logs: "Container nao iniciado" });
+
+    const Docker = require("dockerode");
+    const docker = new Docker();
+    const container = docker.getContainer(containerId);
+    const logData = await container.logs({ stdout: true, stderr: true, tail: 200, timestamps: true });
+
+    let text = "";
+    if (Buffer.isBuffer(logData)) {
+      let offset = 0;
+      while (offset + 8 <= logData.length) {
+        const size = logData.readUInt32BE(offset + 4);
+        const start = offset + 8;
+        const end = start + size;
+        if (end > logData.length) break;
+        text += logData.slice(start, end).toString("utf8");
+        offset = end;
+      }
+      if (!text) text = logData.toString("utf8");
+    } else {
+      text = String(logData || "");
+    }
+
+    res.json({ logs: text });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+
 // ─── Canvas Positions ──────────────────────────────────────────────────────────
 
 router.post('/:id/positions', (req, res) => {

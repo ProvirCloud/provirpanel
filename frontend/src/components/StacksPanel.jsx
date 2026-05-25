@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState, useCallback, useMemo } from 'react'
+import { memo, useEffect, useRef, useState, useCallback, useMemo } from 'react'
 import { useLocation, useNavigate } from 'react-router-dom'
 import {
   Plus, Play, Square, RefreshCw, Trash2, Copy,
@@ -2964,7 +2964,7 @@ const SVC_TABS = [
   { id: 'avancado', label: 'Avançado',   icon: Cpu },
 ]
 
-const ServiceConfigPanel = ({ service, stack, onSave, onDelete, onClose }) => {
+const ServiceConfigPanel = memo(({ service, stack, onSave, onDelete, onClose }) => {
   const roleCfg = SERVICE_ROLES[service.role] || SERVICE_ROLES.runtime
   const color   = roleCfg.color
   const RoleIcon = roleCfg.icon
@@ -3633,7 +3633,7 @@ const ServiceConfigPanel = ({ service, stack, onSave, onDelete, onClose }) => {
       </div>
     </div>
   )
-}
+})
 
 // ─── Modal de Adicionar Serviço ────────────────────────────────────────────────
 
@@ -5626,6 +5626,17 @@ export default function StacksPanel() {
                   }}
                     className="flex flex-1 items-center justify-center gap-1.5 rounded-xl border border-white/10 py-2 text-xs text-slate-300 hover:text-white">
                     <RefreshCw size={12} /> Restart
+                  </button>
+                </div>
+                <div className="mt-3">
+                  <button onClick={async () => {
+                    try {
+                      const res = await api.get(`/stacks/${selectedStack.id}/services/${selectedService.id}/logs`)
+                      setProgressLog({ title: `Logs: ${selectedService.name}`, messages: (res.data?.logs || "Sem logs").split("\n") })
+                    } catch (err) { addToast("Erro ao carregar logs", "error") }
+                  }}
+                    className="flex w-full items-center justify-center gap-1.5 rounded-xl border border-blue-500/30 bg-blue-500/10 py-2 text-xs text-blue-300 hover:bg-blue-500/20">
+                    <Eye size={12} /> Ver Logs
                   </button>
                 </div>
                 </div>
