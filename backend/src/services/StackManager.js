@@ -455,102 +455,112 @@ class StackManager {
     const scaling = normalizeScaling(svc.scaling);
     const resources = normalizeResources(svc.resources);
     const desiredReplicas = scaling.replicas || 1;
+    const containerName = `provir-${stackId.slice(0, 8)}-${svc.name}`.replace(/[^a-zA-Z0-9_.-]/g, '-');
 
-    if (onProgress) onProgress(`🔧 Iniciando ${svc.name} (${desiredReplicas} instância(s))...`);
-
+    if (onProgress) onProgress(`🔧 Iniciando ${svc.name}...`);
     await this._ensureNetwork(stack.network);
 
-    const imageFull = `${svc.image}:${svc.tag || 'latest'}`;
-
-    // Try to reuse existing stopped container
-    const baseContainerName = `provir-${stackId.slice(0, 8)}-${svc.name}`.replace(/[^a-zA-Z0-9_.-]/g, '-');
-    try {
-      const existing = this.docker.getContainer(baseContainerName);
-      const info = await existing.inspect();
-      if (info && info.State) {
-        if (info.State.Running) {
-          if (onProgress) onProgress(`✅ ${svc.name} já está rodando`);
+    // ── Try to reuse existing container ──────────────────────────────────────
+    const savedId = svc.containerId || (svc.containerIds && svc.containerIds[0]);
+    const candidates = [containerName, savedId].filter(Boolean);
+    for (const cid of candidates) {
+      try {
+        const existing = this.docker.getContainer(cid);
+        const info = await existing.inspect();
+        if (info && info.State) {
+          if (info.State.Running) {
+            if (onProgress) onProgress(`✅ ${svc.name} já está rodando`);
+            this._updateServiceStatus(stackId, serviceId, [info.Id], 'running');
+            return info.Id;
+          }
+          if (onProgress) onProgress(`▶️  Iniciando container existente ${svc.name}...`);
+          await existing.start();
+          if (onProgress) onProgress(`✅ ${svc.name} iniciado (${info.Id.slice(0, 12)})`);
           this._updateServiceStatus(stackId, serviceId, [info.Id], 'running');
           return info.Id;
         }
-        // Stopped — just start it
-        if (onProgress) onProgress(`▶️  Reiniciando container existente ${svc.name}...`);
-        await existing.start();
-        if (onProgress) onProgress(`✅ ${svc.name} iniciado (${info.Id.slice(0, 12)})`);
-        this._updateServiceStatus(stackId, serviceId, [info.Id], 'running');
-        return info.Id;
-      }
-    } catch { /* container not found, create new */ }
+      } catch { /* not found, continue */ }
+    }
 
-    const exists = await this._imageExists(imageFull);
-    if (!exists) {
+    // ── Pull image if needed ─────────────────────────────────────────────────
+    const imageFull = `${svc.image}:${svc.tag || 'latest'}`;
+    const imgExists = await this._imageExists(imageFull);
+    if (!imgExists) {
       if (onProgress) onProgress(`⬇️  Baixando imagem ${imageFull}...`);
       await this._pullImage(imageFull, onProgress);
     }
 
-    // Monta configuração do container
+    // ── Resolve volumes to real paths ────────────────────────────────────────
+    const stackDir = path.join(this.dataDir, '..', 'stacks', stackId.slice(0, 8));
+    const binds = (svc.volumes || []).map((v) => {
+      let hostPath = v.host || '';
+      // Named volume (no path separator) — use Docker named volume
+      if (hostPath && !hostPath.includes('/') && !hostPath.startsWith('.')) {
+        return `${hostPath}:${v.container}`;
+      }
+      // Relative path — resolve to stack directory
+      if (hostPath.startsWith('./') || hostPath.startsWith('../')) {
+        hostPath = path.resolve(stackDir, hostPath);
+      }
+      // Ensure directory exists
+      if (hostPath && !hostPath.includes(':')) {
+        try { fs.mkdirSync(hostPath, { recursive: true }); } catch {}
+      }
+      return `${hostPath}:${v.container}`;
+    }).filter(Boolean);
+
+    // ── Port bindings ────────────────────────────────────────────────────────
     const portBindings = {};
     const exposedPorts = {};
+    const bindHost = svc.bindLocalOnly !== false ? '127.0.0.1' : '0.0.0.0';
     for (const p of (svc.ports || [])) {
       const key = `${p.container}/tcp`;
       exposedPorts[key] = {};
-      portBindings[key] = [{ HostPort: String(p.host) }];
+      portBindings[key] = [{ HostIp: bindHost, HostPort: String(p.host) }];
     }
 
+    // ── Create container ─────────────────────────────────────────────────────
     const createdContainerIds = [];
 
     for (let i = 0; i < desiredReplicas; i += 1) {
-      const replicaIndex = i + 1;
-      const suffix = desiredReplicas > 1 ? `-r${replicaIndex}` : '';
-      const containerName = `provir-${stackId.slice(0, 8)}-${svc.name}${suffix}`.replace(/[^a-zA-Z0-9_.-]/g, '-');
+      const suffix = desiredReplicas > 1 ? `-r${i + 1}` : '';
+      const name = `${containerName}${suffix}`;
 
-      try {
-        const old = this.docker.getContainer(containerName);
-        await old.remove({ force: true });
-      } catch {
-        // ok if absent
-      }
+      // Remove old container if exists
+      try { await this.docker.getContainer(name).remove({ force: true }); } catch {}
 
       const hostPortOffset = desiredReplicas > 1 ? i : 0;
       const replicaPortBindings = {};
-      for (const [key, bindings] of Object.entries(portBindings)) {
-        replicaPortBindings[key] = bindings.map((binding) => ({
-          ...binding,
-          HostPort: String(Number(binding.HostPort) + hostPortOffset)
+      for (const [key, val] of Object.entries(portBindings)) {
+        replicaPortBindings[key] = val.map((b) => ({
+          ...b, HostPort: String(Number(b.HostPort) + hostPortOffset)
         }));
       }
 
       const hostConfig = {
         PortBindings: replicaPortBindings,
-        Binds: (svc.volumes || []).map((v) => `${v.host}:${v.container}`),
-        RestartPolicy: { Name: 'unless-stopped' }
+        Binds: binds,
+        NetworkMode: stack.network,
+        RestartPolicy: { Name: 'on-failure', MaximumRetryCount: 3 }
       };
 
-      if (resources.memoryMb > 0) {
-        hostConfig.Memory = resources.memoryMb * 1024 * 1024;
-      }
-      if (resources.cpuLimit > 0) {
-        hostConfig.NanoCpus = Math.round(resources.cpuLimit * 1e9);
-      }
+      if (resources.memoryMb > 0) hostConfig.Memory = resources.memoryMb * 1024 * 1024;
+      if (resources.cpuLimit > 0) hostConfig.NanoCpus = Math.round(resources.cpuLimit * 1e9);
 
       const container = await this.docker.createContainer({
-        name: containerName,
+        name,
         Image: imageFull,
         Cmd: svc.command?.length ? svc.command : undefined,
         Env: (svc.env || []).map((e) => `${e.key}=${e.value}`),
         ExposedPorts: exposedPorts,
         HostConfig: hostConfig,
-        NetworkingConfig: {
-          EndpointsConfig: { [stack.network]: {} }
-        },
         Labels: {
           'provirpanel.managed': 'true',
           'provirpanel.stack.id': stackId,
           'provirpanel.stack.name': stack.name,
           'provirpanel.service.id': serviceId,
           'provirpanel.service.name': svc.name,
-          'provirpanel.service.role': svc.role || 'runtime',
-          'provirpanel.service.replica': String(replicaIndex)
+          'provirpanel.service.role': svc.role || 'runtime'
         }
       });
 
@@ -746,18 +756,26 @@ class StackManager {
       for (const id of ids) {
         try {
           const info = await this.docker.getContainer(id).inspect();
-          if (info.State.Running) runningCount += 1;
           aliveIds.push(id);
+          if (info.State.Running) {
+            runningCount += 1;
+          } else {
+            // Container stopped — record why
+            stacks[stackIdx].services[i].lastExitCode = info.State.ExitCode;
+            stacks[stackIdx].services[i].lastError = info.State.Error || null;
+          }
+          stacks[stackIdx].services[i].restartCount = info.RestartCount || 0;
+          stacks[stackIdx].services[i].health = info.State.Health?.Status || null;
         } catch {
           // container removed externally
         }
       }
 
+
       stacks[stackIdx].services[i].containerIds = aliveIds;
       stacks[stackIdx].services[i].containerId = aliveIds[0] || null;
-      stacks[stackIdx].services[i].status = runningCount > 0 ? 'running' : 'stopped';
+      stacks[stackIdx].services[i].status = runningCount > 0 ? "running" : "stopped";
     }
-
     // Atualiza status geral da stack
     const statuses = stacks[stackIdx].services.map((s) => s.status);
     if (statuses.every((s) => s === 'running')) stacks[stackIdx].status = 'running';
