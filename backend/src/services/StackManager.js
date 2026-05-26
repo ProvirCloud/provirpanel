@@ -452,125 +452,99 @@ class StackManager {
     const svc = stack.services.find((s) => s.id === serviceId);
     if (!svc) throw new Error(`Serviço ${serviceId} não encontrado`);
 
-    const scaling = normalizeScaling(svc.scaling);
-    const resources = normalizeResources(svc.resources);
-    const desiredReplicas = scaling.replicas || 1;
     const containerName = `provir-${stackId.slice(0, 8)}-${svc.name}`.replace(/[^a-zA-Z0-9_.-]/g, '-');
-
     if (onProgress) onProgress(`🔧 Iniciando ${svc.name}...`);
+
     await this._ensureNetwork(stack.network);
 
-    // ── Try to reuse existing container ──────────────────────────────────────
+    // ── Reuse existing container if possible ─────────────────────────────────
     const savedId = svc.containerId || (svc.containerIds && svc.containerIds[0]);
-    const candidates = [containerName, savedId].filter(Boolean);
-    for (const cid of candidates) {
+    for (const cid of [containerName, savedId].filter(Boolean)) {
       try {
         const existing = this.docker.getContainer(cid);
         const info = await existing.inspect();
-        if (info && info.State) {
-          if (info.State.Running) {
-            if (onProgress) onProgress(`✅ ${svc.name} já está rodando`);
-            this._updateServiceStatus(stackId, serviceId, [info.Id], 'running');
-            return info.Id;
-          }
-          if (onProgress) onProgress(`▶️  Iniciando container existente ${svc.name}...`);
-          await existing.start();
-          if (onProgress) onProgress(`✅ ${svc.name} iniciado (${info.Id.slice(0, 12)})`);
+        if (info.State.Running) {
+          if (onProgress) onProgress(`✅ ${svc.name} já está rodando`);
           this._updateServiceStatus(stackId, serviceId, [info.Id], 'running');
           return info.Id;
         }
-      } catch { /* not found, continue */ }
+        if (onProgress) onProgress(`▶️  Iniciando container existente ${svc.name}...`);
+        await existing.start();
+        if (onProgress) onProgress(`✅ ${svc.name} iniciado`);
+        this._updateServiceStatus(stackId, serviceId, [info.Id], 'running');
+        return info.Id;
+      } catch { /* not found */ }
     }
 
-    // ── Pull image if needed ─────────────────────────────────────────────────
+    // ── Create new container (same logic as DockerPanel) ─────────────────────
     const imageFull = `${svc.image}:${svc.tag || 'latest'}`;
-    const imgExists = await this._imageExists(imageFull);
-    if (!imgExists) {
-      if (onProgress) onProgress(`⬇️  Baixando imagem ${imageFull}...`);
-      await this._pullImage(imageFull, onProgress);
-    }
+    if (onProgress) onProgress(`📦 Verificando imagem ${imageFull}...`);
 
-    // ── Resolve volumes to real paths ────────────────────────────────────────
-    const stackDir = path.join(this.dataDir, '..', 'stacks', stackId.slice(0, 8));
+    // Resolve volume paths — create real directories like DockerPanel does
+    const dockerBaseDir = process.env.DOCKER_VOLUME_BASE ||
+      path.join(process.cwd(), 'backend/data/projects/docker');
+    const serviceDir = path.join(dockerBaseDir, containerName);
+    fs.mkdirSync(serviceDir, { recursive: true });
+
     const binds = (svc.volumes || []).map((v) => {
       let hostPath = v.host || '';
-      // Named volume (no path separator) — use Docker named volume
+      // Named volume (no slash) — Docker manages it
       if (hostPath && !hostPath.includes('/') && !hostPath.startsWith('.')) {
         return `${hostPath}:${v.container}`;
       }
-      // Relative path — resolve to stack directory
-      if (hostPath.startsWith('./') || hostPath.startsWith('../')) {
-        hostPath = path.resolve(stackDir, hostPath);
+      // Relative path — resolve to service directory
+      if (!hostPath || hostPath.startsWith('./') || hostPath.startsWith('../')) {
+        hostPath = path.join(serviceDir, (hostPath || '').replace(/^\.\/?/, '') || 'data');
       }
-      // Ensure directory exists
-      if (hostPath && !hostPath.includes(':')) {
-        try { fs.mkdirSync(hostPath, { recursive: true }); } catch {}
-      }
+      fs.mkdirSync(hostPath, { recursive: true });
       return `${hostPath}:${v.container}`;
-    }).filter(Boolean);
+    });
 
-    // ── Port bindings ────────────────────────────────────────────────────────
+    // Port bindings
+    const bindHost = svc.bindLocalOnly !== false ? '127.0.0.1' : '0.0.0.0';
     const portBindings = {};
     const exposedPorts = {};
-    const bindHost = svc.bindLocalOnly !== false ? '127.0.0.1' : '0.0.0.0';
     for (const p of (svc.ports || [])) {
       const key = `${p.container}/tcp`;
       exposedPorts[key] = {};
       portBindings[key] = [{ HostIp: bindHost, HostPort: String(p.host) }];
     }
 
-    // ── Create container ─────────────────────────────────────────────────────
-    const createdContainerIds = [];
+    // Env vars
+    const env = (svc.env || []).map((e) => `${e.key}=${e.value}`);
 
-    for (let i = 0; i < desiredReplicas; i += 1) {
-      const suffix = desiredReplicas > 1 ? `-r${i + 1}` : '';
-      const name = `${containerName}${suffix}`;
-
-      // Remove old container if exists
-      try { await this.docker.getContainer(name).remove({ force: true }); } catch {}
-
-      const hostPortOffset = desiredReplicas > 1 ? i : 0;
-      const replicaPortBindings = {};
-      for (const [key, val] of Object.entries(portBindings)) {
-        replicaPortBindings[key] = val.map((b) => ({
-          ...b, HostPort: String(Number(b.HostPort) + hostPortOffset)
-        }));
-      }
-
-      const hostConfig = {
-        PortBindings: replicaPortBindings,
+    // Container config — identical structure to DockerPanel
+    const containerConfig = {
+      name: containerName,
+      Image: imageFull,
+      Cmd: svc.command?.length ? svc.command : undefined,
+      Env: env,
+      ExposedPorts: exposedPorts,
+      Labels: {
+        'provirpanel.managed': 'true',
+        'provirpanel.stack.id': stackId,
+        'provirpanel.stack.name': stack.name,
+        'provirpanel.service.id': serviceId,
+        'provirpanel.service.name': svc.name,
+        'provirpanel.service.role': svc.role || 'runtime'
+      },
+      HostConfig: {
+        PortBindings: portBindings,
         Binds: binds,
         NetworkMode: stack.network,
         RestartPolicy: { Name: 'on-failure', MaximumRetryCount: 3 }
-      };
+      }
+    };
 
-      if (resources.memoryMb > 0) hostConfig.Memory = resources.memoryMb * 1024 * 1024;
-      if (resources.cpuLimit > 0) hostConfig.NanoCpus = Math.round(resources.cpuLimit * 1e9);
+    // Use DockerManager.runContainer — same as DockerPanel
+    const DockerManager = require('./DockerManager');
+    const dockerManager = new DockerManager();
+    const container = await dockerManager.runContainer(imageFull, containerConfig, onProgress);
 
-      const container = await this.docker.createContainer({
-        name,
-        Image: imageFull,
-        Cmd: svc.command?.length ? svc.command : undefined,
-        Env: (svc.env || []).map((e) => `${e.key}=${e.value}`),
-        ExposedPorts: exposedPorts,
-        HostConfig: hostConfig,
-        Labels: {
-          'provirpanel.managed': 'true',
-          'provirpanel.stack.id': stackId,
-          'provirpanel.stack.name': stack.name,
-          'provirpanel.service.id': serviceId,
-          'provirpanel.service.name': svc.name,
-          'provirpanel.service.role': svc.role || 'runtime'
-        }
-      });
-
-      await container.start();
-      createdContainerIds.push(container.id);
-      if (onProgress) onProgress(`✅ ${svc.name}${suffix} iniciado (${container.id.slice(0, 12)})`);
-    }
-
-    this._updateServiceStatus(stackId, serviceId, createdContainerIds, 'running');
-    return createdContainerIds[0] || null;
+    const containerId = container.Id || container.id;
+    if (onProgress) onProgress(`✅ ${svc.name} rodando (${containerId.slice(0, 12)})`);
+    this._updateServiceStatus(stackId, serviceId, [containerId], 'running');
+    return containerId;
   }
 
   async stopService(stackId, serviceId, onProgress) {

@@ -5650,10 +5650,19 @@ export default function StacksPanel() {
                 </div>
                 <div className="mt-3">
                   <button onClick={async () => {
+                    const cid = selectedService.containerId || (selectedService.containerIds && selectedService.containerIds[0])
+                    if (!cid) { addToast("Container nao iniciado", "error"); return }
                     try {
-                      const res = await api.get(`/stacks/${selectedStack.id}/services/${selectedService.id}/logs`)
-                      setProgressLog({ title: `Logs: ${selectedService.name}`, messages: (res.data?.logs || "Sem logs").split("\n") })
-                    } catch (err) { addToast("Erro ao carregar logs", "error") }
+                      const res = await api.get(`/docker/containers/${cid}/logs?tail=300`)
+                      const logs = res.data?.logs || res.data || "Sem logs"
+                      const lines = typeof logs === "string" ? logs.split("\n") : ["Sem logs"]
+                      setProgressLog({ title: `Logs: ${selectedService.name}`, messages: lines })
+                    } catch {
+                      try {
+                        const res = await api.get(`/stacks/${selectedStack.id}/services/${selectedService.id}/logs`)
+                        setProgressLog({ title: `Logs: ${selectedService.name}`, messages: (res.data?.logs || "Sem logs").split("\n") })
+                      } catch (err) { addToast("Erro ao carregar logs", "error") }
+                    }
                   }}
                     className="flex w-full items-center justify-center gap-1.5 rounded-xl border border-blue-500/30 bg-blue-500/10 py-2 text-xs text-blue-300 hover:bg-blue-500/20">
                     <Eye size={12} /> Ver Logs

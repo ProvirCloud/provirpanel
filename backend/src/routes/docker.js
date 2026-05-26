@@ -1782,6 +1782,33 @@ router.post('/services', async (req, res, next) => {
 });
 
 
+
+router.get("/containers/:id/logs", async (req, res, next) => {
+  try {
+    const tail = parseInt(req.query.tail) || 200;
+    const container = dockerManager.docker.getContainer(req.params.id);
+    const logData = await container.logs({ stdout: true, stderr: true, tail, timestamps: true });
+    let text = "";
+    if (Buffer.isBuffer(logData)) {
+      let offset = 0;
+      while (offset + 8 <= logData.length) {
+        const size = logData.readUInt32BE(offset + 4);
+        const start = offset + 8;
+        const end = start + size;
+        if (end > logData.length) break;
+        text += logData.slice(start, end).toString("utf8");
+        offset = end;
+      }
+      if (!text) text = logData.toString("utf8");
+    } else {
+      text = String(logData || "");
+    }
+    res.json({ logs: text });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
 router.post("/containers/:id/start", async (req, res, next) => {
   try {
     const container = dockerManager.docker.getContainer(req.params.id);

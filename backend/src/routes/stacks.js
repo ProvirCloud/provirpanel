@@ -705,23 +705,33 @@ router.post("/:id/services/:svcId/upload", stackUpload.single("file"), async (re
     if (!svc) return res.status(404).json({ error: "Servico nao encontrado" });
     if (!req.file) return res.status(400).json({ error: "Arquivo obrigatorio" });
 
-    // Determine target directory from service volume
-    const volume = (svc.volumes || [])[0];
-    let targetDir = volume?.host || `/tmp/provir-svc-${svc.id}`;
-    // If volume host is a named volume (no / or ./), use a local path
-    if (!targetDir.startsWith("/") && !targetDir.startsWith("./")) {
-      targetDir = `/var/lib/docker/volumes/${targetDir}/_data`;
-    }
+    // Use same base dir as DockerPanel
+    const dockerBaseDir = process.env.DOCKER_VOLUME_BASE ||
+      path.join(process.cwd(), "backend/data/projects/docker");
+    const containerName = `provir-${req.params.id.slice(0, 8)}-${svc.name}`.replace(/[^a-zA-Z0-9_.-]/g, "-");
+    const serviceDir = path.join(dockerBaseDir, containerName);
+    fs.mkdirSync(serviceDir, { recursive: true });
 
-    const fsp = require("fs/promises");
-    const { execSync } = require("child_process");
-    await fsp.mkdir(targetDir, { recursive: true });
+    // Target is the first volume host path or the service dir
+    const volume = (svc.volumes || [])[0];
+    let targetDir = serviceDir;
+    if (volume && volume.host) {
+      if (volume.host.startsWith("/")) {
+        targetDir = volume.host;
+      } else if (volume.host.startsWith("./") || volume.host.startsWith("../")) {
+        targetDir = path.join(serviceDir, volume.host.replace(/^\.\/?/, ""));
+      } else {
+        // Named volume — extract to service dir, will be mounted
+        targetDir = serviceDir;
+      }
+    }
+    fs.mkdirSync(targetDir, { recursive: true });
 
     const archivePath = req.file.path;
     const originalName = req.file.originalname || "";
     const lower = originalName.toLowerCase();
+    const { execSync } = require("child_process");
 
-    // Extract archive
     if (lower.endsWith(".zip")) {
       execSync(`unzip -o "${archivePath}" -d "${targetDir}"`, { stdio: "pipe" });
     } else if (lower.endsWith(".tar.gz") || lower.endsWith(".tgz")) {
@@ -729,24 +739,37 @@ router.post("/:id/services/:svcId/upload", stackUpload.single("file"), async (re
     } else if (lower.endsWith(".tar")) {
       execSync(`tar -xf "${archivePath}" -C "${targetDir}"`, { stdio: "pipe" });
     } else {
-      // Single file — just copy
-      await fsp.copyFile(archivePath, require("path").join(targetDir, originalName));
+      fs.copyFileSync(archivePath, path.join(targetDir, originalName));
     }
 
-    // Cleanup temp file
-    await fsp.unlink(archivePath).catch(() => {});
+    fs.unlinkSync(archivePath);
 
     // Flatten single root directory
-    const entries = await fsp.readdir(targetDir, { withFileTypes: true });
+    const entries = fs.readdirSync(targetDir, { withFileTypes: true });
     const dirs = entries.filter((e) => e.isDirectory() && e.name !== "__MACOSX");
     const files = entries.filter((e) => e.isFile() && e.name !== ".DS_Store");
     if (dirs.length === 1 && files.length === 0) {
-      const rootDir = require("path").join(targetDir, dirs[0].name);
-      const nested = await fsp.readdir(rootDir);
+      const rootDir = path.join(targetDir, dirs[0].name);
+      const nested = fs.readdirSync(rootDir);
       for (const entry of nested) {
-        await fsp.rename(require("path").join(rootDir, entry), require("path").join(targetDir, entry));
+        fs.renameSync(path.join(rootDir, entry), path.join(targetDir, entry));
       }
-      await fsp.rmdir(rootDir).catch(() => {});
+      fs.rmdirSync(rootDir);
+    }
+
+    // Update service volume to point to real path
+    const stacks = stackManager.readStacks();
+    const stackIdx = stacks.findIndex((s) => s.id === req.params.id);
+    if (stackIdx >= 0) {
+      const svcIdx = stacks[stackIdx].services.findIndex((s) => s.id === req.params.svcId);
+      if (svcIdx >= 0) {
+        if (!stacks[stackIdx].services[svcIdx].volumes || !stacks[stackIdx].services[svcIdx].volumes.length) {
+          stacks[stackIdx].services[svcIdx].volumes = [{ host: targetDir, container: "/app" }];
+        } else {
+          stacks[stackIdx].services[svcIdx].volumes[0].host = targetDir;
+        }
+        stackManager.writeStacks(stacks);
+      }
     }
 
     res.json({ success: true, targetDir, file: originalName });
