@@ -8,7 +8,7 @@ import {
   X, Settings, GitBranch, Cpu, Server, Upload,
   Maximize2, Minimize2, LogOut
 } from 'lucide-react'
-import api from '../services/api.js'
+import api, { uploadApi } from '../services/api.js'
 import { useTheme } from '../app/providers/theme-provider'
 import { useConfirm } from "./ui/ConfirmModal"
 import SERVICE_CATALOG from '../data/serviceCatalog.js'
@@ -3090,7 +3090,7 @@ const ServiceConfigPanel = memo(({ service, stack, onSave, onDelete, onClose }) 
     try {
       const formData = new FormData()
       formData.append("file", file)
-      await api.post(`/stacks/${stack.id}/services/${service.id}/upload`, formData, { headers: { "Content-Type": "multipart/form-data" }, timeout: 300000 })
+      await uploadApi.post(`/stacks/${stack.id}/services/${service.id}/upload`, formData, { headers: { "Content-Type": "multipart/form-data" }, timeout: 300000 })
       upd("projectFiles", [...form.projectFiles, { name: file.name, size: file.size, type: file.type, uploaded: true }])
     } catch (err) {
       upd("projectFiles", form.projectFiles.filter((f) => f.name !== file.name))
@@ -3766,7 +3766,7 @@ const AddServiceModal = ({ onAdd, onClose, stageKey = null, stack = null }) => {
         formData.append('contextArchive', contextFile)
         setBuildLog((prev) => [...prev, `\ud83d\udcc1 Enviando ${contextFile.name} (${(contextFile.size / 1024 / 1024).toFixed(1)} MB)...`])
       }
-      const res = await api.post('/docker/images/build', formData, {
+      const res = await uploadApi.post('/docker/images/build', formData, {
         headers: { 'Content-Type': 'multipart/form-data' },
         timeout: 600000
       })

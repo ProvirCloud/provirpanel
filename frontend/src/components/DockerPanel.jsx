@@ -18,7 +18,7 @@ import {
   Wrench
 } from 'lucide-react'
 import { Area, AreaChart, ResponsiveContainer, Tooltip as RechartsTooltip } from 'recharts'
-import api from '../services/api.js'
+import api, { uploadApi } from '../services/api.js'
 import { createDockerLogsSocket, createDockerProgressSocket } from '../services/socket.js'
 
 // Polyfill para crypto.randomUUID
@@ -1240,7 +1240,7 @@ const DockerPanel = ({ showPageIntro = true }) => {
 
     setBuildWorking(true)
     try {
-      const response = await api.post('/docker/images/build', formData, {
+      const response = await uploadApi.post('/docker/images/build', formData, {
         headers: { 'Content-Type': 'multipart/form-data' },
         timeout: 300000
       })
@@ -1293,7 +1293,7 @@ const DockerPanel = ({ showPageIntro = true }) => {
     formData.append('archive', file)
     try {
       setProjectUploadStatus({ status: 'uploading', progress: 0, message: 'Enviando arquivo...' })
-      await api.post(`/docker/services/${serviceId}/project-upload`, formData, {
+      await uploadApi.post(`/docker/services/${serviceId}/project-upload`, formData, {
         headers: { 'Content-Type': 'multipart/form-data' },
         onUploadProgress: (event) => {
           const total = event.total || 0
