@@ -73,7 +73,7 @@ cat <<NGINX > "${CONF_TARGET}"
 server {
     listen 80;
     server_name _;
-    client_max_body_size 500m;
+    client_max_body_size 800m;
 
 
     # API Backend

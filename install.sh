@@ -377,7 +377,7 @@ server {
     listen [::]:80 default_server;
     server_name _;
     
-    client_max_body_size 500m;
+    client_max_body_size 800m;
 
     # API Backend
     location /api/ {

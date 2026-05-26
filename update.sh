@@ -212,17 +212,17 @@ chown -R provirpanel:provirpanel "${INSTALL_DIR}"
 PANEL_NGINX="/etc/nginx/sites-available/provirpanel"
 if [ -f "$PANEL_NGINX" ]; then
   if grep -q "client_max_body_size" "$PANEL_NGINX"; then
-    sed -i 's/client_max_body_size.*/client_max_body_size 500m;/' "$PANEL_NGINX"
+    sed -i 's/client_max_body_size.*/client_max_body_size 800m;/' "$PANEL_NGINX"
   else
-    sed -i '/server_name/a\    client_max_body_size 500m;' "$PANEL_NGINX"
+    sed -i '/server_name/a\    client_max_body_size 800m;' "$PANEL_NGINX"
   fi
-  log "client_max_body_size 500m configurado no nginx do painel"
+  log "client_max_body_size 800m configurado no nginx do painel"
 fi
 
 # Tambem garantir no nginx.conf global
 if [ -f /etc/nginx/nginx.conf ] && ! grep -q "client_max_body_size" /etc/nginx/nginx.conf; then
-  sed -i '/http {/a\    client_max_body_size 500m;' /etc/nginx/nginx.conf
-  log "client_max_body_size 500m adicionado ao nginx.conf global"
+  sed -i '/http {/a\    client_max_body_size 800m;' /etc/nginx/nginx.conf
+  log "client_max_body_size 800m adicionado ao nginx.conf global"
 fi
 
 test_and_reload_nginx

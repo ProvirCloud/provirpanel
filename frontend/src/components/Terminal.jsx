@@ -26,8 +26,8 @@ const HISTORY_KEY = 'cloudpainel_terminal_history'
 const TERMINAL_FONT_SIZE = 14
 const TERMINAL_LINE_HEIGHT = 1.18
 const TERMINAL_FONT_FAMILY = '"JetBrains Mono", ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", "Courier New", monospace'
-const TERMINAL_SAFE_PADDING_X = 20
-const TERMINAL_SAFE_PADDING_Y = 20
+const TERMINAL_SAFE_PADDING_X = 28
+const TERMINAL_SAFE_PADDING_Y = 24
 const COMMAND_HINTS = [
   'ls',
   'll',
@@ -644,7 +644,7 @@ const Terminal = ({ showPageIntro = true }) => {
           >
             <div
               ref={setContainerRef(tab.id)}
-              className="provir-terminal-shell h-[calc(100vh-280px)] min-h-[400px] w-full resize-y overflow-hidden rounded-2xl border border-[#30363d] bg-[#0d1117] text-[#c9d1d9] shadow-[0_16px_48px_rgba(0,0,0,0.4)]"
+              className="provir-terminal-shell w-full overflow-hidden rounded-2xl border border-[#30363d] bg-[#0d1117] text-[#c9d1d9] shadow-[0_16px_48px_rgba(0,0,0,0.4)]" style={{ height: "calc(100vh - 220px)", minHeight: 300 }}
             />
             <button
               className="absolute right-3 top-3 hidden items-center gap-2 rounded-lg border border-[#30363d] bg-[#161b22]/95 px-3 py-1.5 text-[11px] text-[#c9d1d9] shadow-lg backdrop-blur-sm transition group-hover:flex hover:border-[#58a6ff]/50"

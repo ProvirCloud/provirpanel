@@ -325,13 +325,15 @@
   }
 
   .provir-terminal-shell {
-    padding: 10px 12px;
+    padding: 8px;
+    display: flex;
+    flex-direction: column;
   }
 
   .provir-terminal-shell .xterm {
-    height: 100%;
+    flex: 1;
+    height: 100% !important;
   }
-
   .provir-terminal-shell .xterm-viewport {
     overflow-y: auto !important;
     overscroll-behavior: contain;
