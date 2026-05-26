@@ -92,7 +92,7 @@ const buildExternalProxyLocation = (route: RouteConfig) => {
 const buildProxyLocation = (route: RouteConfig, upstream: UpstreamConfig) => {
   const lines = [
     `    location ${locationDirective(route)} {`,
-    `        proxy_pass http://${upstream.name}${route.proxyPassPath || ""};`,
+    `        proxy_pass http://${upstream.name}${route.proxyPassPath && route.proxyPassPath !== "/" ? route.proxyPassPath : ""};`,
     '        proxy_http_version 1.1;',
     ...buildProxyHeaders(route.headers),
   ]
