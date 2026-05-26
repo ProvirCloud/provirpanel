@@ -130,7 +130,11 @@ function detectRoute(
   // ── Proxy / WebSocket ──────────────────────────────────────────────────────
   if (proxyPassMatch) {
     const rawTarget = proxyPassMatch[1].trim()
-    const withoutScheme = rawTarget.replace(/^https?:\/\//, '').split('/')[0]
+    // Extract path after upstream/host (e.g. http://upstream/index.html -> /index.html)
+    const urlAfterScheme = rawTarget.replace(/^https?:\/\//, "")
+    const slashIdx = urlAfterScheme.indexOf("/")
+    const withoutScheme = slashIdx >= 0 ? urlAfterScheme.slice(0, slashIdx) : urlAfterScheme
+    const proxyPassPath = slashIdx >= 0 ? urlAfterScheme.slice(slashIdx) : ""
     // Check if target is a named upstream
     let upstreamId: string | undefined
     if (upstreamNames.has(withoutScheme)) {
@@ -160,6 +164,9 @@ function detectRoute(
       headers,
       timeouts,
       proxyBuffering,
+      proxyPassPath: proxyPassPath || undefined,
+      spaFallback: /proxy_intercept_errors\s+on/.test(inner),
+      fallbackUpstreamPath: inner.match(/error_page\s+404\s*=\s*@\S+/)?.[0] ? (inner.match(/error_page.*\n.*proxy_pass\s+\S+(\/[^;]*);/)?.[1] || "/index.html") : undefined,
     }
   }
 
