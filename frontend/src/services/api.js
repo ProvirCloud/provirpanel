@@ -14,31 +14,13 @@ api.interceptors.request.use((config) => {
   return config
 })
 
-// Upload API — bypasses Cloudflare by using the server IP directly
-// Uses the current page's IP (from window.location) with http:// protocol
-const getUploadBaseUrl = () => {
-  const host = window.location.hostname
-  // If already accessing by IP, use same origin
-  if (/^\d+\.\d+\.\d+\.\d+$/.test(host)) {
-    return `${window.location.protocol}//${host}/api`
-  }
-  // Use the same origin but force /api path (works if Cloudflare is DNS-only)
-  // If Cloudflare proxy is active, this still goes through CF
-  // Best approach: use the server IP from env or fallback to same origin
-  const directIp = import.meta.env.VITE_SERVER_IP
-  if (directIp) {
-    return `http://${directIp}/api`
-  }
-  // Fallback: same origin (will go through CF if proxied)
-  return '/api'
-}
-
+// Upload API — same origin but with no size limits and long timeout
 export const uploadApi = axios.create({
-  baseURL: getUploadBaseUrl(),
+  baseURL: '/api',
   withCredentials: true,
   maxContentLength: Infinity,
   maxBodyLength: Infinity,
-  timeout: 600000, // 10 min for large uploads
+  timeout: 600000, // 10 min
 })
 
 uploadApi.interceptors.request.use((config) => {
