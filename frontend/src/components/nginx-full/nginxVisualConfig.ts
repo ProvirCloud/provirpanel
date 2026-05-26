@@ -59,6 +59,7 @@ export type RouteConfig = {
   redirectTo?: string
   redirectCode?: 301 | 302 | 307 | 308
   externalUrl?: string
+  proxyPassPath?: string
   cacheExpires?: string
   headers: HeaderName[]
   timeouts?: RouteTimeouts

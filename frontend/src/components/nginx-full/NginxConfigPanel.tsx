@@ -376,6 +376,16 @@ function RoutePanel({
             </select>
           </Section>
 
+          <Section label="Path no destino (opcional)">
+            <input
+              className={inputCls}
+              value={route.proxyPassPath || ""}
+              onChange={(e) => set("proxyPassPath", e.target.value)}
+              placeholder="/index.html ou /app/"
+            />
+            <p className="mt-1 text-[10px] text-white/30">Adicionado ao proxy_pass. Ex: /index.html, /app/, /v1/</p>
+          </Section>
+
           {upstream && (
             <Section label="Método do load balancer">
               <select
