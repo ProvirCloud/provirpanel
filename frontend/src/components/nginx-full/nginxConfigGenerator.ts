@@ -116,7 +116,8 @@ const buildProxyLocation = (route: RouteConfig, upstream: UpstreamConfig) => {
     const fallbackPath = route.fallbackUpstreamPath || "/index.html"
     lines.push("")
     lines.push(`    location ${fallbackName} {`)
-    lines.push(`        proxy_pass http://${upstream.name}${fallbackPath};`)
+    lines.push(`        rewrite ^ ${fallbackPath} break;`)
+    lines.push(`        proxy_pass http://${upstream.name};`)
     lines.push("        proxy_http_version 1.1;")
     lines.push("        proxy_set_header Host $host;")
     lines.push("        proxy_set_header X-Real-IP $remote_addr;")
