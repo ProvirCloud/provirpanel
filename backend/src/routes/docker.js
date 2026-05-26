@@ -140,6 +140,19 @@ const assembleChunkUpload = (uploadId) => {
   };
 };
 
+const pushBuildProgress = (progress, sessionId, message, phase = 'build') => {
+  if (!message) return;
+  progress.push(message);
+  if (progressNamespace && sessionId) {
+    progressNamespace.emit('progress', {
+      type: 'image-build',
+      sessionId,
+      phase,
+      message
+    });
+  }
+};
+
 let dockerBaseDir =
   process.env.DOCKER_VOLUME_BASE ||
   (process.env.CLOUDPAINEL_PROJECTS_DIR
@@ -1312,16 +1325,18 @@ const buildImageFromPayload = async (body = {}, file = null, progress = []) => {
     const dockerfileContent = String(body?.dockerfileContent || '').trim();
     const dockerfilePathInput = String(body?.dockerfilePath || '').trim();
     const buildArgsRaw = String(body?.buildArgs || '').trim();
+    const buildSessionId = String(body?.buildSessionId || '').trim();
+    const replaceImageId = String(body?.replaceImageId || '').trim();
 
     if (!imageName) {
       throw createHttpError('imageName is required', 400);
     }
 
     tempDir = fs.mkdtempSync(path.join(os.tmpdir(), 'provir-build-'));
-    progress.push(`📁 Contexto temporario criado: ${tempDir}`);
+    pushBuildProgress(progress, buildSessionId, `📁 Contexto temporario criado: ${tempDir}`, 'prepare');
 
     if (file?.path) {
-      progress.push(`📦 Extraindo arquivo ${file.originalname}...`);
+      pushBuildProgress(progress, buildSessionId, `📦 Extraindo arquivo ${file.originalname}...`, 'extract');
       await extractArchiveTo(file.path, tempDir, file.originalname);
     }
 
@@ -1334,7 +1349,7 @@ const buildImageFromPayload = async (body = {}, file = null, progress = []) => {
       const dockerfileFullPath = path.join(tempDir, dockerfileName);
       fs.mkdirSync(path.dirname(dockerfileFullPath), { recursive: true });
       fs.writeFileSync(dockerfileFullPath, dockerfileContent, 'utf8');
-      progress.push(`📝 Dockerfile salvo em ${dockerfileName}`);
+      pushBuildProgress(progress, buildSessionId, `📝 Dockerfile salvo em ${dockerfileName}`, 'prepare');
     } else if (dockerfilePathInput) {
       if (!isSafeRelativePath(dockerfilePathInput)) {
         throw createHttpError('dockerfilePath inválido', 400);
@@ -1344,13 +1359,13 @@ const buildImageFromPayload = async (body = {}, file = null, progress = []) => {
         throw createHttpError(`Dockerfile não encontrado no contexto: ${dockerfilePathInput}`, 400);
       }
       dockerfileName = dockerfilePathInput;
-      progress.push(`📄 Usando Dockerfile existente: ${dockerfileName}`);
+      pushBuildProgress(progress, buildSessionId, `📄 Usando Dockerfile existente: ${dockerfileName}`, 'prepare');
     } else {
       const defaultDockerfile = path.join(tempDir, 'Dockerfile');
       if (!fs.existsSync(defaultDockerfile)) {
         throw createHttpError('Envie dockerfileContent ou um contexto com arquivo Dockerfile', 400);
       }
-      progress.push('📄 Usando Dockerfile padrão do contexto');
+      pushBuildProgress(progress, buildSessionId, '📄 Usando Dockerfile padrão do contexto', 'prepare');
     }
 
     let buildArgs = undefined;
@@ -1365,16 +1380,32 @@ const buildImageFromPayload = async (body = {}, file = null, progress = []) => {
       }
     }
 
-    progress.push(`🔨 Iniciando build da imagem ${imageName}...`);
+    pushBuildProgress(progress, buildSessionId, `🔨 Iniciando build da imagem ${imageName}...`, 'build');
     await dockerManager.buildImage(
       imageName,
       tempDir,
       (msg) => {
-        if (msg) progress.push(msg);
+        pushBuildProgress(progress, buildSessionId, msg, 'build');
       },
       { dockerfileName, buildArgs }
     );
-    progress.push(`✅ Build finalizado: ${imageName}`);
+    if (replaceImageId) {
+      try {
+        const builtImage = await dockerManager.docker.getImage(imageName).inspect();
+        if (builtImage?.Id && builtImage.Id !== replaceImageId) {
+          await dockerManager.docker.getImage(replaceImageId).remove({ force: false });
+          pushBuildProgress(progress, buildSessionId, `🧹 Imagem anterior removida: ${replaceImageId.slice(7, 19)}`, 'cleanup');
+        }
+      } catch (err) {
+        pushBuildProgress(
+          progress,
+          buildSessionId,
+          `⚠️ Imagem anterior mantida: ${err.message}`,
+          'cleanup'
+        );
+      }
+    }
+    pushBuildProgress(progress, buildSessionId, `✅ Build finalizado: ${imageName}`, 'done');
 
     return { status: 'built', imageName, progress };
   } finally {
@@ -1415,6 +1446,8 @@ router.post('/images/build/init', (req, res, next) => {
       dockerfileContent: String(req.body?.dockerfileContent || ''),
       dockerfilePath: String(req.body?.dockerfilePath || ''),
       buildArgs: String(req.body?.buildArgs || ''),
+      buildSessionId: String(req.body?.buildSessionId || ''),
+      replaceImageId: String(req.body?.replaceImageId || ''),
       createdAt: new Date().toISOString()
     });
 
@@ -1451,7 +1484,9 @@ router.post('/images/build/complete', async (req, res, next) => {
         imageName: metadata.imageName,
         dockerfileContent: metadata.dockerfileContent,
         dockerfilePath: metadata.dockerfilePath,
-        buildArgs: metadata.buildArgs
+        buildArgs: metadata.buildArgs,
+        buildSessionId: metadata.buildSessionId,
+        replaceImageId: metadata.replaceImageId
       },
       { path: archivePath, originalname: filename },
       progress

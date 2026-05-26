@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from 'react'
+import { useEffect, useMemo, useRef, useState } from 'react'
 import { useNavigate } from 'react-router-dom'
 import {
   Activity,
@@ -768,17 +768,20 @@ const DockerPanel = ({ showPageIntro = true }) => {
   const [buildImageName, setBuildImageName] = useState('')
   const [buildDockerfile, setBuildDockerfile] = useState('')
   const [buildContextArchive, setBuildContextArchive] = useState(null)
+  const [buildReplaceImage, setBuildReplaceImage] = useState(null)
   const [registryAdvanced, setRegistryAdvanced] = useState(false)
   const [selectedRegistry, setSelectedRegistry] = useState('')
   const [registryDialog, setRegistryDialog] = useState(null)
   const [pullWorking, setPullWorking] = useState(false)
   const [buildWorking, setBuildWorking] = useState(false)
+  const [buildStatus, setBuildStatus] = useState(null)
   const [appSearch, setAppSearch] = useState('')
   const [opsSearch, setOpsSearch] = useState('')
   const [appCategory, setAppCategory] = useState('all')
   const [expandedClusterId, setExpandedClusterId] = useState(null)
   const socket = useMemo(() => createDockerLogsSocket(), [])
   const progressSocket = useMemo(() => createDockerProgressSocket(), [])
+  const buildSessionRef = useRef(null)
 
   const templateMap = useMemo(
     () => new Map((templates || []).map((template) => [template.id, template])),
@@ -1182,6 +1185,18 @@ const DockerPanel = ({ showPageIntro = true }) => {
     }
 
     const handleProgress = (payload) => {
+      if (payload.type === 'image-build') {
+        if (payload.sessionId && payload.sessionId !== buildSessionRef.current) return
+        if (payload.message) {
+          setBuildStatus((prev) => ({
+            status: payload.phase === 'done' ? 'success' : 'building',
+            progress: payload.phase === 'done' ? 100 : Math.max(prev?.progress || 0, 99),
+            message: payload.message,
+            logs: [...(prev?.logs || []), payload.message]
+          }))
+        }
+        return
+      }
       if (payload.message) {
         setServiceProgress((prev) => [...prev, payload.message])
       }
@@ -1293,6 +1308,24 @@ const DockerPanel = ({ showPageIntro = true }) => {
     }
   }
 
+  const prepareImageRebuild = (tag, imageId) => {
+    if (!tag || tag === 'none') {
+      addToast('Imagem sem tag não pode ser rebuildada diretamente', 'error')
+      return
+    }
+    setBuildImageName(tag)
+    setBuildDockerfile(`FROM ${tag}\n\n# Edite as instruções abaixo e use o mesmo nome/tag para substituir esta imagem.\n`)
+    setBuildContextArchive(null)
+    setBuildReplaceImage({ id: imageId, tag })
+    setBuildStatus({
+      status: 'idle',
+      progress: 0,
+      message: `Preparando rebuild de ${tag}`,
+      logs: []
+    })
+    setActiveTab('images')
+  }
+
   const pullCustomImage = async () => {
     if (!customImageName.trim()) {
       addToast('Informe o nome da imagem', 'error')
@@ -1326,13 +1359,27 @@ const DockerPanel = ({ showPageIntro = true }) => {
     }
 
     const formData = new FormData()
+    const buildSessionId = generateUUID()
+    buildSessionRef.current = buildSessionId
+    const replaceImageId =
+      buildReplaceImage?.tag === buildImageName.trim() ? buildReplaceImage.id : ''
     formData.append('imageName', buildImageName.trim())
     formData.append('dockerfileContent', buildDockerfile)
+    formData.append('buildSessionId', buildSessionId)
+    if (replaceImageId) {
+      formData.append('replaceImageId', replaceImageId)
+    }
     if (buildContextArchive) {
       formData.append('contextArchive', buildContextArchive)
     }
 
     setBuildWorking(true)
+    setBuildStatus({
+      status: 'uploading',
+      progress: buildContextArchive ? 0 : 5,
+      message: buildContextArchive ? 'Enviando contexto do build...' : 'Preparando build...',
+      logs: []
+    })
     try {
       const response =
         buildContextArchive && buildContextArchive.size > CHUNKED_UPLOAD_THRESHOLD_BYTES
@@ -1343,18 +1390,56 @@ const DockerPanel = ({ showPageIntro = true }) => {
               completeUrl: '/docker/images/build/complete',
               metadata: {
                 imageName: buildImageName.trim(),
-                dockerfileContent: buildDockerfile
+                dockerfileContent: buildDockerfile,
+                buildSessionId,
+                replaceImageId
+              },
+              onProgress: (progress, chunkIndex, totalChunks) => {
+                setBuildStatus((prev) => ({
+                  ...(prev || {}),
+                  status: progress >= 99 ? 'building' : 'uploading',
+                  progress,
+                  message:
+                    progress >= 99
+                      ? 'Contexto enviado. Build em andamento...'
+                      : `Enviando contexto (${chunkIndex}/${totalChunks})...`
+                }))
               }
             })
           : await uploadApi.post('/docker/images/build', formData, {
               headers: { 'Content-Type': 'multipart/form-data' },
-              timeout: 300000
+              timeout: 300000,
+              onUploadProgress: (event) => {
+                const total = event.total || 0
+                const progress = total ? Math.min(99, Math.round((event.loaded / total) * 100)) : 10
+                setBuildStatus((prev) => ({
+                  ...(prev || {}),
+                  status: progress >= 99 ? 'building' : 'uploading',
+                  progress,
+                  message: progress >= 99 ? 'Contexto enviado. Build em andamento...' : 'Enviando contexto...'
+                }))
+              }
             })
       addToast(`Imagem construída: ${response.data?.imageName || buildImageName}`)
+      setBuildStatus((prev) => ({
+        status: 'success',
+        progress: 100,
+        message: `Imagem construída: ${response.data?.imageName || buildImageName}`,
+        logs: response.data?.progress?.length ? response.data.progress : prev?.logs || []
+      }))
       setBuildContextArchive(null)
+      setBuildReplaceImage(null)
       loadImages()
     } catch (err) {
-      addToast(err.response?.data?.message || 'Erro ao construir imagem', 'error')
+      const message = err.response?.data?.message || 'Erro ao construir imagem'
+      const logs = err.response?.data?.progress || []
+      setBuildStatus((prev) => ({
+        status: 'error',
+        progress: prev?.progress || 0,
+        message,
+        logs: logs.length ? logs : [...(prev?.logs || []), message]
+      }))
+      addToast(message, 'error')
     } finally {
       setBuildWorking(false)
     }
@@ -2760,6 +2845,12 @@ const DockerPanel = ({ showPageIntro = true }) => {
                         Atualizar
                       </button>
                       <button
+                        className="rounded-xl border border-amber-800 bg-amber-950 px-3 py-2 text-xs text-amber-200 hover:bg-amber-900"
+                        onClick={() => prepareImageRebuild(tag, img.Id)}
+                      >
+                        Editar Dockerfile
+                      </button>
+                      <button
                         className="rounded-xl border border-rose-800 bg-rose-950 px-3 py-2 text-xs text-rose-200 hover:bg-rose-900"
                         onClick={() => removeImage(img.Id)}
                       >
@@ -2782,7 +2873,12 @@ const DockerPanel = ({ showPageIntro = true }) => {
                 className="w-full rounded-xl border border-slate-800 bg-slate-950 px-3 py-2 text-sm text-white"
                 placeholder="Nome da imagem (ex: sockets-one:latest)"
                 value={buildImageName}
-                onChange={(e) => setBuildImageName(e.target.value)}
+                onChange={(e) => {
+                  setBuildImageName(e.target.value)
+                  if (buildReplaceImage && e.target.value.trim() !== buildReplaceImage.tag) {
+                    setBuildReplaceImage(null)
+                  }
+                }}
               />
               <textarea
                 className="h-56 w-full rounded-xl border border-slate-800 bg-slate-950 px-3 py-2 font-mono text-xs text-slate-200"
@@ -2790,6 +2886,11 @@ const DockerPanel = ({ showPageIntro = true }) => {
                 value={buildDockerfile}
                 onChange={(e) => setBuildDockerfile(e.target.value)}
               />
+              {buildReplaceImage?.tag === buildImageName.trim() && (
+                <div className="rounded-xl border border-amber-500/30 bg-amber-500/10 px-3 py-2 text-xs text-amber-200">
+                  Esta ação rebuilda a tag existente e tenta remover a imagem anterior após o build.
+                </div>
+              )}
               <div className="flex flex-col gap-2 lg:flex-row lg:items-center lg:justify-between">
                 <div>
                   <label className="text-xs text-slate-300">Contexto do build (zip/tar opcional)</label>
@@ -2805,9 +2906,34 @@ const DockerPanel = ({ showPageIntro = true }) => {
                   onClick={buildCustomImage}
                   disabled={buildWorking}
                 >
-                  {buildWorking ? 'Construindo...' : 'Construir imagem'}
+                  {buildWorking
+                    ? 'Construindo...'
+                    : buildReplaceImage?.tag === buildImageName.trim()
+                      ? 'Rebuildar imagem'
+                      : 'Construir imagem'}
                 </button>
               </div>
+              {buildStatus && (
+                <div className="rounded-xl border border-slate-800 bg-slate-950/80 p-3 text-xs text-slate-200">
+                  <div className="flex items-center justify-between gap-3">
+                    <span>{buildStatus.message || 'Aguardando build'}</span>
+                    <span className="font-mono text-slate-400">{buildStatus.progress || 0}%</span>
+                  </div>
+                  <div className="mt-2 h-2 w-full rounded-full bg-slate-800">
+                    <div
+                      className={`h-2 rounded-full transition-all ${
+                        buildStatus.status === 'error' ? 'bg-rose-500' : 'bg-emerald-500'
+                      }`}
+                      style={{ width: `${buildStatus.progress || 0}%` }}
+                    />
+                  </div>
+                  {buildStatus.logs?.length > 0 && (
+                    <pre className="mt-3 max-h-48 overflow-y-auto whitespace-pre-wrap rounded-lg border border-slate-800 bg-black/40 p-3 font-mono text-[11px] leading-5 text-emerald-200">
+                      {buildStatus.logs.slice(-80).join('\n')}
+                    </pre>
+                  )}
+                </div>
+              )}
             </div>
           </div>
 
