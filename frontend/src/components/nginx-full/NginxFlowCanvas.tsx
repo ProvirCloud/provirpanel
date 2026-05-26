@@ -43,16 +43,18 @@ const ROUTE_ICONS: Record<RouteConfig['type'], React.ElementType> = {
   proxy:          ArrowRightLeft,
   websocket:      Radio,
   redirect:       CornerDownRight,
+  'external-proxy': CornerDownRight,
   'static-app':   FolderKanban,
   'static-assets': HardDrive,
   'static-site':  FolderKanban,
 }
 
-const ROUTE_TONES: Record<RouteConfig['type'], 'proxy' | 'websocket' | 'static' | 'redirect'> = {
+const ROUTE_TONES: Record<RouteConfig['type'], 'proxy' | 'websocket' | 'static' | 'redirect' | 'external-proxy'> = {
   proxy:          'proxy',
   websocket:      'websocket',
   redirect:       'redirect',
   'static-app':   'static',
+  'external-proxy': 'proxy',
   'static-assets':'static',
   'static-site':  'static',
 }
@@ -61,6 +63,7 @@ const ROUTE_LABELS: Record<RouteConfig['type'], string> = {
   proxy:          'Proxy Pass',
   websocket:      'WebSocket',
   redirect:       'Redirect',
+  'external-proxy': 'Proxy Externo',
   'static-app':   'App estático',
   'static-assets':'Assets',
   'static-site':  'Site estático',

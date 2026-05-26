@@ -11,6 +11,7 @@ export type HeaderName =
 export type RouteType =
   | 'proxy'
   | 'websocket'
+  | 'external-proxy'
   | 'static-app'
   | 'static-assets'
   | 'static-site'
@@ -57,6 +58,8 @@ export type RouteConfig = {
   tryFiles?: string
   redirectTo?: string
   redirectCode?: 301 | 302 | 307 | 308
+  externalUrl?: string
+  cacheExpires?: string
   headers: HeaderName[]
   timeouts?: RouteTimeouts
   proxyBuffering?: boolean

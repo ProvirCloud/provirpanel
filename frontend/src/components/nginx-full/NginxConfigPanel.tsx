@@ -303,7 +303,7 @@ function RoutePanel({
   const upstream = findUpstreamById(state, route.upstreamId)
   const isProxy = route.type === 'proxy' || route.type === 'websocket'
   const isRedirect = route.type === 'redirect'
-  const isStatic = !isProxy && !isRedirect
+  const isStatic = !isProxy && !isRedirect && route.type !== 'external-proxy'
   const allHeaders = route.type === 'websocket' ? ALL_WS_HEADERS : ALL_PROXY_HEADERS
 
   const set = <K extends keyof RouteConfig>(key: K, val: RouteConfig[K]) =>
@@ -351,6 +351,7 @@ function RoutePanel({
             <option value="proxy">Proxy reverso</option>
             <option value="websocket">WebSocket</option>
             <option value="redirect">Redirecionamento</option>
+            <option value="external-proxy">Proxy Externo (S3, CDN)</option>
             <option value="static-app">App estático</option>
             <option value="static-assets">Assets estáticos</option>
             <option value="static-site">Site estático</option>
@@ -449,6 +450,41 @@ function RoutePanel({
             checked={route.proxyBuffering !== false}
             onChange={(v) => set('proxyBuffering', v)}
           />
+        </>
+      )}
+
+
+      {route.type === "external-proxy" && (
+        <>
+          <Section label="URL externa (destino)">
+            <input
+              className={inputCls}
+              value={route.externalUrl || ""}
+              onChange={(e) => set("externalUrl", e.target.value)}
+              placeholder="https://meu-bucket.s3.amazonaws.com/"
+            />
+          </Section>
+          <Section label="Cache (expires)">
+            <select
+              className={selectCls}
+              value={route.cacheExpires || ""}
+              onChange={(e) => set("cacheExpires", e.target.value)}
+            >
+              <option value="">Sem cache</option>
+              <option value="1d">1 dia</option>
+              <option value="7d">7 dias</option>
+              <option value="30d">30 dias</option>
+              <option value="365d">1 ano</option>
+            </select>
+          </Section>
+          <div className="rounded-[12px] border border-white/6 bg-white/2 p-3.5">
+            <p className="text-[11px] font-semibold uppercase tracking-[0.12em] text-white/38 mb-2">Preview</p>
+            <code className="block text-[11px] font-mono text-[#7ee787] leading-relaxed">
+              proxy_pass {route.externalUrl || "https://..."}<br/>
+              proxy_ssl_server_name on<br/>
+              {route.cacheExpires && <>expires {route.cacheExpires}</>}
+            </code>
+          </div>
         </>
       )}
 

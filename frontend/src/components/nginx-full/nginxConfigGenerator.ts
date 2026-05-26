@@ -69,6 +69,26 @@ const buildRedirectLocation = (route: RouteConfig) => {
   ].join('\n')
 }
 
+
+const buildExternalProxyLocation = (route: RouteConfig) => {
+  const url = route.externalUrl || "https://example.com/"
+  const host = url.replace(/^https?:\/\//, "").split("/")[0]
+  const lines = [
+    `    location ${locationDirective(route)} {`,
+    `        proxy_pass ${url};`,
+    `        proxy_set_header Host ${host};`,
+    "        proxy_ssl_server_name on;",
+    "        proxy_hide_header x-amz-id-2;",
+    "        proxy_hide_header x-amz-request-id;",
+  ]
+  if (route.cacheExpires) {
+    lines.push(`        expires ${route.cacheExpires};`)
+    lines.push(`        add_header Cache-Control "public, max-age=${route.cacheExpires === "30d" ? "2592000" : route.cacheExpires === "7d" ? "604800" : route.cacheExpires === "1d" ? "86400" : "3600"}";`)
+  }
+  lines.push("    }")
+  return lines.join("\n")
+}
+
 const buildProxyLocation = (route: RouteConfig, upstream: UpstreamConfig) => {
   const lines = [
     `    location ${locationDirective(route)} {`,
@@ -99,6 +119,9 @@ export const generateNginxConfig = (state: NginxVisualState) => {
     .map((route) => {
       if (route.type === 'redirect') {
         return buildRedirectLocation(route)
+      }
+      if (route.type === "external-proxy") {
+        return buildExternalProxyLocation(route)
       }
       if (route.type === 'proxy' || route.type === 'websocket') {
         const upstream = state.upstreams.find((u) => u.id === route.upstreamId)
