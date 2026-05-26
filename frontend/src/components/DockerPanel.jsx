@@ -232,6 +232,100 @@ const NODE_SITE_TYPES = {
 
 const NODE_SITE_FOLDERS = ['www', 'publish']
 
+const CHUNKED_UPLOAD_THRESHOLD_BYTES = 50 * 1024 * 1024
+const UPLOAD_CHUNK_SIZE_BYTES = 25 * 1024 * 1024
+
+const getDefaultProjectContainerPath = (template) => {
+  const volumePath = template?.volumes?.find((volume) => volume?.containerPath)?.containerPath
+  if (volumePath) return volumePath
+  const image = String(template?.fullImageName || template?.image || '').toLowerCase()
+  if (image.includes('nginx')) return '/usr/share/nginx/html'
+  if (image.includes('node')) return '/usr/src/app'
+  return '/app'
+}
+
+const resolveSubmitVolumes = (template, form, baseDir) => {
+  const volumes = Array.isArray(form?.volumes) ? form.volumes : []
+  const hasProjectVolume = volumes.some((volume) => volume?.containerPath)
+  const needsProjectVolume = Boolean(form?.projectArchive || form?.createProject)
+
+  if (!needsProjectVolume || hasProjectVolume) return volumes
+
+  return [
+    ...volumes,
+    {
+      hostPath: baseDir ? `${baseDir}/${form.name}` : '',
+      containerPath: getDefaultProjectContainerPath(template)
+    }
+  ]
+}
+
+const postUploadChunk = async (url, buildFormData, config = {}) => {
+  let lastError = null
+  for (let attempt = 1; attempt <= 3; attempt += 1) {
+    try {
+      return await uploadApi.post(url, buildFormData(), config)
+    } catch (err) {
+      lastError = err
+      if (attempt === 3) break
+      await new Promise((resolve) => setTimeout(resolve, attempt * 500))
+    }
+  }
+  throw lastError
+}
+
+const uploadFileInChunks = async ({
+  file,
+  initUrl,
+  chunkUrl,
+  completeUrl,
+  metadata = {},
+  onProgress
+}) => {
+  const totalChunks = Math.ceil(file.size / UPLOAD_CHUNK_SIZE_BYTES)
+  const initResponse = await uploadApi.post(initUrl, {
+    ...metadata,
+    filename: file.name,
+    size: file.size,
+    totalChunks
+  })
+  const uploadId = initResponse.data?.uploadId
+  if (!uploadId) {
+    throw new Error('Upload em partes não foi iniciado pelo servidor')
+  }
+
+  for (let chunkIndex = 0; chunkIndex < totalChunks; chunkIndex += 1) {
+    const start = chunkIndex * UPLOAD_CHUNK_SIZE_BYTES
+    const end = Math.min(start + UPLOAD_CHUNK_SIZE_BYTES, file.size)
+    const chunk = file.slice(start, end)
+    const uploadedBefore = start
+
+    await postUploadChunk(
+      chunkUrl,
+      () => {
+        const formData = new FormData()
+        formData.append('uploadId', uploadId)
+        formData.append('chunkIndex', String(chunkIndex))
+        formData.append('chunk', chunk, `${file.name}.part-${chunkIndex}`)
+        return formData
+      },
+      {
+        headers: { 'Content-Type': 'multipart/form-data' },
+        onUploadProgress: (event) => {
+          const loaded = uploadedBefore + (event.loaded || 0)
+          const progress = Math.min(99, Math.round((loaded / file.size) * 100))
+          onProgress?.(progress, chunkIndex + 1, totalChunks)
+        }
+      }
+    )
+
+    const progress = Math.min(99, Math.round((end / file.size) * 100))
+    onProgress?.(progress, chunkIndex + 1, totalChunks)
+  }
+
+  return uploadApi.post(completeUrl, { uploadId }, { timeout: 900000 })
+}
+
 const APP_CATEGORY_LABELS = {
   all: 'Todos',
   web: 'Web',
@@ -1240,10 +1334,22 @@ const DockerPanel = ({ showPageIntro = true }) => {
 
     setBuildWorking(true)
     try {
-      const response = await uploadApi.post('/docker/images/build', formData, {
-        headers: { 'Content-Type': 'multipart/form-data' },
-        timeout: 300000
-      })
+      const response =
+        buildContextArchive && buildContextArchive.size > CHUNKED_UPLOAD_THRESHOLD_BYTES
+          ? await uploadFileInChunks({
+              file: buildContextArchive,
+              initUrl: '/docker/images/build/init',
+              chunkUrl: '/docker/images/build/chunk',
+              completeUrl: '/docker/images/build/complete',
+              metadata: {
+                imageName: buildImageName.trim(),
+                dockerfileContent: buildDockerfile
+              }
+            })
+          : await uploadApi.post('/docker/images/build', formData, {
+              headers: { 'Content-Type': 'multipart/form-data' },
+              timeout: 300000
+            })
       addToast(`Imagem construída: ${response.data?.imageName || buildImageName}`)
       setBuildContextArchive(null)
       loadImages()
@@ -1293,18 +1399,35 @@ const DockerPanel = ({ showPageIntro = true }) => {
     formData.append('archive', file)
     try {
       setProjectUploadStatus({ status: 'uploading', progress: 0, message: 'Enviando arquivo...' })
-      await uploadApi.post(`/docker/services/${serviceId}/project-upload`, formData, {
-        headers: { 'Content-Type': 'multipart/form-data' },
-        onUploadProgress: (event) => {
-          const total = event.total || 0
-          const progress = total ? Math.round((event.loaded / total) * 100) : 0
-          setProjectUploadStatus((prev) => ({
-            ...(prev || {}),
-            status: total && event.loaded >= total ? 'processing' : 'uploading',
-            progress
-          }))
-        }
-      })
+      if (file.size > CHUNKED_UPLOAD_THRESHOLD_BYTES) {
+        await uploadFileInChunks({
+          file,
+          initUrl: `/docker/services/${serviceId}/project-upload/init`,
+          chunkUrl: `/docker/services/${serviceId}/project-upload/chunk`,
+          completeUrl: `/docker/services/${serviceId}/project-upload/complete`,
+          onProgress: (progress, chunkIndex, totalChunks) => {
+            setProjectUploadStatus((prev) => ({
+              ...(prev || {}),
+              status: progress >= 99 ? 'processing' : 'uploading',
+              progress,
+              message: `Enviando arquivo em partes (${chunkIndex}/${totalChunks})...`
+            }))
+          }
+        })
+      } else {
+        await uploadApi.post(`/docker/services/${serviceId}/project-upload`, formData, {
+          headers: { 'Content-Type': 'multipart/form-data' },
+          onUploadProgress: (event) => {
+            const total = event.total || 0
+            const progress = total ? Math.round((event.loaded / total) * 100) : 0
+            setProjectUploadStatus((prev) => ({
+              ...(prev || {}),
+              status: total && event.loaded >= total ? 'processing' : 'uploading',
+              progress
+            }))
+          }
+        })
+      }
       setProjectUploadStatus({
         status: 'success',
         progress: 100,
@@ -1381,13 +1504,14 @@ const DockerPanel = ({ showPageIntro = true }) => {
     }, 30000); // 30 second warning
     
     try {
+      const volumeMappings = resolveSubmitVolumes(template, form, baseDir)
       const response = await api.post('/docker/services', {
         templateId: template.id,
         imageName: template.fullImageName,
         containerPort: form.containerPort,
         name: form.name,
         hostPort: form.hostPort,
-        volumeMappings: form.volumes,
+        volumeMappings,
         envVars: form.envs,
         createProject: form.createProject,
         createManager: form.createManager,
@@ -2064,11 +2188,11 @@ const DockerPanel = ({ showPageIntro = true }) => {
               </div>
             )}
             
-            {!isNodeSitesMode && serviceForm.createProject && serviceForm.volumes.length === 0 && tpl?.hasProjectOption !== false && (
-              <div className="mt-3 p-3 rounded-lg border border-amber-500/30 bg-amber-500/10">
-                <p className="text-xs text-amber-300 flex items-center gap-2">
-                  <span>⚠️</span>
-                  Para criar projeto exemplo, adicione pelo menos um volume
+            {!isNodeSitesMode && (serviceForm.createProject || serviceForm.projectArchive) && serviceForm.volumes.length === 0 && (
+              <div className="mt-3 p-3 rounded-lg border border-emerald-500/30 bg-emerald-500/10">
+                <p className="text-xs text-emerald-300 flex items-center gap-2">
+                  <span>✅</span>
+                  Um volume local será criado automaticamente em {baseDir ? `${baseDir}/${serviceForm.name}` : 'backend/data/projects/docker'}.
                 </p>
               </div>
             )}

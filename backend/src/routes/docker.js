@@ -16,6 +16,8 @@ const upload = multer({ dest: os.tmpdir() });
 const dockerManager = new DockerManager();
 const serviceLogsPath = path.join(__dirname, '..', 'logs', 'service-updates.log');
 fs.mkdirSync(path.dirname(serviceLogsPath), { recursive: true });
+const chunkUploadRoot = path.join(os.tmpdir(), 'provirpanel-chunk-uploads');
+fs.mkdirSync(chunkUploadRoot, { recursive: true });
 const jwtSecret = process.env.JWT_SECRET || 'change-me';
 const cookieName = process.env.AUTH_COOKIE_NAME || 'provirpanel_token';
 const CONTAINER_VOLUME_PERMISSIONS = {
@@ -42,6 +44,100 @@ const applyContainerVolumePermissions = (templateId, hostPath, progress) => {
   if (progress) {
     progress.push(`✅ Permissões ${permission.label} ajustadas`);
   }
+};
+
+const createHttpError = (message, status = 500) => {
+  const err = new Error(message);
+  err.status = status;
+  return err;
+};
+
+const sanitizeUploadId = (uploadId) => {
+  const value = String(uploadId || '');
+  if (!/^[a-f0-9-]{36}$/i.test(value)) {
+    throw createHttpError('Upload inválido', 400);
+  }
+  return value;
+};
+
+const safeUploadFilename = (filename, fallback = 'archive.zip') => {
+  const base = path.basename(String(filename || fallback)).replace(/[^a-zA-Z0-9._-]/g, '_');
+  return base || fallback;
+};
+
+const getChunkUploadDir = (uploadId) =>
+  path.join(chunkUploadRoot, sanitizeUploadId(uploadId));
+
+const writeChunkMetadata = (uploadId, metadata) => {
+  const uploadDir = getChunkUploadDir(uploadId);
+  fs.mkdirSync(uploadDir, { recursive: true });
+  fs.writeFileSync(path.join(uploadDir, 'metadata.json'), JSON.stringify(metadata, null, 2), 'utf8');
+  return uploadDir;
+};
+
+const readChunkMetadata = (uploadId) => {
+  const uploadDir = getChunkUploadDir(uploadId);
+  const metadataPath = path.join(uploadDir, 'metadata.json');
+  if (!fs.existsSync(metadataPath)) {
+    throw createHttpError('Upload não encontrado', 404);
+  }
+  return {
+    uploadDir,
+    metadata: JSON.parse(fs.readFileSync(metadataPath, 'utf8'))
+  };
+};
+
+const cleanupChunkUpload = (uploadId) => {
+  try {
+    fs.rmSync(getChunkUploadDir(uploadId), { recursive: true, force: true });
+  } catch (err) {
+    // ignore cleanup errors
+  }
+};
+
+const persistChunkFile = (uploadId, chunkIndex, file) => {
+  if (!file?.path) {
+    throw createHttpError('Chunk obrigatório', 400);
+  }
+  const index = Number(chunkIndex);
+  if (!Number.isInteger(index) || index < 0) {
+    throw createHttpError('Índice de chunk inválido', 400);
+  }
+  const { uploadDir, metadata } = readChunkMetadata(uploadId);
+  if (index >= Number(metadata.totalChunks)) {
+    throw createHttpError('Índice de chunk fora do limite', 400);
+  }
+  const targetPath = path.join(uploadDir, `chunk-${index}`);
+  fs.renameSync(file.path, targetPath);
+  return metadata;
+};
+
+const assembleChunkUpload = (uploadId) => {
+  const { uploadDir, metadata } = readChunkMetadata(uploadId);
+  const totalChunks = Number(metadata.totalChunks);
+  if (!Number.isInteger(totalChunks) || totalChunks < 1) {
+    throw createHttpError('Total de chunks inválido', 400);
+  }
+
+  const archivePath = path.join(uploadDir, safeUploadFilename(metadata.filename));
+  fs.writeFileSync(archivePath, '');
+  for (let index = 0; index < totalChunks; index += 1) {
+    const chunkPath = path.join(uploadDir, `chunk-${index}`);
+    if (!fs.existsSync(chunkPath)) {
+      throw createHttpError(`Chunk ${index + 1}/${totalChunks} não recebido`, 400);
+    }
+    fs.appendFileSync(archivePath, fs.readFileSync(chunkPath));
+  }
+
+  const expectedSize = Number(metadata.size || 0);
+  if (expectedSize > 0 && fs.statSync(archivePath).size !== expectedSize) {
+    throw createHttpError('Arquivo remontado com tamanho inválido', 400);
+  }
+
+  return {
+    archivePath,
+    filename: metadata.filename
+  };
 };
 
 let dockerBaseDir =
@@ -1209,32 +1305,30 @@ const isSafeRelativePath = (value) => {
   return true;
 };
 
-router.post('/images/build', upload.single('contextArchive'), async (req, res, next) => {
-  const progress = [];
+const buildImageFromPayload = async (body = {}, file = null, progress = []) => {
   let tempDir = null;
   try {
-    const imageName = String(req.body?.imageName || '').trim();
-    const dockerfileContent = String(req.body?.dockerfileContent || '').trim();
-    const dockerfilePathInput = String(req.body?.dockerfilePath || '').trim();
-    const buildArgsRaw = String(req.body?.buildArgs || '').trim();
+    const imageName = String(body?.imageName || '').trim();
+    const dockerfileContent = String(body?.dockerfileContent || '').trim();
+    const dockerfilePathInput = String(body?.dockerfilePath || '').trim();
+    const buildArgsRaw = String(body?.buildArgs || '').trim();
 
     if (!imageName) {
-      return res.status(400).json({ message: 'imageName is required' });
+      throw createHttpError('imageName is required', 400);
     }
 
     tempDir = fs.mkdtempSync(path.join(os.tmpdir(), 'provir-build-'));
     progress.push(`📁 Contexto temporario criado: ${tempDir}`);
 
-    if (req.file?.path) {
-      progress.push(`📦 Extraindo arquivo ${req.file.originalname}...`);
-      await extractArchiveTo(req.file.path, tempDir, req.file.originalname);
-      fs.unlink(req.file.path, () => {});
+    if (file?.path) {
+      progress.push(`📦 Extraindo arquivo ${file.originalname}...`);
+      await extractArchiveTo(file.path, tempDir, file.originalname);
     }
 
     let dockerfileName = 'Dockerfile';
     if (dockerfileContent) {
       if (dockerfilePathInput && !isSafeRelativePath(dockerfilePathInput)) {
-        return res.status(400).json({ message: 'dockerfilePath inválido' });
+        throw createHttpError('dockerfilePath inválido', 400);
       }
       dockerfileName = dockerfilePathInput || 'Dockerfile';
       const dockerfileFullPath = path.join(tempDir, dockerfileName);
@@ -1243,20 +1337,18 @@ router.post('/images/build', upload.single('contextArchive'), async (req, res, n
       progress.push(`📝 Dockerfile salvo em ${dockerfileName}`);
     } else if (dockerfilePathInput) {
       if (!isSafeRelativePath(dockerfilePathInput)) {
-        return res.status(400).json({ message: 'dockerfilePath inválido' });
+        throw createHttpError('dockerfilePath inválido', 400);
       }
       const dockerfileFullPath = path.join(tempDir, dockerfilePathInput);
       if (!fs.existsSync(dockerfileFullPath)) {
-        return res.status(400).json({ message: `Dockerfile não encontrado no contexto: ${dockerfilePathInput}` });
+        throw createHttpError(`Dockerfile não encontrado no contexto: ${dockerfilePathInput}`, 400);
       }
       dockerfileName = dockerfilePathInput;
       progress.push(`📄 Usando Dockerfile existente: ${dockerfileName}`);
     } else {
       const defaultDockerfile = path.join(tempDir, 'Dockerfile');
       if (!fs.existsSync(defaultDockerfile)) {
-        return res.status(400).json({
-          message: 'Envie dockerfileContent ou um contexto com arquivo Dockerfile'
-        });
+        throw createHttpError('Envie dockerfileContent ou um contexto com arquivo Dockerfile', 400);
       }
       progress.push('📄 Usando Dockerfile padrão do contexto');
     }
@@ -1269,7 +1361,7 @@ router.post('/images/build', upload.single('contextArchive'), async (req, res, n
           buildArgs = parsed;
         }
       } catch (err) {
-        return res.status(400).json({ message: 'buildArgs deve ser um JSON válido' });
+        throw createHttpError('buildArgs deve ser um JSON válido', 400);
       }
     }
 
@@ -1284,17 +1376,92 @@ router.post('/images/build', upload.single('contextArchive'), async (req, res, n
     );
     progress.push(`✅ Build finalizado: ${imageName}`);
 
-    return res.json({ status: 'built', imageName, progress });
-  } catch (err) {
-    progress.push(`❌ Falha no build: ${err.message}`);
-    return res.status(500).json({ message: err.message || 'Build failed', progress });
+    return { status: 'built', imageName, progress };
   } finally {
-    if (req.file?.path) {
-      fs.unlink(req.file.path, () => {});
+    if (file?.path) {
+      fs.unlink(file.path, () => {});
     }
     if (tempDir) {
       fs.rm(tempDir, { recursive: true, force: true }, () => {});
     }
+  }
+};
+
+router.post('/images/build', upload.single('contextArchive'), async (req, res, next) => {
+  const progress = [];
+  try {
+    const result = await buildImageFromPayload(req.body, req.file, progress);
+    return res.json(result);
+  } catch (err) {
+    progress.push(`❌ Falha no build: ${err.message}`);
+    return res.status(err.status || 500).json({ message: err.message || 'Build failed', progress });
+  }
+});
+
+router.post('/images/build/init', (req, res, next) => {
+  try {
+    const uploadId = crypto.randomUUID();
+    const totalChunks = Number(req.body?.totalChunks || 0);
+    if (!Number.isInteger(totalChunks) || totalChunks < 1) {
+      return res.status(400).json({ message: 'totalChunks inválido' });
+    }
+
+    writeChunkMetadata(uploadId, {
+      type: 'image-build',
+      filename: safeUploadFilename(req.body?.filename, 'context.zip'),
+      size: Number(req.body?.size || 0),
+      totalChunks,
+      imageName: String(req.body?.imageName || '').trim(),
+      dockerfileContent: String(req.body?.dockerfileContent || ''),
+      dockerfilePath: String(req.body?.dockerfilePath || ''),
+      buildArgs: String(req.body?.buildArgs || ''),
+      createdAt: new Date().toISOString()
+    });
+
+    res.json({ uploadId });
+  } catch (err) {
+    next(err);
+  }
+});
+
+router.post('/images/build/chunk', upload.single('chunk'), (req, res, next) => {
+  try {
+    const metadata = persistChunkFile(req.body?.uploadId, req.body?.chunkIndex, req.file);
+    if (metadata.type !== 'image-build') {
+      return res.status(400).json({ message: 'Upload inválido para build de imagem' });
+    }
+    res.json({ ok: true, chunkIndex: Number(req.body?.chunkIndex) });
+  } catch (err) {
+    if (req.file?.path) fs.unlink(req.file.path, () => {});
+    next(err);
+  }
+});
+
+router.post('/images/build/complete', async (req, res, next) => {
+  const progress = [];
+  const uploadId = req.body?.uploadId;
+  try {
+    const { metadata } = readChunkMetadata(uploadId);
+    if (metadata.type !== 'image-build') {
+      return res.status(400).json({ message: 'Upload inválido para build de imagem' });
+    }
+    const { archivePath, filename } = assembleChunkUpload(uploadId);
+    const result = await buildImageFromPayload(
+      {
+        imageName: metadata.imageName,
+        dockerfileContent: metadata.dockerfileContent,
+        dockerfilePath: metadata.dockerfilePath,
+        buildArgs: metadata.buildArgs
+      },
+      { path: archivePath, originalname: filename },
+      progress
+    );
+    cleanupChunkUpload(uploadId);
+    return res.json(result);
+  } catch (err) {
+    progress.push(`❌ Falha no build: ${err.message}`);
+    if (uploadId) cleanupChunkUpload(uploadId);
+    return res.status(err.status || 500).json({ message: err.message || 'Build failed', progress });
   }
 });
 
@@ -2002,7 +2169,7 @@ router.put('/services/:id', async (req, res, next) => {
     }
     appendServiceLog(
       'info',
-      `Comando definido para ${service.name}: ${containerCmd ? containerCmd.join(' ') : 'padrao'}`
+      `Comando definido para ${service.name}: ${stringifyCommand(containerCmd) || 'padrao'}`
     );
     if (workdir) {
       appendServiceLog('info', `WorkingDir para ${service.name}: ${workdir}`);
@@ -2089,24 +2256,61 @@ router.put('/services/:id', async (req, res, next) => {
   }
 });
 
-router.post('/services/:id/project-upload', upload.single('archive'), async (req, res, next) => {
+const inferProjectContainerPath = (template, service = {}) => {
+  const templateVolume = template?.volumes?.find((volume) => volume?.containerPath);
+  if (templateVolume?.containerPath) return templateVolume.containerPath;
+  if (template?.workdir) return template.workdir;
+
+  const image = String(service.image || template?.image || '').toLowerCase();
+  if (image.includes('nginx')) return '/usr/share/nginx/html';
+  if (image.includes('node')) return '/usr/src/app';
+  return '/app';
+};
+
+const ensureServiceProjectVolume = (service) => {
+  const volumes = Array.isArray(service.volumes) ? service.volumes : [];
+  const existingVolume = volumes.find((m) => m?.hostPath && m?.containerPath);
+  if (existingVolume) {
+    return { service, projectDir: existingVolume.hostPath };
+  }
+
+  const template =
+    SERVICE_TEMPLATES.find((t) => t.id === service.templateId) ||
+    { volumes: [], workdir: null };
+  const hostPath = path.join(dockerBaseDir, service.name);
+  const containerPath = inferProjectContainerPath(template, service);
+  const nextService = {
+    ...service,
+    volumes: [...volumes, { hostPath, containerPath }],
+    hasProject: true,
+    updatedAt: new Date().toISOString()
+  };
+
+  fs.mkdirSync(hostPath, { recursive: true });
+  dockerManager.saveService(nextService);
+  appendServiceLog(
+    'info',
+    `Volume local criado automaticamente para ${service.name}: ${hostPath}:${containerPath}`
+  );
+  return { service: nextService, projectDir: hostPath };
+};
+
+const publishProjectArchive = async (serviceId, file) => {
   let service = null;
-  try {
-    const services = dockerManager.listServices();
-    service = services.find((s) => s.id === req.params.id);
-    if (!service) {
-      return res.status(404).json({ message: 'Service not found' });
-    }
-    if (!req.file) {
-      return res.status(400).json({ message: 'Nenhum arquivo enviado.' });
-    }
+  const services = dockerManager.listServices();
+  service = services.find((s) => s.id === serviceId);
+  if (!service) {
+    throw createHttpError('Service not found', 404);
+  }
+  if (!file?.path) {
+    throw createHttpError('Nenhum arquivo enviado.', 400);
+  }
 
-    appendServiceLog('info', `Atualizacao de projeto iniciada: ${service.name}`);
+  appendServiceLog('info', `Atualizacao de projeto iniciada: ${service.name}`);
 
-    const projectDir = service.volumes?.find((m) => m.hostPath)?.hostPath;
-    if (!projectDir) {
-      return res.status(400).json({ message: 'Volume do serviço não encontrado.' });
-    }
+  const volumeInfo = ensureServiceProjectVolume(service);
+  service = volumeInfo.service;
+  const projectDir = volumeInfo.projectDir;
 
     const { nodeServiceMode, nodeSiteConfig } = resolveNodeServiceConfig({}, service);
     const isNodeSitesMode = service.templateId === 'node-app' && nodeServiceMode === 'sites';
@@ -2126,10 +2330,10 @@ router.post('/services/:id/project-upload', upload.single('archive'), async (req
     }
     // Replace published project content to avoid stale files in static deployments.
     cleanDirectory(uploadTargetDir);
-    const archivePath = req.file.path;
+    const archivePath = file.path;
     try {
-      appendServiceLog('info', `Extraindo arquivo ${req.file.originalname} em ${uploadTargetDir}`);
-      await extractArchiveTo(archivePath, uploadTargetDir, req.file.originalname);
+      appendServiceLog('info', `Extraindo arquivo ${file.originalname} em ${uploadTargetDir}`);
+      await extractArchiveTo(archivePath, uploadTargetDir, file.originalname);
     } finally {
       fs.unlink(archivePath, () => {});
     }
@@ -2141,9 +2345,10 @@ router.post('/services/:id/project-upload', upload.single('archive'), async (req
       const normalized = normalizeStaticSiteRoot(projectDir);
       if (!normalized) {
         appendServiceLog('error', `Upload sem index.html para serviço estático ${service.name}`);
-        return res.status(400).json({
-          message: 'Arquivo inválido para site estático: index.html não encontrado no .zip/.tar.'
-        });
+        throw createHttpError(
+          'Arquivo inválido para site estático: index.html não encontrado no .zip/.tar.',
+          400
+        );
       }
     }
     if (isNodeSitesMode) {
@@ -2225,7 +2430,7 @@ router.post('/services/:id/project-upload', upload.single('archive'), async (req
         appendServiceLog('info', 'Ajustando timeout do Next.js para build');
       }
     }
-    appendServiceLog('info', `Comando detectado para ${service.name}: ${containerCmd ? containerCmd.join(' ') : 'padrao'}`);
+    appendServiceLog('info', `Comando detectado para ${service.name}: ${stringifyCommand(containerCmd) || 'padrao'}`);
     if (workdir) {
       appendServiceLog('info', `WorkingDir para ${service.name}: ${workdir}`);
     } else {
@@ -2294,14 +2499,84 @@ router.post('/services/:id/project-upload', upload.single('archive'), async (req
       ...service,
       containerId: container.Id,
       command: isNodeSitesMode ? null : containerCmd || null,
+      hasProject: true,
       updatedAt: new Date().toISOString()
     };
 
     dockerManager.saveService(updatedService);
     appendServiceLog('info', `Atualizacao de projeto concluida: ${service.name}`);
+    return updatedService;
+};
+
+router.post('/services/:id/project-upload', upload.single('archive'), async (req, res, next) => {
+  try {
+    const updatedService = await publishProjectArchive(req.params.id, req.file);
     res.json({ service: sanitizeServiceForClient(updatedService) });
   } catch (err) {
-    appendServiceLog('error', `Erro ao atualizar projeto ${service?.name || req.params.id}: ${err.message}`);
+    appendServiceLog('error', `Erro ao atualizar projeto ${req.params.id}: ${err.message}`);
+    next(err);
+  }
+});
+
+router.post('/services/:id/project-upload/init', (req, res, next) => {
+  try {
+    const services = dockerManager.listServices();
+    const service = services.find((s) => s.id === req.params.id);
+    if (!service) {
+      return res.status(404).json({ message: 'Service not found' });
+    }
+
+    const uploadId = crypto.randomUUID();
+    const totalChunks = Number(req.body?.totalChunks || 0);
+    if (!Number.isInteger(totalChunks) || totalChunks < 1) {
+      return res.status(400).json({ message: 'totalChunks inválido' });
+    }
+
+    writeChunkMetadata(uploadId, {
+      type: 'project-upload',
+      serviceId: req.params.id,
+      filename: safeUploadFilename(req.body?.filename, 'project.zip'),
+      size: Number(req.body?.size || 0),
+      totalChunks,
+      createdAt: new Date().toISOString()
+    });
+
+    res.json({ uploadId });
+  } catch (err) {
+    next(err);
+  }
+});
+
+router.post('/services/:id/project-upload/chunk', upload.single('chunk'), (req, res, next) => {
+  try {
+    const metadata = persistChunkFile(req.body?.uploadId, req.body?.chunkIndex, req.file);
+    if (metadata.type !== 'project-upload' || metadata.serviceId !== req.params.id) {
+      return res.status(400).json({ message: 'Upload inválido para este serviço' });
+    }
+    res.json({ ok: true, chunkIndex: Number(req.body?.chunkIndex) });
+  } catch (err) {
+    if (req.file?.path) fs.unlink(req.file.path, () => {});
+    next(err);
+  }
+});
+
+router.post('/services/:id/project-upload/complete', async (req, res, next) => {
+  const uploadId = req.body?.uploadId;
+  try {
+    const { metadata } = readChunkMetadata(uploadId);
+    if (metadata.type !== 'project-upload' || metadata.serviceId !== req.params.id) {
+      return res.status(400).json({ message: 'Upload inválido para este serviço' });
+    }
+    const { archivePath, filename } = assembleChunkUpload(uploadId);
+    const updatedService = await publishProjectArchive(req.params.id, {
+      path: archivePath,
+      originalname: filename
+    });
+    cleanupChunkUpload(uploadId);
+    res.json({ service: sanitizeServiceForClient(updatedService) });
+  } catch (err) {
+    if (uploadId) cleanupChunkUpload(uploadId);
+    appendServiceLog('error', `Erro ao finalizar upload em partes ${req.params.id}: ${err.message}`);
     next(err);
   }
 });
