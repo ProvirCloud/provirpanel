@@ -101,9 +101,31 @@ const buildProxyLocation = (route: RouteConfig, upstream: UpstreamConfig) => {
     lines.push(`        proxy_read_timeout ${route.timeouts.read}s;`)
     lines.push(`        proxy_send_timeout ${route.timeouts.send}s;`)
   }
-  if (route.proxyBuffering === false) lines.push('        proxy_buffering off;')
-  lines.push('    }')
-  return lines.join('\n')
+  if (route.proxyBuffering === false) lines.push("        proxy_buffering off;")
+  if (route.spaFallback) {
+    const fallbackName = `@${route.id}_fallback`
+    lines.push("")
+    lines.push("        proxy_intercept_errors on;")
+    lines.push(`        error_page 404 = ${fallbackName};`)
+  }
+  lines.push("    }")
+
+  // SPA fallback named location
+  if (route.spaFallback) {
+    const fallbackName = `@${route.id}_fallback`
+    const fallbackPath = route.fallbackUpstreamPath || "/index.html"
+    lines.push("")
+    lines.push(`    location ${fallbackName} {`)
+    lines.push(`        proxy_pass http://${upstream.name}${fallbackPath};`)
+    lines.push("        proxy_http_version 1.1;")
+    lines.push("        proxy_set_header Host $host;")
+    lines.push("        proxy_set_header X-Real-IP $remote_addr;")
+    lines.push("        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;")
+    lines.push("        proxy_set_header X-Forwarded-Proto $scheme;")
+    lines.push("    }")
+  }
+
+  return lines.join("\n")
 }
 
 // More specific paths come first (longer path = more specific)

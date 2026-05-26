@@ -64,6 +64,8 @@ export type RouteConfig = {
   headers: HeaderName[]
   timeouts?: RouteTimeouts
   proxyBuffering?: boolean
+  spaFallback?: boolean
+  fallbackUpstreamPath?: string
   disabled?: boolean
 }
 

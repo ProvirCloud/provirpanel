@@ -460,6 +460,24 @@ function RoutePanel({
             checked={route.proxyBuffering !== false}
             onChange={(v) => set('proxyBuffering', v)}
           />
+
+          <Toggle
+            label="SPA Fallback (404 → index.html)"
+            checked={!!route.spaFallback}
+            onChange={(v) => set("spaFallback", v)}
+          />
+
+          {route.spaFallback && (
+            <Section label="Path do fallback">
+              <input
+                className={inputCls}
+                value={route.fallbackUpstreamPath || ""}
+                onChange={(e) => set("fallbackUpstreamPath", e.target.value)}
+                placeholder="/index.html"
+              />
+              <p className="mt-1 text-[10px] text-white/30">Quando 404, redireciona para este path no upstream (ex: /index.html para Angular/React)</p>
+            </Section>
+          )}
         </>
       )}
 
