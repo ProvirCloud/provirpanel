@@ -11,6 +11,7 @@ const sections = [
     items: [
       { to: '/', label: 'Dashboard', icon: Activity, end: true },
       { to: '/stacks', label: 'Infra Canvas', icon: Layers3 },
+      { to: '/sites', label: 'Sites', icon: Globe },
     ],
   },
   {

@@ -16,6 +16,7 @@ type AppShellProps = {
 const routeMeta: Record<string, { title: string; context: string }> = {
   '/': { title: 'Dashboard', context: 'Monitoramento em tempo real de infraestrutura, aplicações e serviços' },
   '/stacks': { title: 'Infrastructure Canvas', context: 'Ambientes Docker agrupados de serviços e aplicações' },
+  '/sites': { title: 'Sites', context: 'Publicação, CMS e migração assistida' },
   '/docker': { title: 'Container Service', context: 'Serviços, runtimes e topologias dos ambientes' },
   '/terminal': { title: 'Terminal', context: 'Acesso operacional aos ambientes conectados' },
   '/files': { title: 'Arquivos', context: 'Storage, uploads e gestão de artefatos' },

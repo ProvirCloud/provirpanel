@@ -1,0 +1,983 @@
+'use strict';
+
+const express = require('express');
+const crypto = require('crypto');
+const fs = require('fs');
+const os = require('os');
+const path = require('path');
+const { execFile } = require('child_process');
+const multer = require('multer');
+const DockerManager = require('../services/DockerManager');
+const NginxManager = require('../services/NginxManager');
+
+const router = express.Router();
+const dockerManager = new DockerManager();
+const nginxManager = new NginxManager();
+
+const uploadTempDir = path.join(os.tmpdir(), 'provirpanel-sites-upload');
+const chunkUploadRoot = path.join(os.tmpdir(), 'provirpanel-sites-chunks');
+fs.mkdirSync(uploadTempDir, { recursive: true });
+fs.mkdirSync(chunkUploadRoot, { recursive: true });
+
+const upload = multer({ dest: uploadTempDir });
+const registryPath = process.env.SITES_REGISTRY || path.join(__dirname, '../../data/sites.json');
+const fallbackSitesBaseDir = path.join(__dirname, '../../data/sites');
+const configuredSitesBaseDir =
+  process.env.SITES_BASE_DIR ||
+  (process.env.CLOUDPAINEL_PROJECTS_DIR
+    ? path.join(process.env.CLOUDPAINEL_PROJECTS_DIR, 'sites')
+    : fallbackSitesBaseDir);
+let sitesBaseDir = configuredSitesBaseDir;
+const networkName = process.env.SITES_DOCKER_NETWORK || 'provirpanel';
+const wordpressImage = process.env.WORDPRESS_IMAGE || 'wordpress:latest';
+const databaseImage = process.env.WORDPRESS_DB_IMAGE || 'mariadb:11';
+
+fs.mkdirSync(path.dirname(registryPath), { recursive: true });
+try {
+  fs.mkdirSync(sitesBaseDir, { recursive: true });
+} catch (err) {
+  if (sitesBaseDir !== fallbackSitesBaseDir) {
+    console.warn(`[Sites] Diretório ${sitesBaseDir} indisponível, usando ${fallbackSitesBaseDir}: ${err.message}`);
+    sitesBaseDir = fallbackSitesBaseDir;
+    fs.mkdirSync(sitesBaseDir, { recursive: true });
+  } else {
+    throw err;
+  }
+}
+if (!fs.existsSync(registryPath)) {
+  fs.writeFileSync(registryPath, '[]', 'utf8');
+}
+
+const createHttpError = (message, status = 500) => {
+  const err = new Error(message);
+  err.status = status;
+  return err;
+};
+
+const runCommand = (cmd, args, options = {}) =>
+  new Promise((resolve, reject) => {
+    execFile(cmd, args, { maxBuffer: 25 * 1024 * 1024, ...options }, (err, stdout, stderr) => {
+      if (err) {
+        err.message = `${err.message}${stderr ? `: ${stderr}` : ''}`;
+        reject(err);
+        return;
+      }
+      resolve({ stdout, stderr });
+    });
+  });
+
+const dockerExecShell = (containerId, script, env = {}, options = {}) => {
+  const args = ['exec'];
+  Object.entries(env).forEach(([key, value]) => {
+    args.push('-e', `${key}=${value ?? ''}`);
+  });
+  args.push(containerId, 'sh', '-lc', script);
+  return runCommand('docker', args, { timeout: 900000, ...options });
+};
+
+const readSites = () => {
+  try {
+    const parsed = JSON.parse(fs.readFileSync(registryPath, 'utf8'));
+    return Array.isArray(parsed) ? parsed : [];
+  } catch (err) {
+    return [];
+  }
+};
+
+const writeSites = (sites) => {
+  fs.writeFileSync(registryPath, JSON.stringify(sites, null, 2), 'utf8');
+};
+
+const saveSite = (site) => {
+  const sites = readSites();
+  const index = sites.findIndex((entry) => entry.id === site.id);
+  if (index >= 0) {
+    sites[index] = site;
+  } else {
+    sites.push(site);
+  }
+  writeSites(sites);
+  return site;
+};
+
+const randomPassword = (size = 18) =>
+  crypto
+    .randomBytes(size)
+    .toString('base64url')
+    .replace(/[^a-zA-Z0-9]/g, '')
+    .slice(0, size);
+
+const slugify = (value, fallback = 'site') => {
+  const slug = String(value || '')
+    .normalize('NFD')
+    .replace(/[\u0300-\u036f]/g, '')
+    .toLowerCase()
+    .replace(/[^a-z0-9-]+/g, '-')
+    .replace(/^-+|-+$/g, '')
+    .slice(0, 48);
+  return slug || fallback;
+};
+
+const normalizeDomain = (domain) => {
+  const value = String(domain || '')
+    .trim()
+    .toLowerCase()
+    .replace(/^https?:\/\//, '')
+    .replace(/\/.*$/, '');
+  if (!value || !/^[a-z0-9.-]+$/.test(value) || !value.includes('.')) {
+    throw createHttpError('Domínio inválido', 400);
+  }
+  return value;
+};
+
+const safeUploadFilename = (filename, fallback = 'wordpress-backup.zip') => {
+  const base = path.basename(String(filename || fallback)).replace(/[^a-zA-Z0-9._-]/g, '_');
+  return base || fallback;
+};
+
+const sanitizeUploadId = (uploadId) => {
+  const value = String(uploadId || '');
+  if (!/^[a-f0-9-]{36}$/i.test(value)) {
+    throw createHttpError('Upload inválido', 400);
+  }
+  return value;
+};
+
+const getChunkUploadDir = (uploadId) =>
+  path.join(chunkUploadRoot, sanitizeUploadId(uploadId));
+
+const writeChunkMetadata = (uploadId, metadata) => {
+  const uploadDir = getChunkUploadDir(uploadId);
+  fs.mkdirSync(uploadDir, { recursive: true });
+  fs.writeFileSync(path.join(uploadDir, 'metadata.json'), JSON.stringify(metadata, null, 2), 'utf8');
+  return uploadDir;
+};
+
+const readChunkMetadata = (uploadId) => {
+  const uploadDir = getChunkUploadDir(uploadId);
+  const metadataPath = path.join(uploadDir, 'metadata.json');
+  if (!fs.existsSync(metadataPath)) {
+    throw createHttpError('Upload não encontrado', 404);
+  }
+  return {
+    uploadDir,
+    metadata: JSON.parse(fs.readFileSync(metadataPath, 'utf8'))
+  };
+};
+
+const cleanupChunkUpload = (uploadId) => {
+  try {
+    fs.rmSync(getChunkUploadDir(uploadId), { recursive: true, force: true });
+  } catch (err) {
+    // ignore cleanup errors
+  }
+};
+
+const persistChunkFile = (uploadId, chunkIndex, file) => {
+  if (!file?.path) {
+    throw createHttpError('Chunk obrigatório', 400);
+  }
+  const index = Number(chunkIndex);
+  if (!Number.isInteger(index) || index < 0) {
+    throw createHttpError('Índice de chunk inválido', 400);
+  }
+  const { uploadDir, metadata } = readChunkMetadata(uploadId);
+  if (index >= Number(metadata.totalChunks)) {
+    throw createHttpError('Índice de chunk fora do limite', 400);
+  }
+  fs.renameSync(file.path, path.join(uploadDir, `chunk-${index}`));
+  return metadata;
+};
+
+const assembleChunkUpload = (uploadId) => {
+  const { uploadDir, metadata } = readChunkMetadata(uploadId);
+  const totalChunks = Number(metadata.totalChunks);
+  if (!Number.isInteger(totalChunks) || totalChunks < 1) {
+    throw createHttpError('Total de chunks inválido', 400);
+  }
+
+  const filename = safeUploadFilename(metadata.filename);
+  const archivePath = path.join(uploadDir, filename);
+  if (fs.existsSync(archivePath)) fs.unlinkSync(archivePath);
+  for (let index = 0; index < totalChunks; index += 1) {
+    const chunkPath = path.join(uploadDir, `chunk-${index}`);
+    if (!fs.existsSync(chunkPath)) {
+      throw createHttpError(`Chunk ${index + 1}/${totalChunks} ausente`, 400);
+    }
+    fs.appendFileSync(archivePath, fs.readFileSync(chunkPath));
+  }
+  return { archivePath, filename };
+};
+
+const ensureExtractor = async (command, hint) => {
+  try {
+    await runCommand('which', [command]);
+  } catch (err) {
+    throw new Error(`${command} não encontrado. Instale ${hint || command} para extrair arquivos.`);
+  }
+};
+
+const flattenSingleRootDir = (targetDir, maxPasses = 4) => {
+  let pass = 0;
+  while (pass < maxPasses) {
+    pass += 1;
+    let entries = [];
+    try {
+      entries = fs.readdirSync(targetDir, { withFileTypes: true });
+    } catch (err) {
+      return;
+    }
+    const visibleEntries = entries.filter((entry) => entry.name !== '__MACOSX' && entry.name !== '.DS_Store');
+    const dirs = visibleEntries.filter((entry) => entry.isDirectory());
+    const files = visibleEntries.filter((entry) => entry.isFile());
+    if (files.length > 0 || dirs.length !== 1) return;
+    const rootDir = path.join(targetDir, dirs[0].name);
+    fs.readdirSync(rootDir).forEach((entry) => {
+      fs.renameSync(path.join(rootDir, entry), path.join(targetDir, entry));
+    });
+    fs.rmdirSync(rootDir);
+  }
+};
+
+const extractArchiveTo = async (archivePath, targetDir, archiveName) => {
+  const lower = (archiveName || archivePath).toLowerCase();
+  if (lower.endsWith('.zip')) {
+    await ensureExtractor('unzip', 'unzip');
+    await runCommand('unzip', ['-o', archivePath, '-d', targetDir]);
+    flattenSingleRootDir(targetDir);
+    return true;
+  }
+  if (lower.endsWith('.tar.gz') || lower.endsWith('.tgz')) {
+    await ensureExtractor('tar', 'tar');
+    await runCommand('tar', ['-xzf', archivePath, '-C', targetDir]);
+    flattenSingleRootDir(targetDir);
+    return true;
+  }
+  if (lower.endsWith('.tar')) {
+    await ensureExtractor('tar', 'tar');
+    await runCommand('tar', ['-xf', archivePath, '-C', targetDir]);
+    flattenSingleRootDir(targetDir);
+    return true;
+  }
+  return false;
+};
+
+const walkTree = (rootDir, visitor, options = {}) => {
+  const maxDepth = options.maxDepth ?? 8;
+  const maxEntries = options.maxEntries ?? 9000;
+  let visited = 0;
+
+  const walk = (dir, depth) => {
+    if (visited >= maxEntries || depth < 0) return null;
+    let entries = [];
+    try {
+      entries = fs.readdirSync(dir, { withFileTypes: true });
+    } catch (err) {
+      return null;
+    }
+    const direct = visitor(dir, entries);
+    if (direct) return direct;
+    for (const entry of entries) {
+      if (!entry.isDirectory()) continue;
+      if (['__MACOSX', 'node_modules', '.git'].includes(entry.name)) continue;
+      visited += 1;
+      const found = walk(path.join(dir, entry.name), depth - 1);
+      if (found) return found;
+    }
+    return null;
+  };
+
+  return walk(rootDir, maxDepth);
+};
+
+const findFirstSqlFile = (rootDir) =>
+  walkTree(rootDir, (_dir, entries) => {
+    const sql = entries.find((entry) => entry.isFile() && entry.name.toLowerCase().endsWith('.sql'));
+    return sql ? path.join(_dir, sql.name) : null;
+  });
+
+const findWpContentDir = (rootDir) =>
+  walkTree(rootDir, (dir, entries) => {
+    if (path.basename(dir) !== 'wp-content') return null;
+    const names = new Set(entries.map((entry) => entry.name));
+    const score = ['plugins', 'themes', 'uploads'].filter((name) => names.has(name)).length;
+    return score >= 1 ? dir : null;
+  });
+
+const findWordPressRoot = (rootDir) =>
+  walkTree(rootDir, (dir, entries) => {
+    const names = new Set(entries.map((entry) => entry.name));
+    if (names.has('wp-config.php') || (names.has('wp-content') && names.has('wp-admin'))) {
+      return dir;
+    }
+    return null;
+  });
+
+const detectTablePrefixFromSql = (sqlFile) => {
+  if (!sqlFile || !fs.existsSync(sqlFile)) return 'wp_';
+  const fd = fs.openSync(sqlFile, 'r');
+  try {
+    const buffer = Buffer.alloc(Math.min(fs.statSync(sqlFile).size, 1024 * 1024));
+    fs.readSync(fd, buffer, 0, buffer.length, 0);
+    const sample = buffer.toString('utf8');
+    const match =
+      sample.match(/CREATE TABLE\s+`?([a-zA-Z0-9_]+)options`?/i) ||
+      sample.match(/INSERT INTO\s+`?([a-zA-Z0-9_]+)options`?/i);
+    return match?.[1] || 'wp_';
+  } finally {
+    fs.closeSync(fd);
+  }
+};
+
+const copyDirectoryContents = (sourceDir, targetDir) => {
+  fs.mkdirSync(targetDir, { recursive: true });
+  fs.readdirSync(sourceDir).forEach((entry) => {
+    fs.cpSync(path.join(sourceDir, entry), path.join(targetDir, entry), { recursive: true, force: true });
+  });
+};
+
+const escapeSql = (value) =>
+  String(value ?? '')
+    .replace(/\\/g, '\\\\')
+    .replace(/'/g, "\\'");
+
+const getSiteUrl = (site) => `http://${site.domain}`;
+
+const buildNginxConfig = (site, hostPort) => `server {
+    listen 80;
+    server_name ${site.domain};
+    client_max_body_size 800m;
+
+    location / {
+        proxy_pass http://127.0.0.1:${hostPort};
+        proxy_http_version 1.1;
+        proxy_set_header Host $host;
+        proxy_set_header X-Real-IP $remote_addr;
+        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto $scheme;
+        proxy_read_timeout 300s;
+        proxy_send_timeout 300s;
+        proxy_buffering off;
+    }
+}
+`;
+
+const writeNginxSite = (site, warnings) => {
+  const filename = site.nginxConfigName || `site-${slugify(site.domain)}-${site.id.slice(0, 8)}.conf`;
+  const content = buildNginxConfig(site, site.port);
+  try {
+    nginxManager.saveConfig(filename, content, { skipValidation: true });
+    const configPath = nginxManager.resolveConfigPath(filename);
+    if (path.resolve(configPath).startsWith(path.resolve(nginxManager.sitesAvailable))) {
+      try {
+        nginxManager.enableConfig(filename);
+      } catch (err) {
+        warnings.push(`Nginx salvo, mas não foi possível habilitar/recarregar automaticamente: ${err.message}`);
+      }
+    } else {
+      try {
+        nginxManager.reload();
+      } catch (err) {
+        warnings.push(`Nginx salvo, mas o reload falhou: ${err.message}`);
+      }
+    }
+    return filename;
+  } catch (err) {
+    warnings.push(`Não foi possível criar o site no Nginx Manager: ${err.message}`);
+    return filename;
+  }
+};
+
+const createLabels = (site, role, serviceId, name) => ({
+  'provirpanel.managed': 'true',
+  'provirpanel.service.id': serviceId,
+  'provirpanel.service.name': name,
+  'provirpanel.template.id': role === 'wordpress' ? 'site-wordpress' : 'site-wordpress-db',
+  'provirpanel.has_project': role === 'wordpress' ? 'true' : 'false',
+  'provirpanel.site.id': site.id,
+  'provirpanel.site.role': role
+});
+
+const removeContainerByName = async (name) => {
+  try {
+    const containers = await dockerManager.docker.listContainers({ all: true });
+    const match = containers.find((container) => (container.Names || []).includes(`/${name}`));
+    if (match) {
+      await dockerManager.docker.getContainer(match.Id).remove({ force: true });
+    }
+  } catch (err) {
+    // ignore old container cleanup
+  }
+};
+
+const ensureImage = async (imageName, progress) => {
+  try {
+    await dockerManager.docker.getImage(imageName).inspect();
+    progress.push(`Imagem ${imageName} já existe localmente`);
+  } catch (err) {
+    progress.push(`Baixando imagem ${imageName}`);
+    await dockerManager.pullImage(imageName, (message) => {
+      if (message) progress.push(message);
+    }, { allowAny: true });
+  }
+};
+
+const inspectContainerStatus = async (containerId) => {
+  if (!containerId) return 'missing';
+  try {
+    const inspect = await dockerManager.docker.getContainer(containerId).inspect();
+    return inspect?.State?.Running ? 'running' : inspect?.State?.Status || 'stopped';
+  } catch (err) {
+    return 'missing';
+  }
+};
+
+const SECRET_MASK = '******';
+
+const sanitizeSiteForClient = (site) => ({
+  ...site,
+  database: site.database
+    ? {
+        ...site.database,
+        password: site.database.password ? SECRET_MASK : '',
+        rootPassword: site.database.rootPassword ? SECRET_MASK : ''
+      }
+    : site.database,
+  wordpress: site.wordpress
+    ? {
+        ...site.wordpress,
+        adminPassword: site.wordpress.adminPassword ? SECRET_MASK : ''
+      }
+    : site.wordpress
+});
+
+const decorateSite = async (site) => {
+  const wordpressStatus = await inspectContainerStatus(site.containers?.wordpress);
+  const databaseStatus = await inspectContainerStatus(site.containers?.database);
+  return sanitizeSiteForClient({
+    ...site,
+    status: wordpressStatus === 'running' && databaseStatus === 'running' ? 'running' : 'attention',
+    wordpressStatus,
+    databaseStatus
+  });
+};
+
+const runSql = async (site, sql) => {
+  if (!site.containers?.database) {
+    throw createHttpError('Container de banco não encontrado para este site', 400);
+  }
+  const db = site.database || {};
+  const script = [
+    'set -e',
+    'CLIENT="$(command -v mariadb || command -v mysql)"',
+    '"$CLIENT" -u"$PROVIR_DB_USER" -p"$PROVIR_DB_PASS" "$PROVIR_DB_NAME" -e "$PROVIR_SQL"'
+  ].join('\n');
+  return dockerExecShell(site.containers.database, script, {
+    PROVIR_DB_USER: db.user || 'wordpress',
+    PROVIR_DB_PASS: db.password || '',
+    PROVIR_DB_NAME: db.name || 'wordpress',
+    PROVIR_SQL: sql
+  });
+};
+
+const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
+
+const waitForDatabase = async (site, progress) => {
+  let lastError = null;
+  for (let attempt = 1; attempt <= 40; attempt += 1) {
+    try {
+      await runSql(site, 'SELECT 1;');
+      progress.push('Banco WordPress pronto para conexões');
+      return;
+    } catch (err) {
+      lastError = err;
+      await sleep(1500);
+    }
+  }
+  throw new Error(`Banco MariaDB não ficou pronto a tempo: ${lastError?.message || 'timeout'}`);
+};
+
+const importSqlFile = async (site, sqlFile) => {
+  const db = site.database || {};
+  const remotePath = '/tmp/provirpanel-import.sql';
+  await runCommand('docker', ['cp', sqlFile, `${site.containers.database}:${remotePath}`], { timeout: 900000 });
+  const script = [
+    'set -e',
+    'CLIENT="$(command -v mariadb || command -v mysql)"',
+    '"$CLIENT" -u"$PROVIR_DB_USER" -p"$PROVIR_DB_PASS" "$PROVIR_DB_NAME" < /tmp/provirpanel-import.sql',
+    'rm -f /tmp/provirpanel-import.sql'
+  ].join('\n');
+  return dockerExecShell(site.containers.database, script, {
+    PROVIR_DB_USER: db.user || 'wordpress',
+    PROVIR_DB_PASS: db.password || '',
+    PROVIR_DB_NAME: db.name || 'wordpress'
+  });
+};
+
+const updateWordPressUrls = async (site) => {
+  const prefix = site.wordpress?.tablePrefix || 'wp_';
+  const url = getSiteUrl(site);
+  await runSql(site, `UPDATE ${prefix}options SET option_value='${escapeSql(url)}' WHERE option_name IN ('siteurl','home');`);
+};
+
+const createWordPressSite = async (body = {}) => {
+  const name = String(body.name || body.clientName || '').trim();
+  if (!name) {
+    throw createHttpError('Nome do site obrigatório', 400);
+  }
+  const domain = normalizeDomain(body.domain);
+  const id = crypto.randomUUID();
+  const slug = slugify(name, 'wordpress');
+  const shortId = id.slice(0, 8);
+  const siteDir = path.join(sitesBaseDir, `${slug}-${shortId}`);
+  const wordpressDir = path.join(siteDir, 'wordpress');
+  const databaseDir = path.join(siteDir, 'database');
+  const phpDir = path.join(siteDir, 'php');
+  const migrationsDir = path.join(siteDir, 'migrations');
+  fs.mkdirSync(wordpressDir, { recursive: true });
+  fs.mkdirSync(databaseDir, { recursive: true });
+  fs.mkdirSync(phpDir, { recursive: true });
+  fs.mkdirSync(migrationsDir, { recursive: true });
+  fs.writeFileSync(
+    path.join(phpDir, 'provirpanel.ini'),
+    [
+      'upload_max_filesize=800M',
+      'post_max_size=800M',
+      'memory_limit=512M',
+      'max_execution_time=300',
+      'max_input_time=300'
+    ].join('\n'),
+    'utf8'
+  );
+
+  const progress = [];
+  const warnings = [];
+  const dbPassword = randomPassword(22);
+  const rootPassword = randomPassword(24);
+  const adminPassword = String(body.adminPassword || '').trim() || randomPassword(18);
+  const databaseName = slugify(body.dbName || `${slug}_wp`, 'wordpress').replace(/-/g, '_').slice(0, 48);
+  const dbContainerName = `site-${slug}-${shortId}-db`;
+  const wordpressContainerName = `site-${slug}-${shortId}-wp`;
+  const wordpressServiceId = `${id}-wordpress`;
+  const databaseServiceId = `${id}-database`;
+  const port = await dockerManager.findAvailablePort(Number(process.env.SITES_PORT_START || 8100));
+  if (!port) {
+    throw createHttpError('Nenhuma porta local disponível para publicar o WordPress', 500);
+  }
+
+  const site = {
+    id,
+    type: 'wordpress',
+    name,
+    slug,
+    domain,
+    port,
+    url: getSiteUrl({ domain }),
+    localUrl: `http://localhost:${port}`,
+    siteDir,
+    paths: {
+      wordpress: wordpressDir,
+      database: databaseDir,
+      migrations: migrationsDir
+    },
+    containers: {},
+    services: {
+      wordpress: wordpressServiceId,
+      database: databaseServiceId
+    },
+    images: {
+      wordpress: wordpressImage,
+      database: databaseImage
+    },
+    database: {
+      name: databaseName,
+      user: 'wordpress',
+      password: dbPassword,
+      rootPassword
+    },
+    wordpress: {
+      adminUser: String(body.adminUser || 'admin').trim() || 'admin',
+      adminEmail: String(body.adminEmail || '').trim(),
+      adminPassword,
+      tablePrefix: 'wp_'
+    },
+    createdAt: new Date().toISOString(),
+    updatedAt: new Date().toISOString()
+  };
+
+  await dockerManager.ensureNetwork(networkName);
+  await ensureImage(databaseImage, progress);
+  await ensureImage(wordpressImage, progress);
+  await removeContainerByName(dbContainerName);
+  await removeContainerByName(wordpressContainerName);
+
+  progress.push('Criando banco MariaDB com volume local');
+  const dbContainer = await dockerManager.docker.createContainer({
+    Image: databaseImage,
+    name: dbContainerName,
+    Labels: createLabels(site, 'database', databaseServiceId, dbContainerName),
+    Env: [
+      `MARIADB_DATABASE=${databaseName}`,
+      'MARIADB_USER=wordpress',
+      `MARIADB_PASSWORD=${dbPassword}`,
+      `MARIADB_ROOT_PASSWORD=${rootPassword}`
+    ],
+    HostConfig: {
+      NetworkMode: networkName,
+      Binds: [`${databaseDir}:/var/lib/mysql`]
+    }
+  });
+  await dbContainer.start();
+  const dbInspect = await dbContainer.inspect();
+  site.containers.database = dbInspect.Id;
+  await waitForDatabase(site, progress);
+
+  progress.push('Criando WordPress com PHP ajustado para uploads grandes');
+  const wpContainer = await dockerManager.docker.createContainer({
+    Image: wordpressImage,
+    name: wordpressContainerName,
+    Labels: createLabels(site, 'wordpress', wordpressServiceId, wordpressContainerName),
+    Env: [
+      `WORDPRESS_DB_HOST=${dbContainerName}:3306`,
+      `WORDPRESS_DB_NAME=${databaseName}`,
+      'WORDPRESS_DB_USER=wordpress',
+      `WORDPRESS_DB_PASSWORD=${dbPassword}`,
+      'WORDPRESS_TABLE_PREFIX=wp_',
+      "WORDPRESS_CONFIG_EXTRA=define('FS_METHOD', 'direct');\ndefine('WP_MEMORY_LIMIT', '256M');\ndefine('WP_MAX_MEMORY_LIMIT', '512M');"
+    ],
+    ExposedPorts: {
+      '80/tcp': {}
+    },
+    HostConfig: {
+      NetworkMode: networkName,
+      PortBindings: {
+        '80/tcp': [{ HostPort: String(port), HostIp: '127.0.0.1' }]
+      },
+      Binds: [
+        `${wordpressDir}:/var/www/html`,
+        `${path.join(phpDir, 'provirpanel.ini')}:/usr/local/etc/php/conf.d/provirpanel.ini:ro`
+      ]
+    }
+  });
+  await wpContainer.start();
+  const wpInspect = await wpContainer.inspect();
+  site.containers.wordpress = wpInspect.Id;
+
+  site.nginxConfigName = writeNginxSite(site, warnings);
+  saveSite(site);
+
+  dockerManager.saveService({
+    id: databaseServiceId,
+    name: dbContainerName,
+    templateId: 'site-wordpress-db',
+    image: databaseImage,
+    containerId: dbInspect.Id,
+    hostPort: null,
+    containerPort: 3306,
+    volumes: [{ hostPath: databaseDir, containerPath: '/var/lib/mysql' }],
+    envVars: [
+      { key: 'MARIADB_DATABASE', value: databaseName },
+      { key: 'MARIADB_USER', value: 'wordpress' },
+      { key: 'MARIADB_PASSWORD', value: dbPassword, secret: true },
+      { key: 'MARIADB_ROOT_PASSWORD', value: rootPassword, secret: true }
+    ],
+    networkName,
+    bindLocalOnly: true,
+    url: null,
+    externalUrl: null,
+    createdAt: site.createdAt,
+    hasProject: false,
+    siteId: site.id,
+    siteRole: 'database'
+  });
+
+  dockerManager.saveService({
+    id: wordpressServiceId,
+    name: wordpressContainerName,
+    templateId: 'site-wordpress',
+    image: wordpressImage,
+    containerId: wpInspect.Id,
+    hostPort: port,
+    containerPort: 80,
+    volumes: [
+      { hostPath: wordpressDir, containerPath: '/var/www/html' },
+      { hostPath: path.join(phpDir, 'provirpanel.ini'), containerPath: '/usr/local/etc/php/conf.d/provirpanel.ini' }
+    ],
+    envVars: [
+      { key: 'WORDPRESS_DB_HOST', value: `${dbContainerName}:3306` },
+      { key: 'WORDPRESS_DB_NAME', value: databaseName },
+      { key: 'WORDPRESS_DB_USER', value: 'wordpress' },
+      { key: 'WORDPRESS_DB_PASSWORD', value: dbPassword, secret: true },
+      { key: 'WORDPRESS_TABLE_PREFIX', value: 'wp_' }
+    ],
+    networkName,
+    bindLocalOnly: true,
+    url: `http://localhost:${port}`,
+    externalUrl: getSiteUrl(site),
+    createdAt: site.createdAt,
+    hasProject: true,
+    siteId: site.id,
+    siteRole: 'wordpress'
+  });
+
+  progress.push('Site salvo no painel');
+  return { site, progress, warnings };
+};
+
+const getSiteOr404 = (siteId) => {
+  const site = readSites().find((entry) => entry.id === siteId);
+  if (!site) {
+    throw createHttpError('Site não encontrado', 404);
+  }
+  return site;
+};
+
+const processMigrationArchive = async (siteId, file) => {
+  if (!file?.path) {
+    throw createHttpError('Arquivo de migração obrigatório', 400);
+  }
+  const site = getSiteOr404(siteId);
+  const migrationId = new Date().toISOString().replace(/[-:]/g, '').replace(/\..+/, '');
+  const migrationDir = path.join(site.paths?.migrations || path.join(site.siteDir, 'migrations'), migrationId);
+  fs.mkdirSync(migrationDir, { recursive: true });
+
+  const originalName = file.originalname || file.filename || 'backup';
+  const lowerName = originalName.toLowerCase();
+  const actions = [];
+  let sqlFile = null;
+  let extractionDir = migrationDir;
+
+  try {
+    if (lowerName.endsWith('.sql')) {
+      sqlFile = path.join(migrationDir, safeUploadFilename(originalName, 'wordpress.sql'));
+      fs.copyFileSync(file.path, sqlFile);
+      actions.push('Dump SQL identificado');
+    } else {
+      const extracted = await extractArchiveTo(file.path, extractionDir, originalName);
+      if (!extracted) {
+        const savedPath = path.join(migrationDir, safeUploadFilename(originalName, 'wordpress-backup.bin'));
+        fs.copyFileSync(file.path, savedPath);
+        throw createHttpError('Formato salvo, mas ainda não suportado para extração automática. Use .zip, .tar, .tar.gz, .tgz ou .sql.', 400);
+      }
+      actions.push('Backup extraído para análise');
+      sqlFile = findFirstSqlFile(extractionDir);
+    }
+
+    const wpContentDir = fs.existsSync(extractionDir) ? findWpContentDir(extractionDir) : null;
+    const wordpressRoot = fs.existsSync(extractionDir) ? findWordPressRoot(extractionDir) : null;
+
+    if (wpContentDir) {
+      copyDirectoryContents(wpContentDir, path.join(site.paths.wordpress, 'wp-content'));
+      actions.push('wp-content copiado para o volume local do WordPress');
+    }
+
+    if (wordpressRoot && fs.existsSync(path.join(wordpressRoot, '.htaccess'))) {
+      fs.copyFileSync(path.join(wordpressRoot, '.htaccess'), path.join(site.paths.wordpress, '.htaccess'));
+      actions.push('.htaccess copiado');
+    }
+
+    if (sqlFile) {
+      const tablePrefix = detectTablePrefixFromSql(sqlFile);
+      await importSqlFile(site, sqlFile);
+      site.wordpress = {
+        ...(site.wordpress || {}),
+        tablePrefix
+      };
+      actions.push(`Banco importado com prefixo ${tablePrefix}`);
+      try {
+        await updateWordPressUrls(site);
+        actions.push(`siteurl/home ajustados para ${getSiteUrl(site)}`);
+      } catch (err) {
+        actions.push(`Banco importado, mas o ajuste de domínio falhou: ${err.message}`);
+      }
+    }
+
+    site.lastMigration = {
+      id: migrationId,
+      filename: originalName,
+      sqlFound: Boolean(sqlFile),
+      wpContentFound: Boolean(wpContentDir),
+      wordpressRootFound: Boolean(wordpressRoot),
+      actions,
+      createdAt: new Date().toISOString()
+    };
+    site.updatedAt = new Date().toISOString();
+    saveSite(site);
+
+    return {
+      site,
+      migration: site.lastMigration
+    };
+  } finally {
+    fs.unlink(file.path, () => {});
+  }
+};
+
+router.get('/', async (_req, res, next) => {
+  try {
+    const sites = await Promise.all(readSites().map(decorateSite));
+    res.json({ sites, baseDir: sitesBaseDir });
+  } catch (err) {
+    next(err);
+  }
+});
+
+router.post('/wordpress', async (req, res, next) => {
+  try {
+    const result = await createWordPressSite(req.body);
+    res.status(201).json({
+      ...result,
+      site: await decorateSite(result.site)
+    });
+  } catch (err) {
+    next(err);
+  }
+});
+
+router.post('/:id/domain', async (req, res, next) => {
+  try {
+    const site = getSiteOr404(req.params.id);
+    const oldConfigName = site.nginxConfigName;
+    site.domain = normalizeDomain(req.body?.domain);
+    site.url = getSiteUrl(site);
+    site.updatedAt = new Date().toISOString();
+    const warnings = [];
+    site.nginxConfigName = `site-${slugify(site.domain)}-${site.id.slice(0, 8)}.conf`;
+    writeNginxSite(site, warnings);
+    if (oldConfigName && oldConfigName !== site.nginxConfigName) {
+      try {
+        nginxManager.deleteConfig(oldConfigName);
+      } catch (err) {
+        warnings.push(`Configuração Nginx antiga não foi removida: ${err.message}`);
+      }
+    }
+    try {
+      await updateWordPressUrls(site);
+    } catch (err) {
+      warnings.push(`Domínio salvo, mas não foi possível ajustar siteurl/home no banco: ${err.message}`);
+    }
+    saveSite(site);
+    res.json({ site: await decorateSite(site), warnings });
+  } catch (err) {
+    next(err);
+  }
+});
+
+router.post('/:id/reset-password', async (req, res, next) => {
+  try {
+    const site = getSiteOr404(req.params.id);
+    const username = String(req.body?.username || site.wordpress?.adminUser || 'admin').trim();
+    const password = String(req.body?.password || '').trim() || randomPassword(18);
+    const prefix = site.wordpress?.tablePrefix || 'wp_';
+    await runSql(
+      site,
+      `UPDATE ${prefix}users SET user_pass=MD5('${escapeSql(password)}') WHERE user_login='${escapeSql(username)}' LIMIT 1;`
+    );
+    site.wordpress = {
+      ...(site.wordpress || {}),
+      adminUser: username,
+      lastPasswordResetAt: new Date().toISOString()
+    };
+    site.updatedAt = new Date().toISOString();
+    saveSite(site);
+    res.json({ site: await decorateSite(site), username, password });
+  } catch (err) {
+    next(err);
+  }
+});
+
+router.post('/:id/db/optimize', async (req, res, next) => {
+  try {
+    const site = getSiteOr404(req.params.id);
+    const db = site.database || {};
+    const script = [
+      'set -e',
+      'CLIENT="$(command -v mariadb-check || command -v mysqlcheck)"',
+      '"$CLIENT" -u"$PROVIR_DB_USER" -p"$PROVIR_DB_PASS" --optimize "$PROVIR_DB_NAME"'
+    ].join('\n');
+    const result = await dockerExecShell(site.containers.database, script, {
+      PROVIR_DB_USER: db.user || 'wordpress',
+      PROVIR_DB_PASS: db.password || '',
+      PROVIR_DB_NAME: db.name || 'wordpress'
+    });
+    site.lastDbOptimizeAt = new Date().toISOString();
+    site.updatedAt = new Date().toISOString();
+    saveSite(site);
+    res.json({ site: await decorateSite(site), output: result.stdout || result.stderr || 'OK' });
+  } catch (err) {
+    next(err);
+  }
+});
+
+router.post('/:id/migrate', upload.single('backup'), async (req, res, next) => {
+  try {
+    const result = await processMigrationArchive(req.params.id, req.file);
+    res.json({
+      ...result,
+      site: await decorateSite(result.site)
+    });
+  } catch (err) {
+    if (req.file?.path) fs.unlink(req.file.path, () => {});
+    next(err);
+  }
+});
+
+router.post('/:id/migrate/init', (req, res, next) => {
+  try {
+    getSiteOr404(req.params.id);
+    const totalChunks = Number(req.body?.totalChunks || 0);
+    if (!Number.isInteger(totalChunks) || totalChunks < 1) {
+      return res.status(400).json({ message: 'totalChunks inválido' });
+    }
+    const uploadId = crypto.randomUUID();
+    writeChunkMetadata(uploadId, {
+      type: 'site-migration',
+      siteId: req.params.id,
+      filename: safeUploadFilename(req.body?.filename),
+      size: Number(req.body?.size || 0),
+      totalChunks,
+      createdAt: new Date().toISOString()
+    });
+    res.json({ uploadId });
+  } catch (err) {
+    next(err);
+  }
+});
+
+router.post('/:id/migrate/chunk', upload.single('chunk'), (req, res, next) => {
+  try {
+    const metadata = persistChunkFile(req.body?.uploadId, req.body?.chunkIndex, req.file);
+    if (metadata.type !== 'site-migration' || metadata.siteId !== req.params.id) {
+      return res.status(400).json({ message: 'Upload inválido para este site' });
+    }
+    res.json({ ok: true, chunkIndex: Number(req.body?.chunkIndex) });
+  } catch (err) {
+    if (req.file?.path) fs.unlink(req.file.path, () => {});
+    next(err);
+  }
+});
+
+router.post('/:id/migrate/complete', async (req, res, next) => {
+  const uploadId = req.body?.uploadId;
+  try {
+    const { metadata } = readChunkMetadata(uploadId);
+    if (metadata.type !== 'site-migration' || metadata.siteId !== req.params.id) {
+      return res.status(400).json({ message: 'Upload inválido para este site' });
+    }
+    const { archivePath, filename } = assembleChunkUpload(uploadId);
+    const result = await processMigrationArchive(req.params.id, {
+      path: archivePath,
+      originalname: filename
+    });
+    cleanupChunkUpload(uploadId);
+    res.json({
+      ...result,
+      site: await decorateSite(result.site)
+    });
+  } catch (err) {
+    if (uploadId) cleanupChunkUpload(uploadId);
+    next(err);
+  }
+});
+
+module.exports = router;

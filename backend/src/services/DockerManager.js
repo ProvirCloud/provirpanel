@@ -9,6 +9,8 @@ const ALLOWED_PULL_IMAGES = new Set([
   'postgres',
   'postgresql',
   'mysql',
+  'mariadb',
+  'wordpress',
   'redis',
   'nginx',
   'node',

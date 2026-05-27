@@ -15,6 +15,7 @@ import ProvirGateway from './components/ProvirGateway.jsx'
 import SecurityAuditPanel from './components/SecurityAuditPanel.jsx'
 import NginxPanel from './components/NginxPanel.jsx'
 import NginxVisualManager from './components/NginxVisualManager.jsx'
+import SitesPanel from './components/SitesPanel.jsx'
 import NginxCanvasPage from './pages/NginxCanvasPage'
 import NginxVisualEditor from './pages/NginxVisualEditor'
 import NginxVisualEditorTest from './pages/NginxVisualEditorTest'
@@ -117,6 +118,7 @@ const App = () => {
           <Route path="stacks/canvas" element={<ModulePage showHeader={false} title="Infrastructure Canvas" subtitle="Editor visual de stacks"><StacksPanel /></ModulePage>} />
           <Route path="terminal" element={<ModulePage title="Terminal" subtitle="Acesso operacional aos ambientes conectados"><Terminal showPageIntro={false} /></ModulePage>} />
           <Route path="docker" element={<ModulePage title="Container Service" subtitle="Serviços, containers e topologias dos ambientes"><DockerPanel showPageIntro={false} /></ModulePage>} />
+          <Route path="sites" element={<SitesPanel />} />
           <Route path="nginx" element={<NginxCanvasPage />} />
           <Route path="nginx-visual" element={<NginxVisualEditor />} />
           <Route path="nginx-visual-full" element={<NginxVisualEditorFull />} />
