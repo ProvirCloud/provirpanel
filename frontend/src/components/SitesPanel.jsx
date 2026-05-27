@@ -20,7 +20,6 @@ import api, { uploadApi } from '../services/api.js'
 import Button from './ui/Button'
 import Input from './ui/Input'
 
-const CHUNKED_UPLOAD_THRESHOLD_BYTES = 50 * 1024 * 1024
 const UPLOAD_CHUNK_SIZE_BYTES = 25 * 1024 * 1024
 
 const defaultCreateForm = {
@@ -97,7 +96,8 @@ const postUploadChunk = async (url, buildFormData, config = {}) => {
 }
 
 const uploadFileInChunks = async ({ siteId, file, onProgress }) => {
-  const totalChunks = Math.ceil(file.size / UPLOAD_CHUNK_SIZE_BYTES)
+  const totalChunks = Math.max(1, Math.ceil(file.size / UPLOAD_CHUNK_SIZE_BYTES))
+  const safeSize = Math.max(1, file.size)
   const initResponse = await uploadApi.post(`/sites/${siteId}/migrate/init`, {
     filename: file.name,
     size: file.size,
@@ -127,13 +127,14 @@ const uploadFileInChunks = async ({ siteId, file, onProgress }) => {
         headers: { 'Content-Type': 'multipart/form-data' },
         onUploadProgress: (event) => {
           const loaded = uploadedBefore + (event.loaded || 0)
-          onProgress?.(Math.min(99, Math.round((loaded / file.size) * 100)), chunkIndex + 1, totalChunks)
+          onProgress?.(Math.min(99, Math.round((loaded / safeSize) * 100)), chunkIndex + 1, totalChunks)
         },
       }
     )
-    onProgress?.(Math.min(99, Math.round((end / file.size) * 100)), chunkIndex + 1, totalChunks)
+    onProgress?.(Math.min(99, Math.round((end / safeSize) * 100)), chunkIndex + 1, totalChunks)
   }
 
+  onProgress?.(99, totalChunks, totalChunks, 'Processando backup no servidor')
   return uploadApi.post(`/sites/${siteId}/migrate/complete`, { uploadId }, { timeout: 900000 })
 }
 
@@ -267,34 +268,24 @@ const SitesPanel = () => {
   const submitMigration = async (event) => {
     event.preventDefault()
     if (!selectedSite || !migrationFile) return
+    if (selectedSite.databaseStatus !== 'running') {
+      setMessage({ type: 'error', text: 'A migração precisa de um site WordPress criado com o banco em execução.' })
+      return
+    }
     setBusy('migration')
     setMessage(null)
     setMigrationResult(null)
     setMigrationProgress(0)
     setMigrationStep('Preparando upload')
     try {
-      let response
-      if (migrationFile.size >= CHUNKED_UPLOAD_THRESHOLD_BYTES) {
-        response = await uploadFileInChunks({
-          siteId: selectedSite.id,
-          file: migrationFile,
-          onProgress: (progress, chunkIndex, totalChunks) => {
-            setMigrationProgress(progress)
-            setMigrationStep(`Enviando parte ${chunkIndex}/${totalChunks}`)
-          },
-        })
-      } else {
-        const formData = new FormData()
-        formData.append('backup', migrationFile)
-        response = await uploadApi.post(`/sites/${selectedSite.id}/migrate`, formData, {
-          headers: { 'Content-Type': 'multipart/form-data' },
-          timeout: 900000,
-          onUploadProgress: (event) => {
-            if (!event.total) return
-            setMigrationProgress(Math.min(99, Math.round((event.loaded / event.total) * 100)))
-          },
-        })
-      }
+      const response = await uploadFileInChunks({
+        siteId: selectedSite.id,
+        file: migrationFile,
+        onProgress: (progress, chunkIndex, totalChunks, step) => {
+          setMigrationProgress(progress)
+          setMigrationStep(step || `Enviando parte ${chunkIndex}/${totalChunks}`)
+        },
+      })
       setMigrationProgress(100)
       setMigrationStep('Migração aplicada')
       setMigrationResult(response.data?.migration || null)
@@ -305,6 +296,19 @@ const SitesPanel = () => {
     } finally {
       setBusy('')
     }
+  }
+
+  const handleMigrationFileChange = (event) => {
+    const file = event.target.files?.[0] || null
+    setMigrationFile(file)
+    setMigrationResult(null)
+    setMigrationProgress(0)
+    if (!file) {
+      setMigrationStep('')
+      return
+    }
+    const totalChunks = Math.max(1, Math.ceil(file.size / UPLOAD_CHUNK_SIZE_BYTES))
+    setMigrationStep(`Arquivo pronto em ${totalChunks} parte${totalChunks > 1 ? 's' : ''}`)
   }
 
   const statusCounts = useMemo(() => {
@@ -491,7 +495,7 @@ const SitesPanel = () => {
                   className="zeus-input"
                   type="file"
                   accept=".zip,.tar,.tar.gz,.tgz,.sql"
-                  onChange={(event) => setMigrationFile(event.target.files?.[0] || null)}
+                  onChange={handleMigrationFileChange}
                 />
               </Field>
               {migrationFile ? (
@@ -514,10 +518,15 @@ const SitesPanel = () => {
                 variant="primary"
                 leadingIcon={<UploadCloud size={16} />}
                 loading={busy === 'migration'}
-                disabled={!selectedSite || !migrationFile}
+                disabled={!selectedSite || selectedSite.databaseStatus !== 'running' || !migrationFile}
               >
                 Aplicar migração
               </Button>
+              {selectedSite && selectedSite.databaseStatus !== 'running' ? (
+                <div className="rounded-lg border border-amber-400/30 bg-amber-500/10 px-3 py-2 text-sm text-amber-100">
+                  Banco do site precisa estar em execução.
+                </div>
+              ) : null}
             </form>
           </Panel>
 

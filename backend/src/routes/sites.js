@@ -795,11 +795,22 @@ const getSiteOr404 = (siteId) => {
   return site;
 };
 
+const requireMigrationTargetReady = async (site) => {
+  if (!site?.containers?.database) {
+    throw createHttpError('A migração precisa de um site WordPress criado com banco de dados.', 400);
+  }
+  const databaseStatus = await inspectContainerStatus(site.containers.database);
+  if (databaseStatus !== 'running') {
+    throw createHttpError('A migração precisa de um site WordPress criado com o banco em execução.', 400);
+  }
+};
+
 const processMigrationArchive = async (siteId, file) => {
   if (!file?.path) {
     throw createHttpError('Arquivo de migração obrigatório', 400);
   }
   const site = getSiteOr404(siteId);
+  await requireMigrationTargetReady(site);
   const migrationId = new Date().toISOString().replace(/[-:]/g, '').replace(/\..+/, '');
   const migrationDir = path.join(site.paths?.migrations || path.join(site.siteDir, 'migrations'), migrationId);
   fs.mkdirSync(migrationDir, { recursive: true });
@@ -985,9 +996,10 @@ router.post('/:id/migrate', upload.single('backup'), async (req, res, next) => {
   }
 });
 
-router.post('/:id/migrate/init', (req, res, next) => {
+router.post('/:id/migrate/init', async (req, res, next) => {
   try {
-    getSiteOr404(req.params.id);
+    const site = getSiteOr404(req.params.id);
+    await requireMigrationTargetReady(site);
     const totalChunks = Number(req.body?.totalChunks || 0);
     if (!Number.isInteger(totalChunks) || totalChunks < 1) {
       return res.status(400).json({ message: 'totalChunks inválido' });
