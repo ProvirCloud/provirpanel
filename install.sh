@@ -449,10 +449,21 @@ server {
     }
     
     # Admin Panel - servir arquivos estáticos
+    location = /admin {
+        return 301 /admin/;
+    }
+
     location /admin/ {
         alias /var/www/panel/;
         try_files \$uri \$uri/ /admin/index.html;
         index index.html;
+    }
+
+    # Assets na raiz para permitir publicar o painel em subdominio sem /admin
+    location /assets/ {
+        alias /var/www/panel/assets/;
+        expires 1y;
+        add_header Cache-Control "public, immutable";
     }
     
     # Admin Panel assets

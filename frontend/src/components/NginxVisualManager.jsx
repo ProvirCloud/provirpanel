@@ -2074,14 +2074,15 @@ const ServerForm = ({ server, onSave, onApply, onCancel, dockerContainers, docke
     const hasApi = rules.some((r) => r.type === 'proxy' && String(r.path || '').startsWith('/api'))
     const hasSocket = rules.some((r) => r.type === 'proxy' && String(r.path || '').startsWith('/socket.io'))
     const hasAdminStatic = rules.some((r) => r.type === 'static' && String(r.path || '').startsWith('/admin'))
+    const hasRootStatic = rules.some((r) => r.type === 'static' && String(r.path || '') === '/')
     const hasRootRedirect = rules.some(
       (r) => r.type === 'redirect' && String(r.path || '') === '/' && String(r.return_location || '').startsWith('/admin')
     )
     const warnings = []
     if (!hasApi) warnings.push('Rota /api nao configurada pode quebrar o painel.')
     if (!hasSocket) warnings.push('Rota /socket.io nao configurada pode quebrar o painel.')
-    if (!hasAdminStatic && !hasRootRedirect) {
-      warnings.push('Sem /admin (static) ou redirect de / para /admin, painel pode parar.')
+    if (!hasAdminStatic && !hasRootRedirect && !hasRootStatic) {
+      warnings.push('Sem rota static em / ou /admin, painel pode parar.')
     }
     if (data.primary_domain === '_') {
       warnings.push('server_name "_" usado. Alterar pode causar conflito com outros hosts.')

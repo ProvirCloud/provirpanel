@@ -20,6 +20,7 @@ import {
 import { Area, AreaChart, ResponsiveContainer, Tooltip as RechartsTooltip } from 'recharts'
 import api, { uploadApi } from '../services/api.js'
 import { createDockerLogsSocket, createDockerProgressSocket } from '../services/socket.js'
+import { getPanelHref } from '../utils/panelPath.js'
 
 // Polyfill para crypto.randomUUID
 const generateUUID = () => {
@@ -3329,7 +3330,7 @@ const DockerPanel = ({ showPageIntro = true }) => {
                         </span>
                         <a
                           className="text-blue-300 underline"
-                          href="/admin/logs"
+                          href={getPanelHref('/logs')}
                           target="_blank"
                           rel="noreferrer"
                         >

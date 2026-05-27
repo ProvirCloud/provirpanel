@@ -24,6 +24,7 @@ import ConsoleModulePage from './pages/ConsoleModulePage'
 import InfrastructureCanvasPage from './pages/InfrastructureCanvasPage'
 import StacksPanel from './components/StacksPanel.jsx'
 import api from './services/api.js'
+import { getPanelBasename } from './utils/panelPath.js'
 
 const RouteLoader = () => (
   <div className="zeus-panel px-6 py-16 text-center text-[var(--color-text-muted)]">Carregando módulo...</div>
@@ -91,7 +92,7 @@ const App = () => {
   }, [refreshAuth])
 
   return (
-    <BrowserRouter basename="/admin">
+    <BrowserRouter basename={getPanelBasename()}>
       <TaskBar />
       <Routes>
         {/* Public test route - no authentication required */}

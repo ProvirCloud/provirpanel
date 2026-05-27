@@ -259,6 +259,39 @@ if [ -f "$PANEL_NGINX" ]; then
   else
     sed -i '/server_name/a\    client_max_body_size 800m;' "$PANEL_NGINX"
   fi
+  need_admin_redirect=0
+  need_root_assets=0
+  if ! grep -q "location = /admin" "$PANEL_NGINX"; then
+    need_admin_redirect=1
+  fi
+  if ! grep -q "location /assets/" "$PANEL_NGINX"; then
+    need_root_assets=1
+  fi
+  if (( need_admin_redirect || need_root_assets )); then
+    tmp_nginx="$(mktemp)"
+    awk -v add_admin="$need_admin_redirect" -v add_assets="$need_root_assets" '
+      add_admin == "1" && /location \/admin\// && inserted_admin == 0 {
+        print "    location = /admin {"
+        print "        return 301 /admin/;"
+        print "    }"
+        print ""
+        inserted_admin=1
+      }
+      add_assets == "1" && /location \/admin\/assets\// && inserted_assets == 0 {
+        print "    # Assets na raiz para permitir publicar o painel em subdominio sem /admin"
+        print "    location /assets/ {"
+        print "        alias /var/www/panel/assets/;"
+        print "        expires 1y;"
+        print "        add_header Cache-Control \"public, immutable\";"
+        print "    }"
+        print ""
+        inserted_assets=1
+      }
+      { print }
+    ' "$PANEL_NGINX" > "$tmp_nginx"
+    cat "$tmp_nginx" > "$PANEL_NGINX"
+    rm -f "$tmp_nginx"
+  fi
   log "client_max_body_size 800m configurado no nginx do painel"
 fi
 

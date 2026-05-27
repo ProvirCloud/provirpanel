@@ -966,9 +966,8 @@ ${rewriteLine}${buildProxyBlock(target)}${extraProxyDirectives}    }
         const modifierPart = rootRule.modifier ? `${rootRule.modifier} ` : '';
         const staticRule = this.resolveStaticRuleConfig(rootRule);
         const tryFiles = staticRule.tryFiles;
-        const staticDirective = staticRule.aliasPath
-          ? `alias ${staticRule.aliasPath.endsWith('/') ? staticRule.aliasPath : `${staticRule.aliasPath}/`};`
-          : `root ${staticRule.rootPath};`;
+        const rootStaticPath = staticRule.aliasPath || staticRule.rootPath;
+        const staticDirective = `root ${rootStaticPath};`;
         config += `
     location ${modifierPart}${rootRule.path} {
         ${staticDirective}
