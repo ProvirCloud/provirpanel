@@ -30,7 +30,13 @@ const configuredSitesBaseDir =
 let sitesBaseDir = configuredSitesBaseDir;
 const networkName = process.env.SITES_DOCKER_NETWORK || 'provirpanel';
 const wordpressImage = process.env.WORDPRESS_IMAGE || 'wordpress:latest';
-const databaseImage = process.env.WORDPRESS_DB_IMAGE || 'mariadb:11';
+const configuredDatabaseImage = process.env.WORDPRESS_DB_IMAGE || 'mariadb:11';
+const fallbackDatabaseImages = process.env.WORDPRESS_DB_FALLBACK_IMAGES
+  ? process.env.WORDPRESS_DB_FALLBACK_IMAGES.split(',').map((image) => image.trim()).filter(Boolean)
+  : (process.env.WORDPRESS_DB_IMAGE ? [] : ['mysql:8']);
+const databaseImageCandidates = [configuredDatabaseImage, ...fallbackDatabaseImages].filter(
+  (image, index, list) => image && list.indexOf(image) === index
+);
 
 fs.mkdirSync(path.dirname(registryPath), { recursive: true });
 try {
@@ -411,16 +417,78 @@ const removeContainerByName = async (name) => {
 };
 
 const ensureImage = async (imageName, progress) => {
+  const attempts = Math.max(1, Number(process.env.DOCKER_PULL_RETRIES || 3));
   try {
     await dockerManager.docker.getImage(imageName).inspect();
     progress.push(`Imagem ${imageName} já existe localmente`);
+    return imageName;
   } catch (err) {
-    progress.push(`Baixando imagem ${imageName}`);
-    await dockerManager.pullImage(imageName, (message) => {
-      if (message) progress.push(message);
-    }, { allowAny: true });
+    // Image is not local yet.
   }
+
+  let lastError = null;
+  for (let attempt = 1; attempt <= attempts; attempt += 1) {
+    try {
+      progress.push(`Baixando imagem ${imageName} (${attempt}/${attempts})`);
+      await dockerManager.pullImage(imageName, (message) => {
+        if (message) progress.push(message);
+      }, { allowAny: true });
+      return imageName;
+    } catch (err) {
+      lastError = err;
+      progress.push(`Falha ao baixar ${imageName}: ${err.message}`);
+      if (attempt < attempts) {
+        const delayMs = Math.min(20000, attempt * 5000);
+        progress.push(`Tentando novamente em ${Math.round(delayMs / 1000)}s`);
+        await sleep(delayMs);
+      }
+    }
+  }
+
+  throw lastError || new Error(`Não foi possível baixar ${imageName}`);
 };
+
+const ensureFirstAvailableImage = async (imageNames, progress, label) => {
+  const errors = [];
+  for (const imageName of imageNames) {
+    try {
+      return await ensureImage(imageName, progress);
+    } catch (err) {
+      errors.push(`${imageName}: ${err.message}`);
+      progress.push(`Imagem ${imageName} indisponível para ${label}`);
+    }
+  }
+  throw new Error(`Nenhuma imagem disponível para ${label}. ${errors.join(' | ')}`);
+};
+
+const getDatabaseContainerEnv = (imageName, databaseName, dbPassword, rootPassword) => {
+  const lower = String(imageName || '').toLowerCase();
+  const isMySql = lower.includes('mysql') && !lower.includes('mariadb');
+  if (isMySql) {
+    return [
+      `MYSQL_DATABASE=${databaseName}`,
+      'MYSQL_USER=wordpress',
+      `MYSQL_PASSWORD=${dbPassword}`,
+      `MYSQL_ROOT_PASSWORD=${rootPassword}`
+    ];
+  }
+  return [
+    `MARIADB_DATABASE=${databaseName}`,
+    'MARIADB_USER=wordpress',
+    `MARIADB_PASSWORD=${dbPassword}`,
+    `MARIADB_ROOT_PASSWORD=${rootPassword}`
+  ];
+};
+
+const containerEnvToRegistryEntries = (env = []) =>
+  env.map((entry) => {
+    const [key, ...valueParts] = String(entry).split('=');
+    return {
+      key,
+      value: valueParts.join('='),
+      secret: key.includes('PASSWORD')
+    };
+  });
 
 const inspectContainerStatus = async (containerId) => {
   if (!containerId) return 'missing';
@@ -494,7 +562,7 @@ const waitForDatabase = async (site, progress) => {
       await sleep(1500);
     }
   }
-  throw new Error(`Banco MariaDB não ficou pronto a tempo: ${lastError?.message || 'timeout'}`);
+  throw new Error(`Banco do WordPress não ficou pronto a tempo: ${lastError?.message || 'timeout'}`);
 };
 
 const importSqlFile = async (site, sqlFile) => {
@@ -587,7 +655,7 @@ const createWordPressSite = async (body = {}) => {
     },
     images: {
       wordpress: wordpressImage,
-      database: databaseImage
+      database: configuredDatabaseImage
     },
     database: {
       name: databaseName,
@@ -606,22 +674,22 @@ const createWordPressSite = async (body = {}) => {
   };
 
   await dockerManager.ensureNetwork(networkName);
-  await ensureImage(databaseImage, progress);
-  await ensureImage(wordpressImage, progress);
+  const selectedDatabaseImage = await ensureFirstAvailableImage(databaseImageCandidates, progress, 'banco de dados WordPress');
+  const selectedWordPressImage = await ensureImage(wordpressImage, progress);
+  const databaseContainerEnv = getDatabaseContainerEnv(selectedDatabaseImage, databaseName, dbPassword, rootPassword);
+  site.images = {
+    wordpress: selectedWordPressImage,
+    database: selectedDatabaseImage
+  };
   await removeContainerByName(dbContainerName);
   await removeContainerByName(wordpressContainerName);
 
-  progress.push('Criando banco MariaDB com volume local');
+  progress.push(`Criando banco ${selectedDatabaseImage} com volume local`);
   const dbContainer = await dockerManager.docker.createContainer({
-    Image: databaseImage,
+    Image: selectedDatabaseImage,
     name: dbContainerName,
     Labels: createLabels(site, 'database', databaseServiceId, dbContainerName),
-    Env: [
-      `MARIADB_DATABASE=${databaseName}`,
-      'MARIADB_USER=wordpress',
-      `MARIADB_PASSWORD=${dbPassword}`,
-      `MARIADB_ROOT_PASSWORD=${rootPassword}`
-    ],
+    Env: databaseContainerEnv,
     HostConfig: {
       NetworkMode: networkName,
       Binds: [`${databaseDir}:/var/lib/mysql`]
@@ -634,7 +702,7 @@ const createWordPressSite = async (body = {}) => {
 
   progress.push('Criando WordPress com PHP ajustado para uploads grandes');
   const wpContainer = await dockerManager.docker.createContainer({
-    Image: wordpressImage,
+    Image: selectedWordPressImage,
     name: wordpressContainerName,
     Labels: createLabels(site, 'wordpress', wordpressServiceId, wordpressContainerName),
     Env: [
@@ -670,17 +738,12 @@ const createWordPressSite = async (body = {}) => {
     id: databaseServiceId,
     name: dbContainerName,
     templateId: 'site-wordpress-db',
-    image: databaseImage,
+    image: selectedDatabaseImage,
     containerId: dbInspect.Id,
     hostPort: null,
     containerPort: 3306,
     volumes: [{ hostPath: databaseDir, containerPath: '/var/lib/mysql' }],
-    envVars: [
-      { key: 'MARIADB_DATABASE', value: databaseName },
-      { key: 'MARIADB_USER', value: 'wordpress' },
-      { key: 'MARIADB_PASSWORD', value: dbPassword, secret: true },
-      { key: 'MARIADB_ROOT_PASSWORD', value: rootPassword, secret: true }
-    ],
+    envVars: containerEnvToRegistryEntries(databaseContainerEnv),
     networkName,
     bindLocalOnly: true,
     url: null,
@@ -695,7 +758,7 @@ const createWordPressSite = async (body = {}) => {
     id: wordpressServiceId,
     name: wordpressContainerName,
     templateId: 'site-wordpress',
-    image: wordpressImage,
+    image: selectedWordPressImage,
     containerId: wpInspect.Id,
     hostPort: port,
     containerPort: 80,

@@ -16,6 +16,48 @@ ensure_env_var() {
   fi
 }
 
+read_env_var() {
+  local file="$1"
+  local key="$2"
+  local line
+  if [[ ! -f "${file}" ]]; then
+    return
+  fi
+  line="$(grep -E "^${key}=" "${file}" | tail -n 1 || true)"
+  if [[ -n "${line}" ]]; then
+    printf "%s" "${line#*=}" | sed 's/^"//;s/"$//;s/^'\''//;s/'\''$//'
+  fi
+}
+
+configure_sites_runtime() {
+  local env_file="$1"
+  local projects_dir
+  local sites_dir
+
+  if [[ ! -f "${env_file}" ]]; then
+    log "Aviso: backend/.env nao encontrado, pulando configuracao de Sites"
+    return
+  fi
+
+  log "Configurando variaveis de Sites e WordPress"
+  ensure_env_var "${env_file}" "SITES_DOCKER_NETWORK" "provirpanel"
+  ensure_env_var "${env_file}" "SITES_PORT_START" "8100"
+  ensure_env_var "${env_file}" "WORDPRESS_IMAGE" "wordpress:latest"
+  ensure_env_var "${env_file}" "WORDPRESS_DB_IMAGE" "mariadb:11"
+  ensure_env_var "${env_file}" "WORDPRESS_DB_FALLBACK_IMAGES" "mysql:8,mariadb:10.11"
+  ensure_env_var "${env_file}" "DOCKER_PULL_RETRIES" "5"
+
+  projects_dir="$(read_env_var "${env_file}" "CLOUDPAINEL_PROJECTS_DIR")"
+  sites_dir="$(read_env_var "${env_file}" "SITES_BASE_DIR")"
+  if [[ -z "${sites_dir}" ]]; then
+    sites_dir="${projects_dir:-${INSTALL_DIR}/projects}/sites"
+  fi
+
+  mkdir -p "${sites_dir}" "${INSTALL_DIR}/backend/data"
+  chown -R provirpanel:provirpanel "${sites_dir}" "${INSTALL_DIR}/backend/data" 2>/dev/null || true
+  chmod -R 775 "${sites_dir}" 2>/dev/null || true
+}
+
 install_certbot() {
   log "Verificando Certbot"
   if command -v certbot >/dev/null 2>&1; then
@@ -154,6 +196,7 @@ if [[ -f "${ENV_FILE}" ]]; then
   ensure_env_var "${ENV_FILE}" "GOOGLE_SITE_VERIFICATION_ROOT" "/var/www/panel"
   ensure_env_var "${ENV_FILE}" "AUTH_COOKIE_NAME" "provirpanel_token"
   ensure_env_var "${ENV_FILE}" "AUTH_COOKIE_SECURE" "auto"
+  configure_sites_runtime "${ENV_FILE}"
 else
   log "Aviso: backend/.env nao encontrado, pulando configuracao do Nginx"
 fi
@@ -227,7 +270,7 @@ fi
 
 test_and_reload_nginx
 
-log "Reiniciando backend"
+log "Reiniciando backend para carregar Sites e WordPress"
 pm2 delete provirpanel-backend 2>/dev/null || true
 cd "${INSTALL_DIR}" && pm2 start backend/src/server.js --name provirpanel-backend --env production
 pm2 save
