@@ -81,6 +81,15 @@ const dockerExecShell = (containerId, script, env = {}, options = {}) => {
   return runCommand('docker', args, { timeout: 900000, ...options });
 };
 
+const dockerExecRootShell = (containerId, script, env = {}, options = {}) => {
+  const args = ['exec', '-u', '0'];
+  Object.entries(env).forEach(([key, value]) => {
+    args.push('-e', `${key}=${value ?? ''}`);
+  });
+  args.push(containerId, 'sh', '-lc', script);
+  return runCommand('docker', args, { timeout: 900000, ...options });
+};
+
 const readSites = () => {
   try {
     const parsed = JSON.parse(fs.readFileSync(registryPath, 'utf8'));
@@ -588,6 +597,117 @@ const updateWordPressUrls = async (site) => {
   await runSql(site, `UPDATE ${prefix}options SET option_value='${escapeSql(url)}' WHERE option_name IN ('siteurl','home');`);
 };
 
+const repairWordPressFilesystemPermissions = async (site) => {
+  if (!site.containers?.wordpress) return;
+  const script = [
+    'set -e',
+    'for i in $(seq 1 40); do',
+    '  [ -e /var/www/html/wp-config.php ] && break',
+    '  sleep 1',
+    'done',
+    'if [ -d /var/www/html/wp-content ]; then',
+    '  chown -R www-data:www-data /var/www/html/wp-content',
+    '  find /var/www/html/wp-content -type d -exec chmod 775 {} +',
+    '  find /var/www/html/wp-content -type f -exec chmod 664 {} +',
+    'fi',
+    'if [ -f /var/www/html/wp-config.php ]; then',
+    '  chown www-data:www-data /var/www/html/wp-config.php',
+    '  chmod 664 /var/www/html/wp-config.php',
+    'fi',
+    'if [ -f /var/www/html/.htaccess ]; then',
+    '  chown www-data:www-data /var/www/html/.htaccess',
+    '  chmod 664 /var/www/html/.htaccess',
+    'fi'
+  ].join('\n');
+  await dockerExecRootShell(site.containers.wordpress, script);
+};
+
+const cleanupWordPressCacheFiles = (site) => {
+  const wordpressRoot = site.paths?.wordpress;
+  if (!wordpressRoot) return [];
+
+  const cachePaths = [
+    'wp-content/litespeed',
+    'wp-content/cache/litespeed',
+    'wp-content/cache/wp-rocket',
+    'wp-content/cache/min',
+    'wp-content/cache/busting',
+    'wp-content/cache/critical-css',
+    'wp-content/cache/page_enhanced',
+    'wp-content/cache/supercache',
+    'wp-content/advanced-cache.php'
+  ];
+
+  const removed = [];
+  cachePaths.forEach((relativePath) => {
+    const target = path.join(wordpressRoot, relativePath);
+    if (fs.existsSync(target)) {
+      fs.rmSync(target, { recursive: true, force: true });
+      removed.push(relativePath);
+    }
+  });
+  return removed;
+};
+
+const truncateCacheTablesIfPresent = async (site, tables) => {
+  if (!tables.length) return;
+  const db = site.database || {};
+  const script = [
+    'set -e',
+    'CLIENT="$(command -v mariadb || command -v mysql)"',
+    'for TABLE in $PROVIR_TABLES; do',
+    '  if "$CLIENT" -N -B -u"$PROVIR_DB_USER" -p"$PROVIR_DB_PASS" "$PROVIR_DB_NAME" -e "SHOW TABLES LIKE \'$TABLE\'" | grep -qx "$TABLE"; then',
+    '    "$CLIENT" -u"$PROVIR_DB_USER" -p"$PROVIR_DB_PASS" "$PROVIR_DB_NAME" -e "TRUNCATE TABLE $TABLE"',
+    '  fi',
+    'done'
+  ].join('\n');
+  await dockerExecShell(site.containers.database, script, {
+    PROVIR_DB_USER: db.user || 'wordpress',
+    PROVIR_DB_PASS: db.password || '',
+    PROVIR_DB_NAME: db.name || 'wordpress',
+    PROVIR_TABLES: tables.join(' ')
+  });
+};
+
+const cleanupWordPressCacheDatabase = async (site) => {
+  const prefix = site.wordpress?.tablePrefix || 'wp_';
+  const disabledOptions = [
+    'litespeed.conf.guest',
+    'litespeed.conf.guest_optm',
+    'litespeed.conf.cache-resources',
+    'litespeed.conf.optm-css_min',
+    'litespeed.conf.optm-css_comb',
+    'litespeed.conf.optm-css_comb_ext_inl',
+    'litespeed.conf.optm-css_async',
+    'litespeed.conf.optm-css_async_inline',
+    'litespeed.conf.optm-js_min',
+    'litespeed.conf.optm-js_comb',
+    'litespeed.conf.optm-js_comb_ext_inl',
+    'litespeed.conf.optm-js_defer',
+    'litespeed.conf.optm-guest_only'
+  ];
+  const quotedOptions = disabledOptions.map((name) => `'${escapeSql(name)}'`).join(',');
+  await runSql(
+    site,
+    [
+      `UPDATE ${prefix}options SET option_value='' WHERE option_name IN (${quotedOptions});`,
+      `DELETE FROM ${prefix}options WHERE option_name IN ('litespeed.purge.queue','litespeed.purge.queue2') OR option_name LIKE '_transient_litespeed%' OR option_name LIKE '_site_transient_litespeed%' OR option_name LIKE '_transient_timeout_litespeed%' OR option_name LIKE '_site_transient_timeout_litespeed%' OR option_name LIKE '_transient_rocket%' OR option_name LIKE '_site_transient_rocket%' OR option_name LIKE '_transient_timeout_rocket%' OR option_name LIKE '_site_transient_timeout_rocket%';`
+    ].join(' ')
+  );
+  await truncateCacheTablesIfPresent(site, [
+    `${prefix}litespeed_url`,
+    `${prefix}litespeed_url_file`,
+    `${prefix}litespeed_img_optm`,
+    `${prefix}litespeed_img_optming`
+  ]);
+};
+
+const cleanupWordPressAfterMigration = async (site) => {
+  const removed = cleanupWordPressCacheFiles(site);
+  await cleanupWordPressCacheDatabase(site);
+  return removed;
+};
+
 const createWordPressSite = async (body = {}) => {
   const name = String(body.name || body.clientName || '').trim();
   if (!name) {
@@ -730,6 +850,12 @@ const createWordPressSite = async (body = {}) => {
   await wpContainer.start();
   const wpInspect = await wpContainer.inspect();
   site.containers.wordpress = wpInspect.Id;
+  try {
+    await repairWordPressFilesystemPermissions(site);
+    progress.push('Permissões do WordPress ajustadas para o PHP gravar wp-config.php e wp-content');
+  } catch (err) {
+    warnings.push(`WordPress criado, mas o ajuste de permissões falhou: ${err.message}`);
+  }
 
   site.nginxConfigName = writeNginxSite(site, warnings);
   saveSite(site);
@@ -863,6 +989,24 @@ const processMigrationArchive = async (siteId, file) => {
         actions.push(`siteurl/home ajustados para ${getSiteUrl(site)}`);
       } catch (err) {
         actions.push(`Banco importado, mas o ajuste de domínio falhou: ${err.message}`);
+      }
+      try {
+        const removedCachePaths = await cleanupWordPressAfterMigration(site);
+        actions.push(
+          removedCachePaths.length
+            ? `Cache/otimizacoes do backup limpos (${removedCachePaths.length} caminhos removidos)`
+            : 'Otimizacoes LiteSpeed/WP Rocket do backup desativadas'
+        );
+      } catch (err) {
+        actions.push(`Backup restaurado, mas a limpeza de cache/otimizacao falhou: ${err.message}`);
+      }
+    }
+    if (wpContentDir || wordpressRoot || sqlFile) {
+      try {
+        await repairWordPressFilesystemPermissions(site);
+        actions.push('Permissões do WordPress ajustadas para wp-config.php e wp-content');
+      } catch (err) {
+        actions.push(`Backup restaurado, mas o ajuste de permissões falhou: ${err.message}`);
       }
     }
 
