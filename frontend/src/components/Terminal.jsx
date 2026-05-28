@@ -26,8 +26,7 @@ const HISTORY_KEY = 'cloudpainel_terminal_history'
 const TERMINAL_FONT_SIZE = 14
 const TERMINAL_LINE_HEIGHT = 1.18
 const TERMINAL_FONT_FAMILY = '"JetBrains Mono", ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", "Courier New", monospace'
-const TERMINAL_SAFE_PADDING_X = 28
-const TERMINAL_SAFE_PADDING_Y = 36
+const TERMINAL_EXTRA_BOTTOM_GUTTER = 12
 const COMMAND_HINTS = [
   'ls',
   'll',
@@ -106,9 +105,13 @@ const fitTerminal = (terminal, container, socket) => {
   if (!terminal || !container) {
     return
   }
+
+  const styles = window.getComputedStyle(container)
+  const paddingX = (parseFloat(styles.paddingLeft) || 0) + (parseFloat(styles.paddingRight) || 0)
+  const paddingY = (parseFloat(styles.paddingTop) || 0) + (parseFloat(styles.paddingBottom) || 0)
   const { width, height } = container.getBoundingClientRect()
-  const safeWidth = Math.max(0, width - TERMINAL_SAFE_PADDING_X)
-  const safeHeight = Math.max(0, height - TERMINAL_SAFE_PADDING_Y)
+  const safeWidth = Math.max(0, width - paddingX)
+  const safeHeight = Math.max(0, height - paddingY - TERMINAL_EXTRA_BOTTOM_GUTTER)
   const charSize = measureCharSize(container)
   const cols = Math.max(20, Math.floor(safeWidth / charSize.width))
   const rows = Math.max(8, Math.floor(safeHeight / charSize.height))

@@ -333,10 +333,16 @@
   .provir-terminal-shell .xterm {
     flex: 1;
     height: 100% !important;
+    padding-bottom: 6px;
   }
   .provir-terminal-shell .xterm-viewport {
     overflow-y: auto !important;
     overscroll-behavior: contain;
+    padding-bottom: 8px;
+  }
+
+  .provir-terminal-shell .xterm-screen {
+    padding-bottom: 8px;
   }
 
   .provir-terminal-shell .xterm-screen canvas {
