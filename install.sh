@@ -53,6 +53,7 @@ configure_sites_runtime() {
 
   log "Configuring Sites and WordPress runtime"
   ensure_env_var "${env_file}" "SITES_DOCKER_NETWORK" "provirpanel"
+  ensure_env_var "${env_file}" "SITES_DOCKER_NETWORK_PREFIX" "provirpanel-site"
   ensure_env_var "${env_file}" "SITES_PORT_START" "8100"
   ensure_env_var "${env_file}" "WORDPRESS_IMAGE" "wordpress:latest"
   ensure_env_var "${env_file}" "WORDPRESS_DB_IMAGE" "mariadb:11"
@@ -339,6 +340,7 @@ GOOGLE_SAFE_BROWSING_API_KEY=
 GOOGLE_SITE_VERIFICATION_FILE=google4ce1fbbc8da57702.html
 GOOGLE_SITE_VERIFICATION_ROOT=/var/www/panel
 SITES_DOCKER_NETWORK=provirpanel
+SITES_DOCKER_NETWORK_PREFIX=provirpanel-site
 SITES_PORT_START=8100
 WORDPRESS_IMAGE=wordpress:latest
 WORDPRESS_DB_IMAGE=mariadb:11

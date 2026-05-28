@@ -28,7 +28,8 @@ const configuredSitesBaseDir =
     ? path.join(process.env.CLOUDPAINEL_PROJECTS_DIR, 'sites')
     : fallbackSitesBaseDir);
 let sitesBaseDir = configuredSitesBaseDir;
-const networkName = process.env.SITES_DOCKER_NETWORK || 'provirpanel';
+const legacySitesNetworkName = process.env.SITES_DOCKER_NETWORK || 'provirpanel';
+const sitesNetworkPrefix = process.env.SITES_DOCKER_NETWORK_PREFIX || legacySitesNetworkName;
 const wordpressImage = process.env.WORDPRESS_IMAGE || 'wordpress:latest';
 const configuredDatabaseImage = process.env.WORDPRESS_DB_IMAGE || 'mariadb:11';
 const fallbackDatabaseImages = process.env.WORDPRESS_DB_FALLBACK_IMAGES
@@ -132,6 +133,15 @@ const slugify = (value, fallback = 'site') => {
     .slice(0, 48);
   return slug || fallback;
 };
+
+const buildSiteNetworkName = (siteSlug, shortId) => {
+  const prefix = slugify(sitesNetworkPrefix, 'provirpanel').slice(0, 24);
+  const safeSiteSlug = slugify(siteSlug, 'site').slice(0, 28);
+  return `${prefix}-${safeSiteSlug}-${shortId}`;
+};
+
+const getSiteNetworkName = (site = {}) =>
+  site.networkName || site.dockerNetwork || legacySitesNetworkName;
 
 const normalizeDomain = (domain) => {
   const value = String(domain || '')
@@ -410,7 +420,8 @@ const createLabels = (site, role, serviceId, name) => ({
   'provirpanel.template.id': role === 'wordpress' ? 'site-wordpress' : 'site-wordpress-db',
   'provirpanel.has_project': role === 'wordpress' ? 'true' : 'false',
   'provirpanel.site.id': site.id,
-  'provirpanel.site.role': role
+  'provirpanel.site.role': role,
+  'provirpanel.site.network': getSiteNetworkName(site)
 });
 
 const removeContainerByName = async (name) => {
@@ -574,9 +585,29 @@ const waitForDatabase = async (site, progress) => {
   throw new Error(`Banco do WordPress não ficou pronto a tempo: ${lastError?.message || 'timeout'}`);
 };
 
+const repairDatabaseFilesystemPermissions = async (site) => {
+  if (!site.containers?.database) return;
+  const db = site.database || {};
+  const script = [
+    'set -e',
+    'DB_OWNER="$(stat -c "%U:%G" /var/lib/mysql 2>/dev/null || echo mysql:mysql)"',
+    'if id mysql >/dev/null 2>&1; then DB_OWNER="mysql:mysql"; fi',
+    'chown -R "$DB_OWNER" /var/lib/mysql',
+    'chmod 750 /var/lib/mysql 2>/dev/null || true',
+    'if [ -n "$PROVIR_DB_NAME" ] && [ -d "/var/lib/mysql/$PROVIR_DB_NAME" ]; then',
+    '  find "/var/lib/mysql/$PROVIR_DB_NAME" -type d -exec chmod 750 {} + 2>/dev/null || true',
+    '  find "/var/lib/mysql/$PROVIR_DB_NAME" -type f -exec chmod 660 {} + 2>/dev/null || true',
+    'fi'
+  ].join('\n');
+  await dockerExecRootShell(site.containers.database, script, {
+    PROVIR_DB_NAME: db.name || 'wordpress'
+  });
+};
+
 const importSqlFile = async (site, sqlFile) => {
   const db = site.database || {};
   const remotePath = '/tmp/provirpanel-import.sql';
+  await repairDatabaseFilesystemPermissions(site);
   await runCommand('docker', ['cp', sqlFile, `${site.containers.database}:${remotePath}`], { timeout: 900000 });
   const script = [
     'set -e',
@@ -762,6 +793,7 @@ const createWordPressSite = async (body = {}) => {
     port,
     url: getSiteUrl({ domain }),
     localUrl: `http://localhost:${port}`,
+    networkName: buildSiteNetworkName(slug, shortId),
     siteDir,
     paths: {
       wordpress: wordpressDir,
@@ -793,7 +825,8 @@ const createWordPressSite = async (body = {}) => {
     updatedAt: new Date().toISOString()
   };
 
-  await dockerManager.ensureNetwork(networkName);
+  const siteNetworkName = getSiteNetworkName(site);
+  await dockerManager.ensureNetwork(siteNetworkName);
   const selectedDatabaseImage = await ensureFirstAvailableImage(databaseImageCandidates, progress, 'banco de dados WordPress');
   const selectedWordPressImage = await ensureImage(wordpressImage, progress);
   const databaseContainerEnv = getDatabaseContainerEnv(selectedDatabaseImage, databaseName, dbPassword, rootPassword);
@@ -811,7 +844,7 @@ const createWordPressSite = async (body = {}) => {
     Labels: createLabels(site, 'database', databaseServiceId, dbContainerName),
     Env: databaseContainerEnv,
     HostConfig: {
-      NetworkMode: networkName,
+      NetworkMode: siteNetworkName,
       Binds: [`${databaseDir}:/var/lib/mysql`]
     }
   });
@@ -819,6 +852,12 @@ const createWordPressSite = async (body = {}) => {
   const dbInspect = await dbContainer.inspect();
   site.containers.database = dbInspect.Id;
   await waitForDatabase(site, progress);
+  try {
+    await repairDatabaseFilesystemPermissions(site);
+    progress.push('Permissões do volume do banco ajustadas');
+  } catch (err) {
+    warnings.push(`Banco criado, mas o ajuste de permissões do volume falhou: ${err.message}`);
+  }
 
   progress.push('Criando WordPress com PHP ajustado para uploads grandes');
   const wpContainer = await dockerManager.docker.createContainer({
@@ -837,7 +876,7 @@ const createWordPressSite = async (body = {}) => {
       '80/tcp': {}
     },
     HostConfig: {
-      NetworkMode: networkName,
+      NetworkMode: siteNetworkName,
       PortBindings: {
         '80/tcp': [{ HostPort: String(port), HostIp: '127.0.0.1' }]
       },
@@ -870,7 +909,7 @@ const createWordPressSite = async (body = {}) => {
     containerPort: 3306,
     volumes: [{ hostPath: databaseDir, containerPath: '/var/lib/mysql' }],
     envVars: containerEnvToRegistryEntries(databaseContainerEnv),
-    networkName,
+    networkName: siteNetworkName,
     bindLocalOnly: true,
     url: null,
     externalUrl: null,
@@ -899,7 +938,7 @@ const createWordPressSite = async (body = {}) => {
       { key: 'WORDPRESS_DB_PASSWORD', value: dbPassword, secret: true },
       { key: 'WORDPRESS_TABLE_PREFIX', value: 'wp_' }
     ],
-    networkName,
+    networkName: siteNetworkName,
     bindLocalOnly: true,
     url: `http://localhost:${port}`,
     externalUrl: getSiteUrl(site),

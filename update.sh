@@ -41,6 +41,7 @@ configure_sites_runtime() {
 
   log "Configurando variaveis de Sites e WordPress"
   ensure_env_var "${env_file}" "SITES_DOCKER_NETWORK" "provirpanel"
+  ensure_env_var "${env_file}" "SITES_DOCKER_NETWORK_PREFIX" "provirpanel-site"
   ensure_env_var "${env_file}" "SITES_PORT_START" "8100"
   ensure_env_var "${env_file}" "WORDPRESS_IMAGE" "wordpress:latest"
   ensure_env_var "${env_file}" "WORDPRESS_DB_IMAGE" "mariadb:11"
