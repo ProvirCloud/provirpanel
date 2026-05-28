@@ -1,535 +1,389 @@
-import { useCallback, useEffect, useRef, useState } from 'react'
-import { Copy, Plus, RefreshCw, Trash2, Wifi } from 'lucide-react'
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
+import { Copy, Plus, RefreshCw, Trash2, Wifi, WifiOff } from 'lucide-react'
 import { Terminal as TerminalIcon } from 'lucide-react'
 import { Terminal as XTerm } from 'xterm'
+import { FitAddon } from '@xterm/addon-fit'
 import 'xterm/css/xterm.css'
 import { createTerminalSocket } from '../services/socket.js'
-import api from '../services/api.js'
 
-// Polyfill para crypto.randomUUID
+const TERMINAL_BOOTSTRAP_COMMAND = '__provir_shell__'
+const TERMINAL_FONT_SIZE = 14
+const TERMINAL_LINE_HEIGHT = 1.18
+const TERMINAL_FONT_FAMILY = '"JetBrains Mono", ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", "Courier New", monospace'
+const MAX_CAPTURED_OUTPUT = 40000
+
+const TERMINAL_THEME = {
+  background: '#0d1117',
+  foreground: '#c9d1d9',
+  cursor: '#58a6ff',
+  cursorAccent: '#0d1117',
+  selectionBackground: 'rgba(56, 139, 253, 0.25)',
+  selectionForeground: '#ffffff',
+  black: '#484f58',
+  red: '#ff7b72',
+  green: '#7ee787',
+  yellow: '#d29922',
+  blue: '#58a6ff',
+  magenta: '#bc8cff',
+  cyan: '#39c5cf',
+  white: '#b1bac4',
+  brightBlack: '#6e7681',
+  brightRed: '#ffa198',
+  brightGreen: '#56d364',
+  brightYellow: '#e3b341',
+  brightBlue: '#79c0ff',
+  brightMagenta: '#d2a8ff',
+  brightCyan: '#56d4dd',
+  brightWhite: '#f0f6fc'
+}
+
 const generateUUID = () => {
   if (typeof crypto !== 'undefined' && crypto.randomUUID) {
     return crypto.randomUUID()
   }
-  return 'xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx'.replace(/[xy]/g, function(c) {
-    const r = Math.random() * 16 | 0
-    const v = c === 'x' ? r : (r & 0x3 | 0x8)
-    return v.toString(16)
+
+  return 'xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx'.replace(/[xy]/g, (char) => {
+    const random = Math.random() * 16 | 0
+    const value = char === 'x' ? random : ((random & 0x3) | 0x8)
+    return value.toString(16)
   })
-}
-
-const formatPrompt = (cwd) => {
-  const display = cwd || '~'
-  return `\x1b[1;34mcloud\x1b[0m@\x1b[1;34mpainel\x1b[0m:\x1b[1;32m${display}\x1b[0m$ `
-}
-const HISTORY_KEY = 'cloudpainel_terminal_history'
-const TERMINAL_FONT_SIZE = 14
-const TERMINAL_LINE_HEIGHT = 1.18
-const TERMINAL_FONT_FAMILY = '"JetBrains Mono", ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", "Courier New", monospace'
-const TERMINAL_EXTRA_BOTTOM_GUTTER = 12
-const COMMAND_HINTS = [
-  'ls',
-  'll',
-  'la',
-  'pwd',
-  'whoami',
-  'cat',
-  'tail',
-  'head',
-  'df',
-  'du',
-  'ps',
-  'uptime',
-  'free',
-  'top',
-  'grep',
-  'find',
-  'stat',
-  'id',
-  'docker',
-  'git'
-]
-
-const loadHistory = () => {
-  try {
-    const raw = localStorage.getItem(HISTORY_KEY)
-    if (!raw) {
-      return []
-    }
-    const parsed = JSON.parse(raw)
-    return Array.isArray(parsed) ? parsed : []
-  } catch {
-    return []
-  }
-}
-
-const saveHistory = (history) => {
-  localStorage.setItem(HISTORY_KEY, JSON.stringify(history.slice(-100)))
 }
 
 const formatStatus = (status) => {
   switch (status) {
     case 'connected':
       return 'Conectado'
-    case 'disconnected':
-      return 'Desconectado'
+    case 'connecting':
+      return 'Conectando'
+    case 'shell-closed':
+      return 'Shell encerrada'
     case 'auth-required':
       return 'Login necessario'
     default:
-      return 'Conectando'
+      return 'Desconectado'
   }
 }
 
-const measureCharSize = (container) => {
-  const span = document.createElement('span')
-  span.textContent = 'WWWWWWWWWW'
-  span.style.position = 'absolute'
-  span.style.top = '-9999px'
-  span.style.left = '-9999px'
-  span.style.fontFamily = TERMINAL_FONT_FAMILY
-  span.style.fontSize = `${TERMINAL_FONT_SIZE}px`
-  span.style.lineHeight = String(TERMINAL_LINE_HEIGHT)
-  span.style.letterSpacing = '0px'
-  span.style.visibility = 'hidden'
-  span.style.whiteSpace = 'pre'
-  container.appendChild(span)
-  const rect = span.getBoundingClientRect()
-  span.remove()
-  return {
-    width: (rect.width / 10) || 8.4,
-    height: rect.height || (TERMINAL_FONT_SIZE * TERMINAL_LINE_HEIGHT)
+const appendOutput = (current, chunk) => `${current || ''}${chunk || ''}`.slice(-MAX_CAPTURED_OUTPUT)
+
+const summarizeCwd = (cwd) => {
+  if (!cwd || cwd === '~') {
+    return '~'
   }
+
+  const normalized = cwd.replace(/\\/g, '/')
+  const parts = normalized.split('/').filter(Boolean)
+  if (parts.length <= 3) {
+    return normalized
+  }
+
+  return `.../${parts.slice(-3).join('/')}`
 }
 
-const fitTerminal = (terminal, container, socket) => {
-  if (!terminal || !container) {
-    return
-  }
+const createTab = (index) => ({
+  id: generateUUID(),
+  title: `Terminal ${index}`,
+  status: 'connecting',
+  cwd: '~'
+})
 
-  const styles = window.getComputedStyle(container)
-  const paddingX = (parseFloat(styles.paddingLeft) || 0) + (parseFloat(styles.paddingRight) || 0)
-  const paddingY = (parseFloat(styles.paddingTop) || 0) + (parseFloat(styles.paddingBottom) || 0)
-  const { width, height } = container.getBoundingClientRect()
-  const safeWidth = Math.max(0, width - paddingX)
-  const safeHeight = Math.max(0, height - paddingY - TERMINAL_EXTRA_BOTTOM_GUTTER)
-  const charSize = measureCharSize(container)
-  const cols = Math.max(20, Math.floor(safeWidth / charSize.width))
-  const rows = Math.max(8, Math.floor(safeHeight / charSize.height))
-  terminal.resize(cols, rows)
-  if (socket && socket.connected) {
-    socket.emit('resize', { cols, rows })
-  }
-}
+const createTerminalInstance = (container) => {
+  const terminal = new XTerm({
+    fontSize: TERMINAL_FONT_SIZE,
+    lineHeight: TERMINAL_LINE_HEIGHT,
+    letterSpacing: 0,
+    cursorBlink: true,
+    cursorStyle: 'bar',
+    fontFamily: TERMINAL_FONT_FAMILY,
+    allowTransparency: true,
+    scrollback: 5000,
+    theme: TERMINAL_THEME
+  })
 
-const writePrompt = (terminal, cwd, newLine = true) => {
-  if (newLine) {
-    terminal.write('\r\n')
-  }
-  terminal.write(formatPrompt(cwd))
-  terminal.scrollToBottom()
-}
+  const fitAddon = new FitAddon()
+  terminal.loadAddon(fitAddon)
+  terminal.open(container)
 
-const redrawPromptLine = (terminal, cwd, value) => {
-  terminal.write(`\r\x1b[2K${formatPrompt(cwd)}${value}`)
-  terminal.scrollToBottom()
+  return { terminal, fitAddon }
 }
 
 const Terminal = ({ showPageIntro = true }) => {
-  const [tabs, setTabs] = useState(() => [
-    { id: generateUUID(), title: 'Terminal 1', status: 'disconnected' }
-  ])
-  const [activeId, setActiveId] = useState(() => tabs[0].id)
-  const [editorModal, setEditorModal] = useState(null)
-  const historyRef = useRef(loadHistory())
+  const initialTab = useMemo(() => createTab(1), [])
+  const [tabs, setTabs] = useState(() => [initialTab])
+  const [activeId, setActiveId] = useState(initialTab.id)
+  const tabsRef = useRef([initialTab])
   const terminalsRef = useRef(new Map())
+  const fitAddonsRef = useRef(new Map())
   const socketsRef = useRef(new Map())
-  const buffersRef = useRef(new Map())
-  const historyIndexRef = useRef(new Map())
   const containersRef = useRef(new Map())
   const observersRef = useRef(new Map())
-  const tabsRef = useRef([])
-  const outputRef = useRef(new Map())
+  const pasteHandlersRef = useRef(new Map())
   const lastOutputRef = useRef(new Map())
-  const cwdRef = useRef(new Map())
-  const runningRef = useRef(new Map())
-  const draftBufferRef = useRef(new Map())
 
   useEffect(() => {
     tabsRef.current = tabs
-  }, [tabs])
+    if (tabs.length > 0 && !tabs.some((tab) => tab.id === activeId)) {
+      setActiveId(tabs[0].id)
+    }
+  }, [activeId, tabs])
 
   const updateTab = useCallback((id, updates) => {
-    setTabs((prev) =>
-      prev.map((tab) => (tab.id === id ? { ...tab, ...updates } : tab))
-    )
+    setTabs((currentTabs) => currentTabs.map((tab) => (
+      tab.id === id ? { ...tab, ...updates } : tab
+    )))
   }, [])
 
-  const ensureTerminal = useCallback(
-    (id, container) => {
-      if (!container || terminalsRef.current.has(id)) {
-        return
-      }
-
-      const term = new XTerm({
-        fontSize: TERMINAL_FONT_SIZE,
-        lineHeight: TERMINAL_LINE_HEIGHT,
-        letterSpacing: 0,
-        cursorBlink: true,
-        cursorStyle: 'bar',
-        fontFamily: TERMINAL_FONT_FAMILY,
-        theme: {
-          background: '#0d1117',
-          foreground: '#c9d1d9',
-          cursor: '#58a6ff',
-          cursorAccent: '#0d1117',
-          selectionBackground: 'rgba(56, 139, 253, 0.25)',
-          selectionForeground: '#ffffff',
-          black: '#484f58',
-          red: '#ff7b72',
-          green: '#7ee787',
-          yellow: '#d29922',
-          blue: '#58a6ff',
-          magenta: '#bc8cff',
-          cyan: '#39c5cf',
-          white: '#b1bac4',
-          brightBlack: '#6e7681',
-          brightRed: '#ffa198',
-          brightGreen: '#56d364',
-          brightYellow: '#e3b341',
-          brightBlue: '#79c0ff',
-          brightMagenta: '#d2a8ff',
-          brightCyan: '#56d4dd',
-          brightWhite: '#f0f6fc',
-        }
-      })
-
-      terminalsRef.current.set(id, term)
-      buffersRef.current.set(id, '')
-      historyIndexRef.current.set(id, historyRef.current.length)
-      draftBufferRef.current.set(id, '')
-
-      term.open(container)
-
-      term.attachCustomKeyEventHandler((event) => {
-        const running = runningRef.current.get(id)
-        const key = event.key.toLowerCase()
-
-        if ((event.ctrlKey || event.metaKey) && key === 'c') {
-          const selection = term.getSelection()
-          if (selection) {
-            navigator.clipboard.writeText(selection)
-            return false
-          }
-          if (running) {
-            const socket = socketsRef.current.get(id)
-            socket?.emit('input', { data: '\u0003' })
-          }
-          return false
-        }
-
-        if ((event.ctrlKey || event.metaKey) && key === 'v') {
-          navigator.clipboard.readText().then((text) => {
-            if (!text) {
-              return
-            }
-            if (running) {
-              const socket = socketsRef.current.get(id)
-              socket?.emit('input', { data: text })
-              return
-            }
-            const current = buffersRef.current.get(id) || ''
-            buffersRef.current.set(id, current + text)
-            term.write(text)
-          })
-          return false
-        }
-
-        return true
-      })
-
-      term.onData((data) => {
-        const running = runningRef.current.get(id)
-        if (running) {
-          const socket = socketsRef.current.get(id)
-          if (socket && socket.connected) {
-            // Send raw data to the shell — bash handles echo
-            socket.emit('input', { data })
-          }
-          return
-        }
-
-        const buffer = buffersRef.current.get(id) || ''
-        if (data === '\r') {
-          const command = buffer.trim()
-          term.write('\r\n')
-          buffersRef.current.set(id, '')
-          draftBufferRef.current.set(id, '')
-          historyIndexRef.current.set(id, historyRef.current.length)
-
-          if (command) {
-            historyRef.current = [...historyRef.current, command].slice(-100)
-            saveHistory(historyRef.current)
-          }
-
-          if (!command) {
-            writePrompt(term, cwdRef.current.get(id), false)
-            return
-          }
-
-          // Interceptar comando open
-          if (command.startsWith('open ')) {
-            const filename = command.substring(5).trim()
-            if (filename) {
-              setEditorModal({ filename, cwd: cwdRef.current.get(id) || '~' })
-              term.writeln(`\x1b[32mAbrindo editor para: ${filename}\x1b[0m`)
-              writePrompt(term, cwdRef.current.get(id))
-              return
-            }
-          }
-
-          const socket = socketsRef.current.get(id)
-          if (socket && socket.connected) {
-            outputRef.current.set(id, '')
-            socket.emit('command', { command })
-            runningRef.current.set(id, true)
-          } else {
-            term.writeln('\x1b[31m[offline]\x1b[0m')
-            writePrompt(term, cwdRef.current.get(id))
-          }
-          return
-        }
-
-        if (data === '\t') {
-          const socket = socketsRef.current.get(id)
-          const tokens = buffer.split(/\s+/)
-          const currentToken = tokens[tokens.length - 1] || ''
-          const applyCandidates = (candidates) => {
-            if (candidates.length === 1) {
-              const completion = candidates[0]
-              const newBuffer = buffer.slice(0, buffer.length - currentToken.length) + completion
-              buffersRef.current.set(id, newBuffer)
-              redrawPromptLine(term, cwdRef.current.get(id), newBuffer)
-              return
-            }
-            if (candidates.length > 1) {
-              term.write('\r\n')
-              term.write(candidates.join('  '))
-              term.write('\r\n')
-              redrawPromptLine(term, cwdRef.current.get(id), buffer)
-            }
-          }
-
-          if (socket && socket.connected) {
-            socket.emit('autocomplete', { input: buffer }, (response) => {
-              const candidates = response?.candidates || []
-              if (candidates.length === 0) {
-                const local = Array.from(
-                  new Set([...COMMAND_HINTS, ...historyRef.current])
-                ).filter((item) => item.startsWith(currentToken))
-                applyCandidates(local)
-                return
-              }
-              applyCandidates(candidates)
-            })
-          } else {
-            const local = Array.from(
-              new Set([...COMMAND_HINTS, ...historyRef.current])
-            ).filter((item) => item.startsWith(currentToken))
-            applyCandidates(local)
-          }
-          return
-        }
-
-        if (data === '\u007f') {
-          if (buffer.length > 0) {
-            buffersRef.current.set(id, buffer.slice(0, -1))
-            term.write('\b \b')
-          }
-          return
-        }
-
-        if (data === '\x1b[A' || data === '\x1b[B') {
-          const history = historyRef.current
-          if (history.length === 0) {
-            return
-          }
-          let index = historyIndexRef.current.get(id) ?? history.length
-
-          if (index === history.length && data === '\x1b[A') {
-            draftBufferRef.current.set(id, buffer)
-          }
-
-          if (data === '\x1b[A') {
-            index = Math.max(0, index - 1)
-          } else {
-            index = Math.min(history.length, index + 1)
-          }
-          historyIndexRef.current.set(id, index)
-          const nextValue = index === history.length
-            ? (draftBufferRef.current.get(id) || '')
-            : (history[index] || '')
-          buffersRef.current.set(id, nextValue)
-          redrawPromptLine(term, cwdRef.current.get(id), nextValue)
-          return
-        }
-
-        if (data >= ' ') {
-          buffersRef.current.set(id, buffer + data)
-          term.write(data)
-        }
-      })
-
-      container.addEventListener('paste', (event) => {
-        const text = event.clipboardData?.getData('text')
-        if (!text) {
-          return
-        }
-        const running = runningRef.current.get(id)
-        if (running) {
-          const socket = socketsRef.current.get(id)
-          socket?.emit('input', { data: text })
-        } else {
-          const current = buffersRef.current.get(id) || ''
-          buffersRef.current.set(id, current + text)
-          term.write(text)
-        }
-        event.preventDefault()
-      })
-
-      fitTerminal(term, container, socketsRef.current.get(id))
-      const observer = new ResizeObserver(() => fitTerminal(term, container, socketsRef.current.get(id)))
-      observer.observe(container)
-      observersRef.current.set(id, observer)
-    },
-    [updateTab]
-  )
-
-  const connectSocket = useCallback(
-    (id) => {
-      const socket = createTerminalSocket()
-      if (!socket) {
-        updateTab(id, { status: 'disconnected' })
-        return
-      }
-      socketsRef.current.set(id, socket)
-      updateTab(id, { status: 'connecting' })
-
-      socket.on('connect', () => {
-        runningRef.current.set(id, false)
-        updateTab(id, { status: 'connected' })
-        // Auto-start interactive shell
-        const term = terminalsRef.current.get(id)
-        if (term) {
-          term.write('\r\n\x1b[90m[Iniciando shell interativo...]\x1b[0m\r\n')
-        }
-        outputRef.current.set(id, '')
-        socket.emit('command', { command: 'bash' })
-        runningRef.current.set(id, true)
-      })
-      socket.on('disconnect', () => {
-        runningRef.current.set(id, false)
-        updateTab(id, { status: 'disconnected' })
-      })
-
-      socket.on('output', (payload) => {
-        const current = terminalsRef.current.get(id)
-        if (current) {
-          current.write(payload.data)
-          current.scrollToBottom()
-          const container = containersRef.current.get(id)
-          if (container) {
-            requestAnimationFrame(() => fitTerminal(current, container, socketsRef.current.get(id)))
-          }
-        }
-        const prev = outputRef.current.get(id) || ''
-        outputRef.current.set(id, prev + payload.data)
-      })
-
-      socket.on('done', (payload) => {
-        const current = terminalsRef.current.get(id)
-        runningRef.current.set(id, false)
-        if (current) {
-          current.write(`\r\n\x1b[90m[sessao encerrada - code ${payload.code}]\x1b[0m\r\n`)
-          current.scrollToBottom()
-          // Restart shell automatically
-          setTimeout(() => {
-            if (socket.connected) {
-              current.write('\x1b[90m[Reconectando shell...]\x1b[0m\r\n')
-              outputRef.current.set(id, '')
-              socket.emit('command', { command: 'bash' })
-              runningRef.current.set(id, true)
-            }
-          }, 500)
-        }
-        const finalOutput = outputRef.current.get(id) || ''
-        lastOutputRef.current.set(id, finalOutput)
-      })
-
-      socket.on('error', (payload) => {
-        const current = terminalsRef.current.get(id)
-        if (current) {
-          current.write(`\r\n\x1b[31m${payload.message}\x1b[0m`)
-          current.scrollToBottom()
-          writePrompt(current, cwdRef.current.get(id))
-        }
-        const finalOutput = outputRef.current.get(id) || ''
-        lastOutputRef.current.set(id, finalOutput)
-        runningRef.current.set(id, false)
-      })
-
-      socket.on('cwd', (payload) => {
-        cwdRef.current.set(id, payload?.cwd || '~')
-      })
-    },
-    [updateTab]
-  )
-
-  useEffect(() => {
-    tabs.forEach((tab) => {
-      if (!socketsRef.current.has(tab.id)) {
-        connectSocket(tab.id)
-      }
-    })
-  }, [tabs, connectSocket])
-
-  useEffect(() => {
-    return () => {
-      socketsRef.current.forEach((socket) => socket.disconnect())
-      observersRef.current.forEach((observer) => observer.disconnect())
-    }
-  }, [])
-
-  const addTab = () => {
-    const id = generateUUID()
-    setTabs((prev) => [
-      ...prev,
-      { id, title: `Terminal ${prev.length + 1}`, status: 'disconnected' }
-    ])
-    setActiveId(id)
-  }
-
-  const closeTab = (id) => {
-    if (tabs.length === 1) {
+  const fitTerminal = useCallback((id) => {
+    const terminal = terminalsRef.current.get(id)
+    const fitAddon = fitAddonsRef.current.get(id)
+    const socket = socketsRef.current.get(id)
+    if (!terminal || !fitAddon) {
       return
     }
+
+    fitAddon.fit()
+    terminal.scrollToBottom()
+
+    if (socket?.connected) {
+      socket.emit('resize', { cols: terminal.cols, rows: terminal.rows })
+    }
+  }, [])
+
+  const focusTerminal = useCallback((id) => {
+    requestAnimationFrame(() => {
+      fitTerminal(id)
+      terminalsRef.current.get(id)?.focus()
+    })
+  }, [fitTerminal])
+
+  const writeInfo = useCallback((id, text, color = '90') => {
+    const terminal = terminalsRef.current.get(id)
+    if (!terminal) {
+      return
+    }
+
+    terminal.write(`\r\n\x1b[${color}m${text}\x1b[0m\r\n`)
+    terminal.scrollToBottom()
+  }, [])
+
+  const startShell = useCallback((id, announce = false) => {
     const socket = socketsRef.current.get(id)
-    if (socket) {
-      socket.disconnect()
-      socketsRef.current.delete(id)
+    if (!socket?.connected) {
+      return
     }
-    const term = terminalsRef.current.get(id)
-    if (term) {
-      term.dispose()
-      terminalsRef.current.delete(id)
+
+    if (announce) {
+      writeInfo(id, '[reiniciando shell interativa...]')
     }
-    runningRef.current.delete(id)
+
+    lastOutputRef.current.set(id, '')
+    updateTab(id, { status: 'connected' })
+    socket.emit('command', { command: TERMINAL_BOOTSTRAP_COMMAND })
+  }, [updateTab, writeInfo])
+
+  const destroySocket = useCallback((id) => {
+    const socket = socketsRef.current.get(id)
+    if (!socket) {
+      return
+    }
+
+    socket.removeAllListeners()
+    socket.disconnect()
+    socketsRef.current.delete(id)
+  }, [])
+
+  const cleanupTerminal = useCallback((id) => {
     const observer = observersRef.current.get(id)
     if (observer) {
       observer.disconnect()
       observersRef.current.delete(id)
     }
-    setTabs((prev) => {
-      const nextTabs = prev.filter((tab) => tab.id !== id)
+
+    const container = containersRef.current.get(id)
+    const pasteHandler = pasteHandlersRef.current.get(id)
+    if (container && pasteHandler) {
+      container.removeEventListener('paste', pasteHandler)
+    }
+
+    pasteHandlersRef.current.delete(id)
+    containersRef.current.delete(id)
+
+    const terminal = terminalsRef.current.get(id)
+    if (terminal) {
+      terminal.dispose()
+      terminalsRef.current.delete(id)
+    }
+
+    fitAddonsRef.current.delete(id)
+    lastOutputRef.current.delete(id)
+  }, [])
+
+  const connectSocket = useCallback((id) => {
+    if (socketsRef.current.has(id)) {
+      return
+    }
+
+    const socket = createTerminalSocket()
+    if (!socket) {
+      updateTab(id, { status: 'disconnected' })
+      return
+    }
+
+    socketsRef.current.set(id, socket)
+    updateTab(id, { status: 'connecting' })
+
+    socket.on('connect', () => {
+      updateTab(id, { status: 'connected' })
+      writeInfo(id, '[sessao conectada]')
+      focusTerminal(id)
+      startShell(id)
+    })
+
+    socket.on('connect_error', (error) => {
+      const unauthorized = /unauthorized/i.test(error?.message || '')
+      updateTab(id, { status: unauthorized ? 'auth-required' : 'disconnected' })
+      writeInfo(id, unauthorized ? '[sessao expirada. faca login novamente.]' : '[falha ao conectar a shell.]', '31')
+    })
+
+    socket.on('disconnect', (reason) => {
+      updateTab(id, { status: 'disconnected' })
+      if (reason !== 'io client disconnect') {
+        writeInfo(id, '[conexao encerrada]')
+      }
+    })
+
+    socket.on('output', (payload) => {
+      const terminal = terminalsRef.current.get(id)
+      const data = payload?.data || ''
+      if (terminal && data) {
+        terminal.write(data)
+        terminal.scrollToBottom()
+      }
+
+      lastOutputRef.current.set(id, appendOutput(lastOutputRef.current.get(id), data))
+    })
+
+    socket.on('done', (payload) => {
+      updateTab(id, { status: 'shell-closed' })
+      writeInfo(id, `[shell encerrada - code ${payload?.code ?? 0}. use Resetar conexao para abrir outra sessao.]`)
+    })
+
+    socket.on('error', (payload) => {
+      updateTab(id, { status: 'shell-closed' })
+      writeInfo(id, payload?.message || 'Falha ao executar comando.', '31')
+    })
+
+    socket.on('cwd', (payload) => {
+      updateTab(id, { cwd: payload?.cwd || '~' })
+    })
+  }, [focusTerminal, startShell, updateTab, writeInfo])
+
+  const ensureTerminal = useCallback((id, container) => {
+    if (!container || terminalsRef.current.has(id)) {
+      return
+    }
+
+    const { terminal, fitAddon } = createTerminalInstance(container)
+    terminalsRef.current.set(id, terminal)
+    fitAddonsRef.current.set(id, fitAddon)
+
+    terminal.onData((data) => {
+      const socket = socketsRef.current.get(id)
+      if (socket?.connected) {
+        socket.emit('input', { data })
+      }
+    })
+
+    terminal.attachCustomKeyEventHandler((event) => {
+      const key = event.key.toLowerCase()
+      const usingModifier = event.ctrlKey || event.metaKey
+
+      if (usingModifier && key === 'c') {
+        const selection = terminal.getSelection()
+        if (selection) {
+          if (navigator.clipboard?.writeText) {
+            navigator.clipboard.writeText(selection).catch(() => {})
+          }
+          return false
+        }
+        return true
+      }
+
+      if (usingModifier && key === 'v') {
+        if (!navigator.clipboard?.readText) {
+          return false
+        }
+
+        navigator.clipboard.readText().then((text) => {
+          if (!text) {
+            return
+          }
+
+          const socket = socketsRef.current.get(id)
+          if (socket?.connected) {
+            socket.emit('input', { data: text })
+          }
+        }).catch(() => {})
+        return false
+      }
+
+      return true
+    })
+
+    const handlePaste = (event) => {
+      const text = event.clipboardData?.getData('text')
+      if (!text) {
+        return
+      }
+
+      const socket = socketsRef.current.get(id)
+      if (socket?.connected) {
+        socket.emit('input', { data: text })
+      }
+      event.preventDefault()
+    }
+
+    container.addEventListener('paste', handlePaste)
+    pasteHandlersRef.current.set(id, handlePaste)
+
+    const observer = new ResizeObserver(() => fitTerminal(id))
+    observer.observe(container)
+    observersRef.current.set(id, observer)
+
+    requestAnimationFrame(() => {
+      fitTerminal(id)
+      connectSocket(id)
+      focusTerminal(id)
+    })
+  }, [connectSocket, fitTerminal, focusTerminal])
+
+  useEffect(() => () => {
+    Array.from(socketsRef.current.keys()).forEach((id) => destroySocket(id))
+    Array.from(terminalsRef.current.keys()).forEach((id) => cleanupTerminal(id))
+  }, [cleanupTerminal, destroySocket])
+
+  useEffect(() => {
+    if (activeId) {
+      focusTerminal(activeId)
+    }
+  }, [activeId, focusTerminal])
+
+  const addTab = () => {
+    const nextTab = createTab(tabsRef.current.length + 1)
+    setTabs((currentTabs) => [...currentTabs, nextTab])
+    setActiveId(nextTab.id)
+  }
+
+  const closeTab = (id) => {
+    if (tabsRef.current.length === 1) {
+      return
+    }
+
+    destroySocket(id)
+    cleanupTerminal(id)
+
+    setTabs((currentTabs) => {
+      const nextTabs = currentTabs.filter((tab) => tab.id !== id)
       if (activeId === id && nextTabs.length > 0) {
         setActiveId(nextTabs[0].id)
       }
@@ -537,40 +391,51 @@ const Terminal = ({ showPageIntro = true }) => {
     })
   }
 
-  const clearTerminal = () => {
-    const term = terminalsRef.current.get(activeId)
-    if (term) {
-      term.clear()
-      term.scrollToBottom()
-      // If shell is running, send clear command instead of writing prompt
-      if (runningRef.current.get(activeId)) {
-        const socket = socketsRef.current.get(activeId)
-        if (socket && socket.connected) {
-          socket.emit('input', { data: 'clear\n' })
-        }
-      } else {
-        writePrompt(term, cwdRef.current.get(activeId), false)
-      }
+  const resetConnection = () => {
+    const activeTab = tabs.find((tab) => tab.id === activeId)
+    if (!activeTab) {
+      return
     }
-    outputRef.current.set(activeId, '')
+
+    const socket = socketsRef.current.get(activeId)
+    if (socket?.connected && activeTab.status === 'shell-closed') {
+      startShell(activeId, true)
+      focusTerminal(activeId)
+      return
+    }
+
+    destroySocket(activeId)
+    updateTab(activeId, { status: 'connecting' })
+    connectSocket(activeId)
+    focusTerminal(activeId)
+  }
+
+  const clearTerminal = () => {
+    const terminal = terminalsRef.current.get(activeId)
+    const socket = socketsRef.current.get(activeId)
+    const activeTab = tabs.find((tab) => tab.id === activeId)
+    if (!terminal) {
+      return
+    }
+
+    if (socket?.connected && activeTab?.status === 'connected') {
+      socket.emit('input', { data: '\f' })
+      return
+    }
+
+    terminal.clear()
+    terminal.scrollToBottom()
     lastOutputRef.current.set(activeId, '')
   }
 
-  const resetConnection = () => {
-    const socket = socketsRef.current.get(activeId)
-    if (socket) {
-      socket.disconnect()
-      socketsRef.current.delete(activeId)
-    }
-    runningRef.current.set(activeId, false)
-    connectSocket(activeId)
-  }
-
   const copyLastOutput = async () => {
-    const output = lastOutputRef.current.get(activeId) || ''
+    const terminal = terminalsRef.current.get(activeId)
+    const selection = terminal?.getSelection()
+    const output = selection || lastOutputRef.current.get(activeId) || ''
     if (!output) {
       return
     }
+
     try {
       await navigator.clipboard.writeText(output.trim())
     } catch {
@@ -578,42 +443,71 @@ const Terminal = ({ showPageIntro = true }) => {
     }
   }
 
-  const setContainerRef = useCallback(
-    (id) => (element) => {
-      if (element) {
-        containersRef.current.set(id, element)
-        ensureTerminal(id, element)
-      }
-    },
-    [ensureTerminal]
-  )
+  const setContainerRef = useCallback((id) => (element) => {
+    if (!element) {
+      return
+    }
+
+    containersRef.current.set(id, element)
+    ensureTerminal(id, element)
+  }, [ensureTerminal])
+
+  const activeTab = tabs.find((tab) => tab.id === activeId)
 
   return (
-    <div className="space-y-4">
+    <div className="flex min-h-[calc(100vh-180px)] flex-col gap-4">
       <div className={`flex flex-wrap gap-3 ${showPageIntro ? 'items-center justify-between' : 'items-center justify-end'}`}>
         {showPageIntro ? (
           <div>
             <p className="zeus-kicker text-xs font-semibold uppercase">Terminal</p>
-            <h2 className="text-2xl font-semibold" style={{ color: 'var(--text-primary)' }}>Sessao interativa</h2>
+            <h2 className="text-2xl font-semibold" style={{ color: 'var(--text-primary)' }}>Sessao interativa completa</h2>
           </div>
         ) : null}
-        <div className="flex items-center gap-2">
+
+        <div className="flex flex-wrap items-center gap-2">
           <button
-            className="flex items-center gap-2 rounded-lg border px-3 py-2 text-xs transition" style={{ background: 'var(--bg-elevated)', borderColor: 'var(--border-default)', color: 'var(--text-secondary)' }} onMouseEnter={e => { e.currentTarget.style.borderColor = 'var(--accent)'; e.currentTarget.style.color = 'var(--text-primary)' }} onMouseLeave={e => { e.currentTarget.style.borderColor = 'var(--border-default)'; e.currentTarget.style.color = 'var(--text-secondary)' }}
+            className="flex items-center gap-2 rounded-lg border px-3 py-2 text-xs transition"
+            style={{ background: 'var(--bg-elevated)', borderColor: 'var(--border-default)', color: 'var(--text-secondary)' }}
+            onMouseEnter={(event) => {
+              event.currentTarget.style.borderColor = 'var(--accent)'
+              event.currentTarget.style.color = 'var(--text-primary)'
+            }}
+            onMouseLeave={(event) => {
+              event.currentTarget.style.borderColor = 'var(--border-default)'
+              event.currentTarget.style.color = 'var(--text-secondary)'
+            }}
             onClick={copyLastOutput}
           >
             <Copy className="h-4 w-4" />
-            Copiar resultado
+            Copiar saida
           </button>
           <button
-            className="flex items-center gap-2 rounded-lg border px-3 py-2 text-xs transition" style={{ background: 'var(--bg-elevated)', borderColor: 'var(--border-default)', color: 'var(--text-secondary)' }} onMouseEnter={e => { e.currentTarget.style.borderColor = 'var(--accent)'; e.currentTarget.style.color = 'var(--text-primary)' }} onMouseLeave={e => { e.currentTarget.style.borderColor = 'var(--border-default)'; e.currentTarget.style.color = 'var(--text-secondary)' }}
+            className="flex items-center gap-2 rounded-lg border px-3 py-2 text-xs transition"
+            style={{ background: 'var(--bg-elevated)', borderColor: 'var(--border-default)', color: 'var(--text-secondary)' }}
+            onMouseEnter={(event) => {
+              event.currentTarget.style.borderColor = 'var(--accent)'
+              event.currentTarget.style.color = 'var(--text-primary)'
+            }}
+            onMouseLeave={(event) => {
+              event.currentTarget.style.borderColor = 'var(--border-default)'
+              event.currentTarget.style.color = 'var(--text-secondary)'
+            }}
             onClick={clearTerminal}
           >
             <Trash2 className="h-4 w-4" />
             Limpar
           </button>
           <button
-            className="flex items-center gap-2 rounded-lg border px-3 py-2 text-xs transition" style={{ background: 'var(--bg-elevated)', borderColor: 'var(--border-default)', color: 'var(--text-secondary)' }} onMouseEnter={e => { e.currentTarget.style.borderColor = 'var(--accent)'; e.currentTarget.style.color = 'var(--text-primary)' }} onMouseLeave={e => { e.currentTarget.style.borderColor = 'var(--border-default)'; e.currentTarget.style.color = 'var(--text-secondary)' }}
+            className="flex items-center gap-2 rounded-lg border px-3 py-2 text-xs transition"
+            style={{ background: 'var(--bg-elevated)', borderColor: 'var(--border-default)', color: 'var(--text-secondary)' }}
+            onMouseEnter={(event) => {
+              event.currentTarget.style.borderColor = 'var(--accent)'
+              event.currentTarget.style.color = 'var(--text-primary)'
+            }}
+            onMouseLeave={(event) => {
+              event.currentTarget.style.borderColor = 'var(--border-default)'
+              event.currentTarget.style.color = 'var(--text-secondary)'
+            }}
             onClick={resetConnection}
           >
             <RefreshCw className="h-4 w-4" />
@@ -630,151 +524,72 @@ const Terminal = ({ showPageIntro = true }) => {
       </div>
 
       <div className="flex flex-wrap gap-2">
-        {tabs.map((tab) => (
-          <button
-            key={tab.id}
-            onClick={() => setActiveId(tab.id)}
-            className="flex items-center gap-2 rounded-full border px-4 py-2 text-xs transition"
-            style={activeId === tab.id
-              ? { background: 'var(--accent-dim)', borderColor: 'rgba(77,126,247,0.35)', color: 'var(--accent)' }
-              : { background: 'var(--bg-elevated)', borderColor: 'var(--border-default)', color: 'var(--text-secondary)' }
-            }
-          >
-            <TerminalIcon className="h-3.5 w-3.5" />
-            {tab.title}
-            <span className="rounded-full px-2 py-0.5 text-[10px]" style={{ background: 'var(--bg-card)', color: 'var(--text-muted)' }}>
-              {formatStatus(tab.status)}
-            </span>
-            {tabs.length > 1 && (
-              <span
-                className="ml-1 hover:text-rose-400"
-                style={{ color: 'var(--text-muted)' }}
-                onClick={(event) => {
-                  event.stopPropagation()
-                  closeTab(tab.id)
-                }}
-              >
-                ×
-              </span>
-            )}
-          </button>
-        ))}
-      </div>
+        {tabs.map((tab) => {
+          const isActive = activeId === tab.id
 
-      <div className="rounded-[1.25rem] border border-[#30363d] bg-[#010409] p-4 shadow-[0_24px_64px_rgba(0,0,0,0.5)]">
-        <div className="mb-3 flex items-center justify-between text-xs text-[#8b949e]">
-          <span className="flex items-center gap-2">
-            <Wifi className="h-4 w-4 text-[#58a6ff]" />
-            {formatStatus(tabs.find((tab) => tab.id === activeId)?.status)}
-          </span>
-          <span className="text-[#6e7681]">Resize verticalmente</span>
-        </div>
-        {tabs.map((tab) => (
-          <div
-            key={tab.id}
-            className={`group relative ${activeId === tab.id ? 'block' : 'hidden'}`}
-          >
-            <div
-              ref={setContainerRef(tab.id)}
-              className="provir-terminal-shell w-full overflow-hidden rounded-2xl border border-[#30363d] bg-[#0d1117] text-[#c9d1d9] shadow-[0_16px_48px_rgba(0,0,0,0.4)]" style={{ height: "calc(100vh - 220px)", minHeight: 300 }}
-            />
+          return (
             <button
-              className="absolute right-3 top-3 hidden items-center gap-2 rounded-lg border border-[#30363d] bg-[#161b22]/95 px-3 py-1.5 text-[11px] text-[#c9d1d9] shadow-lg backdrop-blur-sm transition group-hover:flex hover:border-[#58a6ff]/50"
-              onClick={copyLastOutput}
+              key={tab.id}
+              onClick={() => setActiveId(tab.id)}
+              className="flex items-center gap-2 rounded-full border px-4 py-2 text-xs transition"
+              style={isActive
+                ? { background: 'var(--accent-dim)', borderColor: 'rgba(77,126,247,0.35)', color: 'var(--accent)' }
+                : { background: 'var(--bg-elevated)', borderColor: 'var(--border-default)', color: 'var(--text-secondary)' }
+              }
             >
-              <Copy className="h-3 w-3" />
-              Copiar resultado
+              <TerminalIcon className="h-3.5 w-3.5" />
+              <span>{tab.title}</span>
+              <span className="hidden max-w-40 truncate text-[10px] text-inherit opacity-70 md:inline">{summarizeCwd(tab.cwd)}</span>
+              <span className="rounded-full px-2 py-0.5 text-[10px]" style={{ background: 'var(--bg-card)', color: 'var(--text-muted)' }}>
+                {formatStatus(tab.status)}
+              </span>
+              {tabs.length > 1 ? (
+                <span
+                  className="ml-1 hover:text-rose-400"
+                  style={{ color: 'var(--text-muted)' }}
+                  onClick={(event) => {
+                    event.stopPropagation()
+                    closeTab(tab.id)
+                  }}
+                >
+                  ×
+                </span>
+              ) : null}
             </button>
-          </div>
-        ))}
+          )
+        })}
       </div>
 
-      {editorModal && (
-        <FileEditorModal
-          filename={editorModal.filename}
-          cwd={editorModal.cwd}
-          onClose={() => setEditorModal(null)}
-        />
-      )}
+      <div className="flex min-h-[0] flex-1 flex-col rounded-[1.5rem] border border-[#30363d] bg-[linear-gradient(180deg,#010409_0%,#050a11_100%)] p-4 shadow-[0_24px_64px_rgba(0,0,0,0.5)]">
+        <div className="mb-3 flex flex-wrap items-center justify-between gap-3 text-xs text-[#8b949e]">
+          <span className="flex items-center gap-2">
+            {activeTab?.status === 'connected' ? <Wifi className="h-4 w-4 text-[#58a6ff]" /> : <WifiOff className="h-4 w-4 text-[#ff7b72]" />}
+            {formatStatus(activeTab?.status)}
+          </span>
+          <span className="max-w-full truncate text-right text-[#6e7681]">{activeTab?.cwd || '~'}</span>
+        </div>
+
+        <div className="relative min-h-[560px] flex-1 overflow-hidden rounded-[22px] border border-[#30363d] bg-[#0d1117] shadow-[0_16px_48px_rgba(0,0,0,0.4)]">
+          {tabs.map((tab) => (
+            <div
+              key={tab.id}
+              className={`absolute inset-0 ${activeId === tab.id ? 'visible' : 'invisible pointer-events-none'}`}
+            >
+              <div
+                ref={setContainerRef(tab.id)}
+                className="provir-terminal-shell h-full w-full"
+              />
+            </div>
+          ))}
+        </div>
+
+        <div className="mt-3 flex flex-wrap items-center justify-between gap-2 text-[11px] text-[#6e7681]">
+          <span>Ctrl/Cmd+C copia selecao ou envia interrupcao para o shell</span>
+          <span>Ctrl/Cmd+V cola diretamente na sessao ativa</span>
+        </div>
+      </div>
     </div>
   )
 }
 
 export default Terminal
-
-const FileEditorModal = ({ filename, cwd, onClose }) => {
-  const [content, setContent] = useState('')
-  const [loading, setLoading] = useState(true)
-  const [saving, setSaving] = useState(false)
-
-  useEffect(() => {
-    const loadFile = async () => {
-      try {
-        // Usar o filename exatamente como fornecido
-        const response = await api.get(`/storage/file?path=${encodeURIComponent(filename)}`)
-        setContent(response.data)
-      } catch (error) {
-        // Se não encontrar, criar arquivo vazio
-        setContent('')
-      } finally {
-        setLoading(false)
-      }
-    }
-    loadFile()
-  }, [filename, cwd])
-
-  const saveFile = async () => {
-    setSaving(true)
-    try {
-      await api.put(`/storage/file?path=${encodeURIComponent(filename)}`, content, {
-        headers: { 'Content-Type': 'text/plain' }
-      })
-    } catch (error) {
-      console.error('Erro ao salvar:', error)
-    } finally {
-      setSaving(false)
-    }
-  }
-
-  return (
-    <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50">
-      <div className="bg-slate-900 border border-slate-700 rounded-2xl w-[90vw] h-[80vh] flex flex-col">
-        <div className="flex items-center justify-between p-4 border-b border-slate-700">
-          <div>
-            <h3 className="text-lg font-semibold text-white">Editor</h3>
-            <p className="text-sm text-slate-400">{filename}</p>
-          </div>
-          <div className="flex gap-2">
-            <button
-              className="px-3 py-1 bg-blue-500 text-white rounded-lg text-sm hover:bg-blue-600 disabled:opacity-50"
-              onClick={saveFile}
-              disabled={saving}
-            >
-              {saving ? 'Salvando...' : 'Salvar'}
-            </button>
-            <button
-              className="px-3 py-1 bg-slate-700 text-white rounded-lg text-sm hover:bg-slate-600"
-              onClick={onClose}
-            >
-              Fechar
-            </button>
-          </div>
-        </div>
-        <div className="flex-1 p-4">
-          {loading ? (
-            <div className="flex items-center justify-center h-full text-slate-400">
-              Carregando arquivo...
-            </div>
-          ) : (
-            <textarea
-              className="w-full h-full bg-slate-950 text-slate-200 p-4 rounded-lg border border-slate-700 font-mono text-sm resize-none focus:outline-none focus:border-blue-500"
-              value={content}
-              onChange={(e) => setContent(e.target.value)}
-              placeholder="Conteúdo do arquivo..."
-            />
-          )}
-        </div>
-      </div>
-    </div>
-  )
-}

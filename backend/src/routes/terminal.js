@@ -8,6 +8,7 @@ const router = express.Router();
 const jwtSecret = process.env.JWT_SECRET || 'change-me';
 const cookieName = process.env.AUTH_COOKIE_NAME || 'provirpanel_token';
 const executor = new CommandExecutor();
+const INTERNAL_SHELL_BOOTSTRAP = '__provir_shell__';
 
 router.post('/execute', (req, res) => {
   res.status(501).json({ message: 'Use websocket at /api/terminal' });
@@ -40,6 +41,22 @@ const extractToken = (handshake) => {
     return cookies[cookieName] || cookies.token || null;
   }
   return null;
+};
+
+const resolvePreferredShell = () => {
+  if (process.env.TERMINAL_SHELL) {
+    return process.env.TERMINAL_SHELL;
+  }
+
+  if (process.env.SHELL) {
+    return process.env.SHELL;
+  }
+
+  if (process.platform === 'win32') {
+    return 'powershell.exe';
+  }
+
+  return 'bash';
 };
 
 const initTerminalSocket = (io) => {
@@ -99,8 +116,25 @@ const initTerminalSocket = (io) => {
       socket.currentProcess = null;
     };
 
-    // Check if command should use PTY mode (interactive shell)
-    const isPtyCommand = (cmd) => /^\s*(bash|sh|zsh|fish)\s*$/.test(cmd.trim());
+    const resolvePtyCommand = (cmd) => {
+      const trimmed = (cmd || '').trim();
+
+      if (!trimmed || trimmed === INTERNAL_SHELL_BOOTSTRAP) {
+        return {
+          shell: resolvePreferredShell(),
+          args: []
+        };
+      }
+
+      if (/^\s*(bash|sh|zsh|fish)\s*$/.test(trimmed)) {
+        return {
+          shell: trimmed,
+          args: []
+        };
+      }
+
+      return null;
+    };
 
     socket.on('command', async (payload = {}) => {
       const command = payload.command || '';
@@ -127,9 +161,10 @@ const initTerminalSocket = (io) => {
         }
 
         // PTY mode for interactive shells
-        if (pty && isPtyCommand(trimmed)) {
-          const shell = trimmed || 'bash';
-          const ptyProc = pty.spawn(shell, [], {
+        const ptyCommand = pty ? resolvePtyCommand(trimmed) : null;
+
+        if (pty && ptyCommand) {
+          const ptyProc = pty.spawn(ptyCommand.shell, ptyCommand.args, {
             name: 'xterm-256color',
             cols: 120,
             rows: 30,
