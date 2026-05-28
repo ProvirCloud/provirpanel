@@ -27,7 +27,7 @@ const TERMINAL_FONT_SIZE = 14
 const TERMINAL_LINE_HEIGHT = 1.18
 const TERMINAL_FONT_FAMILY = '"JetBrains Mono", ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", "Courier New", monospace'
 const TERMINAL_SAFE_PADDING_X = 28
-const TERMINAL_SAFE_PADDING_Y = 24
+const TERMINAL_SAFE_PADDING_Y = 36
 const COMMAND_HINTS = [
   'ls',
   'll',
@@ -123,6 +123,12 @@ const writePrompt = (terminal, cwd, newLine = true) => {
     terminal.write('\r\n')
   }
   terminal.write(formatPrompt(cwd))
+  terminal.scrollToBottom()
+}
+
+const redrawPromptLine = (terminal, cwd, value) => {
+  terminal.write(`\r\x1b[2K${formatPrompt(cwd)}${value}`)
+  terminal.scrollToBottom()
 }
 
 const Terminal = ({ showPageIntro = true }) => {
@@ -143,6 +149,7 @@ const Terminal = ({ showPageIntro = true }) => {
   const lastOutputRef = useRef(new Map())
   const cwdRef = useRef(new Map())
   const runningRef = useRef(new Map())
+  const draftBufferRef = useRef(new Map())
 
   useEffect(() => {
     tabsRef.current = tabs
@@ -196,6 +203,7 @@ const Terminal = ({ showPageIntro = true }) => {
       terminalsRef.current.set(id, term)
       buffersRef.current.set(id, '')
       historyIndexRef.current.set(id, historyRef.current.length)
+      draftBufferRef.current.set(id, '')
 
       term.open(container)
 
@@ -252,11 +260,17 @@ const Terminal = ({ showPageIntro = true }) => {
           const command = buffer.trim()
           term.write('\r\n')
           buffersRef.current.set(id, '')
+          draftBufferRef.current.set(id, '')
           historyIndexRef.current.set(id, historyRef.current.length)
 
           if (command) {
             historyRef.current = [...historyRef.current, command].slice(-100)
             saveHistory(historyRef.current)
+          }
+
+          if (!command) {
+            writePrompt(term, cwdRef.current.get(id), false)
+            return
           }
 
           // Interceptar comando open
@@ -291,14 +305,14 @@ const Terminal = ({ showPageIntro = true }) => {
               const completion = candidates[0]
               const newBuffer = buffer.slice(0, buffer.length - currentToken.length) + completion
               buffersRef.current.set(id, newBuffer)
-          term.write(`\r\x1b[2K${formatPrompt(cwdRef.current.get(id))}${newBuffer}`)
+              redrawPromptLine(term, cwdRef.current.get(id), newBuffer)
               return
             }
             if (candidates.length > 1) {
               term.write('\r\n')
               term.write(candidates.join('  '))
               term.write('\r\n')
-          term.write(formatPrompt(cwdRef.current.get(id)) + buffer)
+              redrawPromptLine(term, cwdRef.current.get(id), buffer)
             }
           }
 
@@ -333,16 +347,26 @@ const Terminal = ({ showPageIntro = true }) => {
 
         if (data === '\x1b[A' || data === '\x1b[B') {
           const history = historyRef.current
+          if (history.length === 0) {
+            return
+          }
           let index = historyIndexRef.current.get(id) ?? history.length
+
+          if (index === history.length && data === '\x1b[A') {
+            draftBufferRef.current.set(id, buffer)
+          }
+
           if (data === '\x1b[A') {
             index = Math.max(0, index - 1)
           } else {
             index = Math.min(history.length, index + 1)
           }
           historyIndexRef.current.set(id, index)
-          const nextValue = history[index] || ''
+          const nextValue = index === history.length
+            ? (draftBufferRef.current.get(id) || '')
+            : (history[index] || '')
           buffersRef.current.set(id, nextValue)
-          term.write(`\r\x1b[2K${formatPrompt(cwdRef.current.get(id))}${nextValue}`)
+          redrawPromptLine(term, cwdRef.current.get(id), nextValue)
           return
         }
 
@@ -409,6 +433,10 @@ const Terminal = ({ showPageIntro = true }) => {
         if (current) {
           current.write(payload.data)
           current.scrollToBottom()
+          const container = containersRef.current.get(id)
+          if (container) {
+            requestAnimationFrame(() => fitTerminal(current, container, socketsRef.current.get(id)))
+          }
         }
         const prev = outputRef.current.get(id) || ''
         outputRef.current.set(id, prev + payload.data)
@@ -510,6 +538,7 @@ const Terminal = ({ showPageIntro = true }) => {
     const term = terminalsRef.current.get(activeId)
     if (term) {
       term.clear()
+      term.scrollToBottom()
       // If shell is running, send clear command instead of writing prompt
       if (runningRef.current.get(activeId)) {
         const socket = socketsRef.current.get(activeId)
