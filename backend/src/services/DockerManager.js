@@ -319,12 +319,18 @@ class DockerManager {
         const hostPort = publishedPort?.PublicPort ?? service.hostPort ?? null;
         const containerPort = publishedPort?.PrivatePort ?? service.containerPort ?? null;
         const bindLocalOnly = publishedPort?.IP === '127.0.0.1' || service.bindLocalOnly || false;
+        const networkName =
+          Object.keys(matchedContainer.NetworkSettings?.Networks || {})[0] ||
+          matchedContainer.HostConfig?.NetworkMode ||
+          service.networkName ||
+          'bridge';
 
         aliveServices.push({
           ...service,
           containerId: matchedContainer.Id,
           hostPort,
           containerPort,
+          networkName,
           bindLocalOnly,
           url: hostPort ? `http://localhost:${hostPort}` : service.url,
           externalUrl: hostPort && !bindLocalOnly ? `http://localhost:${hostPort}` : service.externalUrl
