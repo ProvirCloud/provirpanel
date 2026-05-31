@@ -2087,16 +2087,16 @@ const DockerPanel = ({ showPageIntro = true }) => {
                 onChange={(e) => setServiceForm((p) => ({ ...p, command: e.target.value }))}
               />
               <p className="text-xs text-slate-400">
-                Deixe vazio para detectar automaticamente pelo package.json ou pelo .jar enviado.
+                Deixe vazio para detectar package.json, entrypoint.sh/start.sh ou .jar enviado.
               </p>
             </div>
           )}
 
           <div className="grid gap-2">
-            <label className="text-xs text-slate-300">Projeto compactado (zip/tar)</label>
+            <label className="text-xs text-slate-300">Projeto ou JAR (zip/tar/jar)</label>
             <input
               type="file"
-              accept=".zip,.tar,.tar.gz,.tgz"
+              accept=".jar,.zip,.tar,.tar.gz,.tgz"
               className="rounded-xl border border-slate-800 bg-slate-950 px-3 py-2 text-sm text-slate-200 file:mr-3 file:rounded-lg file:border-0 file:bg-blue-500 file:px-3 file:py-1.5 file:text-xs file:font-semibold file:text-slate-950"
               onChange={(e) => {
                 const file = e.target.files?.[0] || null
@@ -2106,7 +2106,7 @@ const DockerPanel = ({ showPageIntro = true }) => {
             <p className="text-xs text-slate-400">
               {isNodeSitesMode
                 ? `Envie os arquivos do site para a pasta ${serviceForm.nodeSiteConfig?.siteFolder || NODE_SITE_FOLDERS[0]} apos a criacao.`
-                : 'Envie um .zip/.tar para publicar o codigo no volume do servico apos a criacao.'}
+                : 'Envie um .jar ou .zip/.tar para publicar no volume do servico apos a criacao.'}
             </p>
           </div>
 
@@ -3156,7 +3156,7 @@ const DockerPanel = ({ showPageIntro = true }) => {
                     onChange={(e) => setEditDialog(prev => ({ ...prev, commandInput: e.target.value }))}
                   />
                   <p className="text-xs text-slate-400 mt-1">
-                    Deixe vazio para detectar automaticamente pelo package.json ou pelo .jar enviado.
+                    Deixe vazio para detectar package.json, entrypoint.sh/start.sh ou .jar enviado.
                   </p>
                 </div>
               )}
@@ -3266,11 +3266,11 @@ const DockerPanel = ({ showPageIntro = true }) => {
                 </p>
               </div>
               <div>
-                  <label className="block text-sm text-slate-300 mb-2">Atualizar projeto (zip/tar)</label>
+                  <label className="block text-sm text-slate-300 mb-2">Atualizar projeto ou JAR (zip/tar/jar)</label>
                   <div className="flex flex-col gap-2">
                     <input
                       type="file"
-                      accept=".zip,.tar,.tar.gz,.tgz"
+                      accept=".jar,.zip,.tar,.tar.gz,.tgz"
                       className="rounded-xl border border-slate-700 bg-slate-800 px-3 py-2 text-sm text-slate-200 file:mr-3 file:rounded-lg file:border-0 file:bg-blue-500 file:px-3 file:py-1.5 file:text-xs file:font-semibold file:text-slate-950"
                       onChange={(e) => {
                         const file = e.target.files?.[0] || null
