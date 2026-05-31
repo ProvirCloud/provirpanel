@@ -1473,9 +1473,11 @@ const DockerPanel = ({ showPageIntro = true }) => {
       addToast('Serviço atualizado')
       loadServices()
       loadContainers()
+      return true
     } catch (err) {
       const message = err.response?.data?.message || err.message || 'Erro ao atualizar serviço'
       addToast(message, 'error')
+      return false
     }
   }
 
@@ -3381,7 +3383,7 @@ const DockerPanel = ({ showPageIntro = true }) => {
                       return
                     }
                   }
-                  updateService(editDialog.id, {
+                  const updated = await updateService(editDialog.id, {
                     hostPort: editDialog.newHostPort || editDialog.hostPort,
                     envVars: editDialog.newEnvVars || [],
                     networkName: editDialog.newNetworkName || editDialog.networkName,
@@ -3394,7 +3396,9 @@ const DockerPanel = ({ showPageIntro = true }) => {
                     nodeServiceMode: editDialog.nodeServiceMode || NODE_SERVICE_MODES.service,
                     nodeSiteConfig: editDialog.nodeSiteConfig
                   });
-                  setEditDialog(null);
+                  if (updated) {
+                    setEditDialog(null);
+                  }
                 }}
               >
                 Salvar Alterações

@@ -407,6 +407,18 @@ const buildContainerEnv = ({ templateEnv = [], explicitEnvVars = [], projectPath
   return merged.map((entry) => `${entry.key}=${resolveEnvValue(entry.key, entry.value, rawLookup)}`);
 };
 
+const ensureExplicitContainerEnv = (env = [], envVars = []) => {
+  const normalized = normalizeEnvVars(envVars);
+  const rawLookup = Object.fromEntries(
+    normalized.map((entry) => [entry.key, String(entry.value ?? '')])
+  );
+  return normalized.reduce(
+    (entries, entry) =>
+      upsertEnvValue(entries, entry.key, resolveEnvValue(entry.key, entry.value, rawLookup)),
+    env
+  );
+};
+
 const buildServiceLabels = ({
   serviceId,
   name,
@@ -1995,6 +2007,7 @@ router.post('/services', async (req, res, next) => {
       explicitEnvVars: normalizedEnvVars,
       projectPath: envProjectPath
     });
+    env = ensureExplicitContainerEnv(env, normalizedEnvVars);
 
     let finalImageName = imageName;
     const normalizedCommand = isNodeSitesMode ? null : normalizeCommand(command);
@@ -2367,7 +2380,7 @@ router.put('/services/:id', async (req, res, next) => {
       nodeSiteConfig: requestedNodeSiteConfig
     } = req.body || {};
     const services = dockerManager.listServices();
-    const service = services.find((s) => s.id === req.params.id);
+    let service = services.find((s) => s.id === req.params.id);
     if (!service) {
       return res.status(404).json({ message: 'Service not found' });
     }
@@ -2392,6 +2405,11 @@ router.put('/services/:id', async (req, res, next) => {
     }
 
     appendServiceLog('info', `Atualizacao de servico iniciada: ${service.name}`);
+    if (normalizeEnvVars(envVars).length && !resolvePrimaryVolumeProjectPath(service.volumes)) {
+      const volumeInfo = ensureServiceProjectVolume(service);
+      service = volumeInfo.service;
+      appendServiceLog('info', `Volume padrao garantido para .env de ${service.name}`);
+    }
 
     // Stop current container
     if (service.containerId) {
@@ -2491,6 +2509,11 @@ router.put('/services/:id', async (req, res, next) => {
       explicitEnvVars: resolvedEnvVars,
       projectPath: envProjectPath
     });
+    env = ensureExplicitContainerEnv(env, resolvedEnvVars);
+    appendServiceLog(
+      'info',
+      `Env do container atualizada para ${service.name}: ${resolvedEnvVars.map((entry) => entry.key).join(', ') || 'nenhuma'}`
+    );
 
     const normalizedCommand = isNodeSitesMode ? null : normalizeCommand(command);
     const hasUserCommand = isNodeSitesMode ? false : Boolean(normalizedCommand || persistedCommand);
@@ -2803,6 +2826,11 @@ const publishProjectArchive = async (serviceId, file, options = {}) => {
       explicitEnvVars: resolvedEnvVars,
       projectPath: envProjectPath
     });
+    env = ensureExplicitContainerEnv(env, resolvedEnvVars);
+    appendServiceLog(
+      'info',
+      `Env do container atualizada para ${service.name}: ${resolvedEnvVars.map((entry) => entry.key).join(', ') || 'nenhuma'}`
+    );
 
     const hasUserCommand = isNodeSitesMode ? false : !!persistedCommand;
     let autoProjectLaunch = null;
