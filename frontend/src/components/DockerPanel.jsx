@@ -1479,10 +1479,14 @@ const DockerPanel = ({ showPageIntro = true }) => {
     }
   }
 
-  const uploadProjectArchive = async (serviceId, file) => {
+  const uploadProjectArchive = async (serviceId, file, options = {}) => {
     if (!serviceId || !file) return false
     const formData = new FormData()
     formData.append('archive', file)
+    const hasEnvVars = Object.prototype.hasOwnProperty.call(options, 'envVars')
+    if (hasEnvVars) {
+      formData.append('envVars', JSON.stringify(options.envVars || []))
+    }
     try {
       setProjectUploadStatus({ status: 'uploading', progress: 0, message: 'Enviando arquivo...' })
       if (file.size > CHUNKED_UPLOAD_THRESHOLD_BYTES) {
@@ -1491,6 +1495,7 @@ const DockerPanel = ({ showPageIntro = true }) => {
           initUrl: `/docker/services/${serviceId}/project-upload/init`,
           chunkUrl: `/docker/services/${serviceId}/project-upload/chunk`,
           completeUrl: `/docker/services/${serviceId}/project-upload/complete`,
+          metadata: hasEnvVars ? { envVars: options.envVars || [] } : {},
           onProgress: (progress, chunkIndex, totalChunks) => {
             setProjectUploadStatus((prev) => ({
               ...(prev || {}),
@@ -1623,7 +1628,9 @@ const DockerPanel = ({ showPageIntro = true }) => {
       loadServices()
 
       if (form.projectArchive && response.data.service?.id) {
-        await uploadProjectArchive(response.data.service.id, form.projectArchive)
+        await uploadProjectArchive(response.data.service.id, form.projectArchive, {
+          envVars: form.envs || []
+        })
       }
       
       // Close wizard on success
@@ -3286,7 +3293,9 @@ const DockerPanel = ({ showPageIntro = true }) => {
                           projectUploadStatus?.status === 'processing'
                         }
                         onClick={async () => {
-                          const ok = await uploadProjectArchive(editDialog.id, editDialog.newProjectArchive)
+                          const ok = await uploadProjectArchive(editDialog.id, editDialog.newProjectArchive, {
+                            envVars: editDialog.newEnvVars || []
+                          })
                           if (ok) {
                             setEditDialog(prev => ({ ...prev, newProjectArchive: null }))
                           }
@@ -3365,7 +3374,9 @@ const DockerPanel = ({ showPageIntro = true }) => {
                 className="flex-1 rounded-xl bg-blue-500 px-4 py-2 text-sm font-semibold text-white hover:bg-blue-600"
                 onClick={async () => {
                   if (editDialog.newProjectArchive) {
-                    const ok = await uploadProjectArchive(editDialog.id, editDialog.newProjectArchive)
+                    const ok = await uploadProjectArchive(editDialog.id, editDialog.newProjectArchive, {
+                      envVars: editDialog.newEnvVars || []
+                    })
                     if (!ok) {
                       return
                     }

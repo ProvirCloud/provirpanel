@@ -314,6 +314,22 @@ const mergeEnvVars = (incoming = [], existing = []) => {
   });
 };
 
+const parseEnvVarsPayload = (value) => {
+  if (value === undefined || value === null) return null;
+  let parsed = value;
+  if (typeof value === 'string') {
+    try {
+      parsed = JSON.parse(value || '[]');
+    } catch (err) {
+      throw createHttpError('envVars inválido', 400);
+    }
+  }
+  if (!Array.isArray(parsed)) {
+    throw createHttpError('envVars inválido', 400);
+  }
+  return parsed;
+};
+
 const ENV_REFERENCE_PATTERN = /\$\{([A-Za-z_][A-Za-z0-9_]*)\}|\$([A-Za-z_][A-Za-z0-9_]*)/g;
 
 const parseEnvEntries = (content = '') =>
@@ -2639,7 +2655,7 @@ const ensureServiceProjectVolume = (service) => {
   return { service: nextService, projectDir: hostPath };
 };
 
-const publishProjectArchive = async (serviceId, file) => {
+const publishProjectArchive = async (serviceId, file, options = {}) => {
   let service = null;
   const services = dockerManager.listServices();
   service = services.find((s) => s.id === serviceId);
@@ -2742,7 +2758,9 @@ const publishProjectArchive = async (serviceId, file) => {
       appendServiceLog('warn', `Nao foi possivel resolver o diretorio do projeto para ${service.name}`);
     }
 
-    const resolvedEnvVars = service.envVars || [];
+    const resolvedEnvVars = Array.isArray(options.envVars)
+      ? mergeEnvVars(options.envVars, service.envVars || [])
+      : service.envVars || [];
     if (projectPath?.hostPath) {
       writeEnvFile(projectPath, resolvedEnvVars, template.env);
       appendServiceLog('info', `Arquivo .env atualizado em ${projectPath.hostPath}`);
@@ -2881,6 +2899,7 @@ const publishProjectArchive = async (serviceId, file) => {
     const updatedService = {
       ...service,
       containerId: container.Id,
+      envVars: resolvedEnvVars,
       command: isNodeSitesMode || autoProjectLaunch ? null : containerCmd || null,
       autoCommandType: autoProjectLaunch ? autoProjectLaunch.type : null,
       hasProject: true,
@@ -2894,7 +2913,9 @@ const publishProjectArchive = async (serviceId, file) => {
 
 router.post('/services/:id/project-upload', upload.single('archive'), async (req, res, next) => {
   try {
-    const updatedService = await publishProjectArchive(req.params.id, req.file);
+    const updatedService = await publishProjectArchive(req.params.id, req.file, {
+      envVars: parseEnvVarsPayload(req.body?.envVars)
+    });
     res.json({ service: sanitizeServiceForClient(updatedService) });
   } catch (err) {
     appendServiceLog('error', `Erro ao atualizar projeto ${req.params.id}: ${err.message}`);
@@ -2921,6 +2942,7 @@ router.post('/services/:id/project-upload/init', (req, res, next) => {
       serviceId: req.params.id,
       filename: safeUploadFilename(req.body?.filename, 'project.zip'),
       size: Number(req.body?.size || 0),
+      envVars: parseEnvVarsPayload(req.body?.envVars),
       totalChunks,
       createdAt: new Date().toISOString()
     });
@@ -2955,6 +2977,8 @@ router.post('/services/:id/project-upload/complete', async (req, res, next) => {
     const updatedService = await publishProjectArchive(req.params.id, {
       path: archivePath,
       originalname: filename
+    }, {
+      envVars: metadata.envVars || null
     });
     cleanupChunkUpload(uploadId);
     res.json({ service: sanitizeServiceForClient(updatedService) });
