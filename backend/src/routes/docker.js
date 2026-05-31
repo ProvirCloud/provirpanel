@@ -987,6 +987,9 @@ const getNodeServiceProjectPath = (volumes = [], nodeServiceMode = DEFAULT_NODE_
   return resolveProjectPathFromVolume(volumes);
 };
 
+const getEnvProjectPath = (volumes = [], projectPath = null) =>
+  projectPath?.hostPath ? projectPath : resolvePrimaryVolumeProjectPath(volumes);
+
 const getNodeSiteContentDir = (projectPath, nodeSiteConfig = {}) => {
   if (!projectPath?.hostPath) return null;
   return path.join(
@@ -1980,16 +1983,17 @@ router.post('/services', async (req, res, next) => {
     }
 
     const projectPath = getNodeServiceProjectPath(finalizedVolumes, nodeServiceMode);
-    if (projectPath?.hostPath) {
-      writeEnvFile(projectPath, normalizedEnvVars, template.env);
-      progress.push(`📝 .env gerado em ${projectPath.hostPath}`);
+    const envProjectPath = getEnvProjectPath(finalizedVolumes, projectPath);
+    if (envProjectPath?.hostPath) {
+      writeEnvFile(envProjectPath, normalizedEnvVars, template.env);
+      progress.push(`📝 .env gerado em ${envProjectPath.hostPath}`);
     } else {
       progress.push('⚠️ Nao foi possivel resolver o diretorio do projeto para gerar .env');
     }
     let env = buildContainerEnv({
       templateEnv: template.env,
       explicitEnvVars: normalizedEnvVars,
-      projectPath
+      projectPath: envProjectPath
     });
 
     let finalImageName = imageName;
@@ -2454,9 +2458,14 @@ router.put('/services/:id', async (req, res, next) => {
     }
     
     const resolvedEnvVars = mergeEnvVars(envVars, service.envVars || []);
+    const envProjectPath = getEnvProjectPath(service.volumes, projectPath);
+    if (envProjectPath?.hostPath) {
+      writeEnvFile(envProjectPath, resolvedEnvVars, template.env);
+      appendServiceLog('info', `Arquivo .env atualizado em ${envProjectPath.hostPath}`);
+    } else {
+      appendServiceLog('warn', `Nao foi possivel resolver diretorio para arquivo .env de ${service.name}`);
+    }
     if (projectPath?.hostPath) {
-      writeEnvFile(projectPath, resolvedEnvVars, template.env);
-      appendServiceLog('info', `Arquivo .env atualizado em ${projectPath.hostPath}`);
       if (isNodeService && !isNodeSitesMode) {
         const expectedFiles = [
           'package.json',
@@ -2480,7 +2489,7 @@ router.put('/services/:id', async (req, res, next) => {
     let env = buildContainerEnv({
       templateEnv: template.env,
       explicitEnvVars: resolvedEnvVars,
-      projectPath
+      projectPath: envProjectPath
     });
 
     const normalizedCommand = isNodeSitesMode ? null : normalizeCommand(command);
@@ -2761,9 +2770,14 @@ const publishProjectArchive = async (serviceId, file, options = {}) => {
     const resolvedEnvVars = Array.isArray(options.envVars)
       ? mergeEnvVars(options.envVars, service.envVars || [])
       : service.envVars || [];
+    const envProjectPath = getEnvProjectPath(service.volumes, projectPath);
+    if (envProjectPath?.hostPath) {
+      writeEnvFile(envProjectPath, resolvedEnvVars, template.env);
+      appendServiceLog('info', `Arquivo .env atualizado em ${envProjectPath.hostPath}`);
+    } else {
+      appendServiceLog('warn', `Nao foi possivel resolver diretorio para arquivo .env de ${service.name}`);
+    }
     if (projectPath?.hostPath) {
-      writeEnvFile(projectPath, resolvedEnvVars, template.env);
-      appendServiceLog('info', `Arquivo .env atualizado em ${projectPath.hostPath}`);
       if (isNodeService && !isNodeSitesMode) {
         const expectedFiles = [
           'package.json',
@@ -2787,7 +2801,7 @@ const publishProjectArchive = async (serviceId, file, options = {}) => {
     let env = buildContainerEnv({
       templateEnv: template.env,
       explicitEnvVars: resolvedEnvVars,
-      projectPath
+      projectPath: envProjectPath
     });
 
     const hasUserCommand = isNodeSitesMode ? false : !!persistedCommand;
