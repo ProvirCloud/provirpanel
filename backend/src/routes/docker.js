@@ -503,6 +503,157 @@ const resolveNodeCommand = (volumes = []) => {
   return ['sh', '-c', 'npm install && npm start'];
 };
 
+const JAVA_IMAGE_KEYWORDS = [
+  'java',
+  'openjdk',
+  'temurin',
+  'corretto',
+  'amazoncorretto',
+  'adoptopenjdk',
+  'liberica',
+  'ibm-semeru',
+  'sapmachine',
+  'spring',
+  'maven',
+  'gradle'
+];
+
+const isJavaRuntimeService = (service = {}) => {
+  const descriptor = [
+    service.templateId,
+    service.image,
+    service.name
+  ]
+    .filter(Boolean)
+    .join(' ')
+    .toLowerCase();
+
+  return JAVA_IMAGE_KEYWORDS.some((keyword) => descriptor.includes(keyword));
+};
+
+const shellQuote = (value) => `'${String(value).replace(/'/g, "'\\''")}'`;
+
+const upsertEnvValue = (env = [], key, value) => {
+  const prefix = `${key}=`;
+  return [
+    ...env.filter((entry) => !String(entry || '').startsWith(prefix)),
+    `${key}=${value ?? ''}`
+  ];
+};
+
+const scoreJavaJarCandidate = (candidate) => {
+  const relative = candidate.relative.toLowerCase();
+  const basename = candidate.basename.toLowerCase();
+  let score = 0;
+
+  if (!relative.includes('/')) score += 25;
+  if (relative.startsWith('target/')) score += 50;
+  if (relative.startsWith('build/libs/')) score += 50;
+  if (relative.includes('/target/')) score += 35;
+  if (relative.includes('/build/libs/')) score += 35;
+  if (candidate.size >= 1024 * 1024) score += 20;
+  if (candidate.size >= 10 * 1024 * 1024) score += 10;
+  if (basename.endsWith('-plain.jar')) score -= 80;
+  if (basename.startsWith('original-')) score -= 60;
+  score -= candidate.depth * 5;
+
+  return score;
+};
+
+const resolveJavaJarLaunch = (volumes = []) => {
+  const project = resolvePrimaryVolumeProjectPath(volumes);
+  if (!project?.hostPath || !project?.containerPath || !fs.existsSync(project.hostPath)) {
+    return null;
+  }
+
+  const ignoredDirs = new Set([
+    '.git',
+    '.gradle',
+    '.m2',
+    'node_modules',
+    '.next',
+    'coverage'
+  ]);
+  const ignoredJarPattern = /(?:^|[-_.])(sources|javadoc|tests|test)\.jar$/i;
+  const candidates = [];
+  const maxDepth = 6;
+
+  const visit = (dir, depth) => {
+    let entries = [];
+    try {
+      entries = fs.readdirSync(dir, { withFileTypes: true }).sort((a, b) => a.name.localeCompare(b.name));
+    } catch (err) {
+      return;
+    }
+
+    entries.forEach((entry) => {
+      const fullPath = path.join(dir, entry.name);
+      if (entry.isDirectory()) {
+        if (depth >= maxDepth || ignoredDirs.has(entry.name)) return;
+        visit(fullPath, depth + 1);
+        return;
+      }
+      if (!entry.isFile() || !entry.name.toLowerCase().endsWith('.jar')) return;
+      if (ignoredJarPattern.test(entry.name)) return;
+
+      let stat = null;
+      try {
+        stat = fs.statSync(fullPath);
+      } catch (err) {
+        return;
+      }
+
+      const relative = path.relative(project.hostPath, fullPath).split(path.sep).join('/');
+      candidates.push({
+        hostPath: fullPath,
+        relative,
+        basename: entry.name,
+        depth: relative.split('/').length - 1,
+        size: stat.size,
+        mtimeMs: stat.mtimeMs
+      });
+    });
+  };
+
+  visit(project.hostPath, 0);
+  if (!candidates.length) return null;
+
+  candidates.sort((a, b) => {
+    const scoreDiff = scoreJavaJarCandidate(b) - scoreJavaJarCandidate(a);
+    if (scoreDiff !== 0) return scoreDiff;
+    const mtimeDiff = b.mtimeMs - a.mtimeMs;
+    if (mtimeDiff !== 0) return mtimeDiff;
+    return a.relative.localeCompare(b.relative);
+  });
+
+  const selected = candidates[0];
+  const containerJarPath = path.posix.join(project.containerPath, selected.relative);
+  const commandText = `java \${JAVA_OPTS:-} -jar ${shellQuote(containerJarPath)}`;
+
+  return {
+    command: ['sh', '-c', commandText],
+    commandText,
+    hostPath: selected.hostPath,
+    containerJarPath
+  };
+};
+
+const getImageEntrypoint = async (imageName) => {
+  if (!imageName) return null;
+  try {
+    const info = await dockerManager.docker.getImage(imageName).inspect();
+    return info?.Config?.Entrypoint || null;
+  } catch (err) {
+    return null;
+  }
+};
+
+const shouldPreserveJavaEntrypoint = (entrypoint) => {
+  if (!entrypoint) return false;
+  const value = Array.isArray(entrypoint) ? entrypoint.join(' ') : String(entrypoint);
+  return /\bentrypoint(?:\.sh)?\b/i.test(value) || /(?:^|\/)(?:ba)?sh(?:\s|$)/i.test(value);
+};
+
 const runCommand = (cmd, args, options = {}) =>
   new Promise((resolve, reject) => {
     execFile(cmd, args, options, (err, stdout, stderr) => {
@@ -2128,7 +2279,17 @@ router.put('/services/:id', async (req, res, next) => {
       SERVICE_TEMPLATES.find((t) => t.id === service.templateId) ||
       { env: [], workdir: null, command: null };
     const previousNodeSiteConfig = service.nodeSiteConfig || null;
-    const projectPath = getNodeServiceProjectPath(service.volumes, nodeServiceMode);
+    const isNodeService =
+      service.templateId === 'node-app' ||
+      service.templateId === 'node' ||
+      String(service.image || '').startsWith('node');
+    const javaLaunch = isNodeService ? null : resolveJavaJarLaunch(service.volumes);
+    const canAutoJavaLaunch = Boolean(
+      javaLaunch && (service.autoCommandType === 'java-jar' || isJavaRuntimeService(service))
+    );
+    const projectPath = canAutoJavaLaunch
+      ? resolvePrimaryVolumeProjectPath(service.volumes)
+      : getNodeServiceProjectPath(service.volumes, nodeServiceMode);
     if (isNodeSitesMode && projectPath?.hostPath) {
       ensureNodeSiteScaffold(projectPath, service.name, nodeSiteConfig, previousNodeSiteConfig);
       appendServiceLog(
@@ -2153,7 +2314,7 @@ router.put('/services/:id', async (req, res, next) => {
     if (projectPath?.hostPath) {
       writeEnvFile(projectPath, resolvedEnvVars, template.env);
       appendServiceLog('info', `Arquivo .env atualizado em ${projectPath.hostPath}`);
-      if (!isNodeSitesMode) {
+      if (isNodeService && !isNodeSitesMode) {
         const expectedFiles = [
           'package.json',
           'tsconfig.json',
@@ -2181,13 +2342,21 @@ router.put('/services/:id', async (req, res, next) => {
 
     const normalizedCommand = isNodeSitesMode ? null : normalizeCommand(command);
     const hasUserCommand = isNodeSitesMode ? false : !!normalizedCommand;
+    let autoJavaLaunch = null;
     let containerCmd = normalizedCommand || service.command || template.command;
     if (isNodeSitesMode) {
       containerCmd = ['sh', '-c', 'npm install && npm start'];
     } else if (service.templateId === 'node-app' && !normalizedCommand && !service.command) {
       containerCmd = resolveNodeCommand(service.volumes) || containerCmd;
+    } else if (!normalizedCommand && !service.command && canAutoJavaLaunch) {
+      autoJavaLaunch = javaLaunch;
+      containerCmd = javaLaunch.command;
+      appendServiceLog(
+        'info',
+        `JAR detectado para ${service.name}: ${javaLaunch.containerJarPath}`
+      );
     }
-    if (!hasUserCommand) {
+    if (isNodeService && !hasUserCommand) {
       containerCmd = stripNextStartFlags(containerCmd);
       containerCmd = ensureCommandWorkdir(containerCmd, workdir);
       const updateCmdBefore = stringifyCommand(containerCmd);
@@ -2206,12 +2375,25 @@ router.put('/services/:id', async (req, res, next) => {
       'info',
       `Comando definido para ${service.name}: ${stringifyCommand(containerCmd) || 'padrao'}`
     );
+    const preserveAutoJavaEntrypoint = autoJavaLaunch
+      ? shouldPreserveJavaEntrypoint(await getImageEntrypoint(service.image))
+      : false;
+    if (autoJavaLaunch) {
+      env = upsertEnvValue(env, 'APP_JAR', autoJavaLaunch.containerJarPath);
+      appendServiceLog(
+        'info',
+        `APP_JAR definido para ${service.name}: ${autoJavaLaunch.containerJarPath}`
+      );
+      if (preserveAutoJavaEntrypoint) {
+        appendServiceLog('info', `Entrypoint da imagem preservado para ${service.name}`);
+      }
+    }
     if (workdir) {
       appendServiceLog('info', `WorkingDir para ${service.name}: ${workdir}`);
     } else {
       appendServiceLog('warn', `WorkingDir nao resolvido para ${service.name}`);
     }
-    if (!hasUserCommand) {
+    if (isNodeService && !hasUserCommand) {
       const envBeforeUpdate = env;
       env = ensureNextBuildEnv(env, containerCmd);
       if (env !== envBeforeUpdate) {
@@ -2247,7 +2429,12 @@ router.put('/services/:id', async (req, res, next) => {
       }
     };
 
-    if (containerCmd) {
+    if (autoJavaLaunch) {
+      if (!preserveAutoJavaEntrypoint) {
+        containerConfig.Entrypoint = ['sh', '-c'];
+        containerConfig.Cmd = [autoJavaLaunch.commandText];
+      }
+    } else if (containerCmd) {
       containerConfig.Cmd = containerCmd;
     }
     if (workdir) {
@@ -2270,7 +2457,8 @@ router.put('/services/:id', async (req, res, next) => {
       containerId: container.Id,
       hostPort: resolvedPort,
       envVars: resolvedEnvVars,
-      command: isNodeSitesMode ? null : containerCmd || null,
+      command: isNodeSitesMode || autoJavaLaunch ? null : containerCmd || null,
+      autoCommandType: autoJavaLaunch ? 'java-jar' : null,
       networkName: targetNetwork,
       bindLocalOnly: resolvedBindLocal,
       nodeServiceMode,
@@ -2402,7 +2590,26 @@ const publishProjectArchive = async (serviceId, file) => {
     const template =
       SERVICE_TEMPLATES.find((t) => t.id === service.templateId) ||
       { env: [], workdir: null, command: null };
-    const projectPath = getNodeServiceProjectPath(service.volumes, nodeServiceMode);
+    const isNodeService =
+      service.templateId === 'node-app' ||
+      service.templateId === 'node' ||
+      String(service.image || '').startsWith('node');
+    const javaLaunch =
+      isNodeService || isNginxStaticService || isNodeSitesMode
+        ? null
+        : resolveJavaJarLaunch(service.volumes);
+    const canAutoJavaLaunch = Boolean(
+      javaLaunch &&
+        !service.command &&
+        (
+          service.autoCommandType === 'java-jar' ||
+          service.templateId === 'custom-image' ||
+          isJavaRuntimeService(service)
+        )
+    );
+    const projectPath = canAutoJavaLaunch
+      ? resolvePrimaryVolumeProjectPath(service.volumes)
+      : getNodeServiceProjectPath(service.volumes, nodeServiceMode);
     const workdir = projectPath?.containerPath || template.workdir || null;
     if (projectPath?.hostPath) {
       appendServiceLog('info', `Projeto resolvido em ${projectPath.hostPath}`);
@@ -2414,7 +2621,7 @@ const publishProjectArchive = async (serviceId, file) => {
     if (projectPath?.hostPath) {
       writeEnvFile(projectPath, resolvedEnvVars, template.env);
       appendServiceLog('info', `Arquivo .env atualizado em ${projectPath.hostPath}`);
-      if (!isNodeSitesMode) {
+      if (isNodeService && !isNodeSitesMode) {
         const expectedFiles = [
           'package.json',
           'tsconfig.json',
@@ -2440,16 +2647,20 @@ const publishProjectArchive = async (serviceId, file) => {
       projectPath
     });
 
-    const isNodeService =
-      service.templateId === 'node-app' ||
-      service.templateId === 'node' ||
-      String(service.image || '').startsWith('node');
     const hasUserCommand = isNodeSitesMode ? false : !!service.command;
+    let autoJavaLaunch = null;
     let containerCmd = service.command || template.command;
     if (isNodeSitesMode) {
       containerCmd = ['sh', '-c', 'npm install && npm start'];
     } else if (isNodeService && !service.command) {
       containerCmd = resolveNodeCommand(service.volumes) || containerCmd;
+    } else if (canAutoJavaLaunch) {
+      autoJavaLaunch = javaLaunch;
+      containerCmd = javaLaunch.command;
+      appendServiceLog(
+        'info',
+        `JAR detectado para ${service.name}: ${javaLaunch.containerJarPath}`
+      );
     }
     if (isNodeService && !hasUserCommand) {
       containerCmd = ensureCommandWorkdir(containerCmd, workdir);
@@ -2466,6 +2677,19 @@ const publishProjectArchive = async (serviceId, file) => {
       }
     }
     appendServiceLog('info', `Comando detectado para ${service.name}: ${stringifyCommand(containerCmd) || 'padrao'}`);
+    const preserveAutoJavaEntrypoint = autoJavaLaunch
+      ? shouldPreserveJavaEntrypoint(await getImageEntrypoint(service.image))
+      : false;
+    if (autoJavaLaunch) {
+      env = upsertEnvValue(env, 'APP_JAR', autoJavaLaunch.containerJarPath);
+      appendServiceLog(
+        'info',
+        `APP_JAR definido para ${service.name}: ${autoJavaLaunch.containerJarPath}`
+      );
+      if (preserveAutoJavaEntrypoint) {
+        appendServiceLog('info', `Entrypoint da imagem preservado para ${service.name}`);
+      }
+    }
     if (workdir) {
       appendServiceLog('info', `WorkingDir para ${service.name}: ${workdir}`);
     } else {
@@ -2518,7 +2742,12 @@ const publishProjectArchive = async (serviceId, file) => {
       }
     };
 
-    if (containerCmd) {
+    if (autoJavaLaunch) {
+      if (!preserveAutoJavaEntrypoint) {
+        containerConfig.Entrypoint = ['sh', '-c'];
+        containerConfig.Cmd = [autoJavaLaunch.commandText];
+      }
+    } else if (containerCmd) {
       containerConfig.Cmd = containerCmd;
     }
     if (workdir) {
@@ -2533,7 +2762,8 @@ const publishProjectArchive = async (serviceId, file) => {
     const updatedService = {
       ...service,
       containerId: container.Id,
-      command: isNodeSitesMode ? null : containerCmd || null,
+      command: isNodeSitesMode || autoJavaLaunch ? null : containerCmd || null,
+      autoCommandType: autoJavaLaunch ? 'java-jar' : null,
       hasProject: true,
       updatedAt: new Date().toISOString()
     };

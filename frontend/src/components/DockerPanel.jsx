@@ -2087,7 +2087,7 @@ const DockerPanel = ({ showPageIntro = true }) => {
                 onChange={(e) => setServiceForm((p) => ({ ...p, command: e.target.value }))}
               />
               <p className="text-xs text-slate-400">
-                Deixe vazio para detectar automaticamente pelo package.json.
+                Deixe vazio para detectar automaticamente pelo package.json ou pelo .jar enviado.
               </p>
             </div>
           )}
@@ -3156,7 +3156,7 @@ const DockerPanel = ({ showPageIntro = true }) => {
                     onChange={(e) => setEditDialog(prev => ({ ...prev, commandInput: e.target.value }))}
                   />
                   <p className="text-xs text-slate-400 mt-1">
-                    Deixe vazio para detectar automaticamente pelo package.json.
+                    Deixe vazio para detectar automaticamente pelo package.json ou pelo .jar enviado.
                   </p>
                 </div>
               )}
