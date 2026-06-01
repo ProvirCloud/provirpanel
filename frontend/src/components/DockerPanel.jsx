@@ -395,16 +395,37 @@ const getFilenameFromDisposition = (disposition, fallback) => {
 
 const PROJECT_DEPLOY_PHASE_PROGRESS = {
   upload: 18,
+  process: 24,
   prepare: 32,
   extract: 45,
-  candidate: 62,
-  healthcheck: 78,
-  cleanup: 84,
-  promote: 90,
-  rollback: 94,
+  candidate: 58,
+  compile: 68,
+  healthcheck: 80,
+  cleanup: 86,
+  promote: 92,
+  rollback: 95,
   done: 100,
   error: 0
 }
+
+const PROJECT_DEPLOY_PHASE_LABELS = {
+  upload: 'Subindo arquivos',
+  response: 'Resposta do servidor',
+  process: 'Processando no servidor',
+  prepare: 'Preparando versão',
+  extract: 'Extraindo arquivos',
+  candidate: 'Subindo versão candidata',
+  compile: 'Compilando versão',
+  healthcheck: 'Testando healthcheck',
+  cleanup: 'Limpando temporários',
+  promote: 'Publicando versão',
+  rollback: 'Executando rollback',
+  done: 'Concluído',
+  error: 'Erro'
+}
+
+const getProjectDeployPhaseLabel = (phase) =>
+  PROJECT_DEPLOY_PHASE_LABELS[phase] || 'Processando'
 
 const formatShortDateTime = (value) => {
   if (!value) return '—'
@@ -1027,6 +1048,7 @@ const DockerPanel = ({ showPageIntro = true }) => {
   const progressSocket = useMemo(() => createDockerProgressSocket(), [])
   const buildSessionRef = useRef(null)
   const projectDeploySessionRef = useRef(null)
+  const projectDeployServiceRef = useRef(null)
   const completedProjectJobsRef = useRef(new Set())
 
   const templateMap = useMemo(
@@ -1371,6 +1393,7 @@ const DockerPanel = ({ showPageIntro = true }) => {
       setProjectUploadStatus((prev) => ({
         ...(prev || {}),
         status: 'success',
+        phase: 'done',
         progress: 100,
         message: message || 'Projeto publicado com sucesso.'
       }))
@@ -1382,6 +1405,7 @@ const DockerPanel = ({ showPageIntro = true }) => {
     setProjectUploadStatus((prev) => ({
       ...(prev || {}),
       status: 'error',
+      phase: 'error',
       progress: prev?.progress || 0,
       message: message || 'Falha na publicação.'
     }))
@@ -1504,6 +1528,7 @@ const DockerPanel = ({ showPageIntro = true }) => {
             {
               message: payload.message,
               phase: payload.phase || 'process',
+              progressPercent: payload.progressPercent,
               ts: payload.ts || Date.now()
             }
           ].slice(-120))
@@ -1518,13 +1543,16 @@ const DockerPanel = ({ showPageIntro = true }) => {
             return {
               ...(prev || {}),
               status: nextStatus,
-              progress: payload.phase === 'error' ? previousProgress : Math.max(previousProgress, phaseProgress),
+              phase: payload.phase || prev?.phase || 'process',
+              progress: payload.phase === 'error'
+                ? previousProgress
+                : Math.max(previousProgress, payload.progressPercent ?? phaseProgress),
               message: payload.message
             }
           })
           if (payload.phase === 'done') {
             void finishProjectDeployJob({
-              serviceId: payload.service?.id || editDialog?.id,
+              serviceId: payload.service?.id || projectDeployServiceRef.current,
               jobId: payload.jobId,
               status: 'success',
               message: payload.message || 'Projeto publicado com sucesso.',
@@ -1532,7 +1560,7 @@ const DockerPanel = ({ showPageIntro = true }) => {
             })
           } else if (payload.phase === 'error') {
             void finishProjectDeployJob({
-              serviceId: editDialog?.id,
+              serviceId: projectDeployServiceRef.current,
               jobId: payload.jobId,
               status: 'error',
               message: payload.error || payload.message || 'Falha na publicação.'
@@ -1916,7 +1944,8 @@ const DockerPanel = ({ showPageIntro = true }) => {
         setProjectUploadStatus((prev) => ({
           ...(prev || {}),
           status: 'processing',
-          progress: Math.max(prev?.progress || 0, 55),
+          phase: job.phase || prev?.phase || 'process',
+          progress: Math.max(prev?.progress || 0, job.progressPercent ?? 55),
           message: job.message || 'Processando publicação no servidor...'
         }))
       } catch (err) {
@@ -1929,6 +1958,8 @@ const DockerPanel = ({ showPageIntro = true }) => {
     if (!serviceId || !file) return false
     const progressSessionId = generateUUID()
     projectDeploySessionRef.current = progressSessionId
+    projectDeployServiceRef.current = serviceId
+    completedProjectJobsRef.current = new Set()
     setProjectDeployEvents([
       {
         message: `Preparando envio de ${file.name || 'arquivo'}...`,
@@ -1959,7 +1990,7 @@ const DockerPanel = ({ showPageIntro = true }) => {
       formData.append('nodeSiteConfig', JSON.stringify(options.nodeSiteConfig))
     }
     try {
-      setProjectUploadStatus({ status: 'uploading', progress: 0, message: 'Enviando arquivo...' })
+      setProjectUploadStatus({ status: 'uploading', phase: 'upload', progress: 0, message: 'Enviando arquivo...' })
       let response = null
       if (file.size > CHUNKED_UPLOAD_THRESHOLD_BYTES) {
         const metadata = hasEnvVars ? { envVars: options.envVars || [] } : {}
@@ -1987,6 +2018,7 @@ const DockerPanel = ({ showPageIntro = true }) => {
             setProjectUploadStatus((prev) => ({
               ...(prev || {}),
               status: progress >= 99 ? 'processing' : 'uploading',
+              phase: progress >= 99 ? 'process' : 'upload',
               progress,
               message:
                 progress >= 99
@@ -2004,6 +2036,7 @@ const DockerPanel = ({ showPageIntro = true }) => {
             setProjectUploadStatus((prev) => ({
               ...(prev || {}),
               status: total && event.loaded >= total ? 'processing' : 'uploading',
+              phase: total && event.loaded >= total ? 'process' : 'upload',
               progress,
               message:
                 total && event.loaded >= total
@@ -2020,6 +2053,7 @@ const DockerPanel = ({ showPageIntro = true }) => {
         setProjectUploadStatus((prev) => ({
           ...(prev || {}),
           status: 'processing',
+          phase: 'process',
           progress: Math.max(Math.min(prev?.progress || 0, 95), 55),
           message: response?.data?.message || 'Arquivo recebido. Publicação em andamento no servidor...'
         }))
@@ -2035,6 +2069,7 @@ const DockerPanel = ({ showPageIntro = true }) => {
       }
       setProjectUploadStatus({
         status: 'success',
+        phase: 'done',
         progress: 100,
         message: 'Projeto publicado com sucesso.'
       })
@@ -2048,6 +2083,7 @@ const DockerPanel = ({ showPageIntro = true }) => {
       setProjectUploadStatus((prev) => ({
         ...(prev || {}),
         status: 'error',
+        phase: 'error',
         progress: prev?.progress || 0,
         message
       }))
@@ -2999,6 +3035,12 @@ const DockerPanel = ({ showPageIntro = true }) => {
   const projectUploadInProgress = ['uploading', 'processing'].includes(projectUploadStatus?.status)
   const editOperationInProgress = serviceUpdateInProgress || projectUploadInProgress
   const editVersionPreview = editDialog ? buildVersionPreview(editDialog) : null
+  const latestProjectDeployEvent = projectDeployEvents[projectDeployEvents.length - 1] || null
+  const currentProjectDeployPhase =
+    projectUploadStatus?.phase || latestProjectDeployEvent?.phase || (projectUploadInProgress ? 'process' : null)
+  const currentProjectDeployLabel = currentProjectDeployPhase
+    ? getProjectDeployPhaseLabel(currentProjectDeployPhase)
+    : null
 
   return (
     <div className="zeus-docker-page space-y-6">
@@ -4222,7 +4264,7 @@ const DockerPanel = ({ showPageIntro = true }) => {
                             </>
                           )}
                           {projectUploadStatus?.status === 'uploading' && 'Enviando...'}
-                          {projectUploadStatus?.status === 'processing' && 'Processando...'}
+                          {projectUploadStatus?.status === 'processing' && (currentProjectDeployLabel || 'Processando...')}
                           {!projectUploadStatus ||
                           (projectUploadStatus?.status !== 'uploading' &&
                             projectUploadStatus?.status !== 'processing')
@@ -4240,7 +4282,7 @@ const DockerPanel = ({ showPageIntro = true }) => {
                       <div className="flex items-center justify-between">
                         <span className="text-slate-200">
                           {projectUploadStatus?.status === 'uploading' && 'Enviando...'}
-                          {projectUploadStatus?.status === 'processing' && 'Processando no servidor...'}
+                          {projectUploadStatus?.status === 'processing' && (currentProjectDeployLabel || 'Processando no servidor...')}
                           {projectUploadStatus?.status === 'success' && 'Atualizacao concluida'}
                           {projectUploadStatus?.status === 'error' && 'Falha na atualizacao'}
                           {!projectUploadStatus && 'Aguardando arquivo para enviar.'}
@@ -4258,7 +4300,7 @@ const DockerPanel = ({ showPageIntro = true }) => {
                                     second: '2-digit',
                                     hour12: false
                                   })
-                                  return `[${time}] ${event.message}`
+                                  return `[${time}] [${getProjectDeployPhaseLabel(event.phase)}] ${event.message}`
                                 })
                                 .join('\n')
                             )
@@ -4278,6 +4320,18 @@ const DockerPanel = ({ showPageIntro = true }) => {
                               className="h-2 rounded-full bg-blue-500 transition-all"
                               style={{ width: `${projectUploadStatus.progress || 0}%` }}
                             />
+                          </div>
+                        </div>
+                      )}
+                      {currentProjectDeployLabel && projectUploadStatus && (
+                        <div className="mt-3 border-t border-slate-700 pt-3">
+                          <div className="flex flex-wrap items-center justify-between gap-2">
+                            <span className="text-[10px] uppercase tracking-[0.16em] text-slate-500">
+                              Etapa atual
+                            </span>
+                            <span className="rounded-full bg-blue-500/10 px-2.5 py-1 text-[11px] font-medium text-blue-200">
+                              {currentProjectDeployLabel}
+                            </span>
                           </div>
                         </div>
                       )}
@@ -4305,6 +4359,9 @@ const DockerPanel = ({ showPageIntro = true }) => {
                                     second: '2-digit',
                                     hour12: false
                                   })}
+                                </span>
+                                <span className="shrink-0 rounded bg-slate-800 px-1.5 text-[10px] text-slate-400">
+                                  {getProjectDeployPhaseLabel(event.phase)}
                                 </span>
                                 <span className="break-all">{event.message}</span>
                               </div>

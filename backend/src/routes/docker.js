@@ -182,17 +182,36 @@ const pushBuildProgress = (progress, sessionId, message, phase = 'build') => {
   }
 };
 
+const PROJECT_DEPLOY_PHASE_PROGRESS = {
+  upload: 18,
+  process: 24,
+  prepare: 34,
+  extract: 46,
+  candidate: 58,
+  compile: 68,
+  healthcheck: 80,
+  cleanup: 86,
+  promote: 92,
+  rollback: 95,
+  done: 100,
+  error: 0
+};
+
 const pushDeploymentProgress = (progress, sessionId, message, phase = 'process', extra = {}) => {
   if (!message) return;
   if (Array.isArray(progress)) {
     progress.push(message);
   }
+  const progressPercent = Object.prototype.hasOwnProperty.call(extra, 'progressPercent')
+    ? extra.progressPercent
+    : PROJECT_DEPLOY_PHASE_PROGRESS[phase] ?? 50;
   if (progressNamespace && sessionId) {
     progressNamespace.emit('progress', {
       type: 'project-deploy',
       sessionId,
       phase,
       message,
+      progressPercent,
       ts: Date.now(),
       ...extra
     });
@@ -678,12 +697,15 @@ const sanitizeProjectDeployJob = (job = {}) => ({
   id: job.id,
   serviceId: job.serviceId,
   status: job.status,
+  phase: job.phase || 'process',
+  progressPercent: job.progressPercent ?? PROJECT_DEPLOY_PHASE_PROGRESS[job.phase] ?? 50,
   message: job.message || '',
   error: job.error || null,
   progress: Array.isArray(job.progress) ? job.progress : [],
   progressSessionId: job.progressSessionId || '',
   service: job.service ? sanitizeServiceForClient(job.service) : null,
   createdAt: job.createdAt,
+  updatedAt: job.updatedAt || null,
   startedAt: job.startedAt || null,
   finishedAt: job.finishedAt || null
 });
@@ -1315,7 +1337,13 @@ const requestHealthcheckUrl = (targetUrl, timeoutSeconds) =>
     req.end();
   });
 
-const waitForServiceHealth = async ({ serviceName, healthcheck, hostPort, onProgress = null }) => {
+const waitForServiceHealth = async ({
+  serviceName,
+  healthcheck,
+  hostPort,
+  onProgress = null,
+  onAttemptFailure = null
+}) => {
   const config = normalizeHealthcheckConfig(healthcheck);
   if (!config.enabled) {
     if (onProgress) onProgress(`Healthcheck desativado para ${serviceName}.`);
@@ -1362,6 +1390,9 @@ const waitForServiceHealth = async ({ serviceName, healthcheck, hostPort, onProg
       if (onProgress) {
         onProgress(`Healthcheck ${serviceName} falhou na tentativa ${attempt}/${config.retries}: ${err.message}`);
       }
+      if (onAttemptFailure) {
+        await onAttemptFailure(err, attempt, config.retries);
+      }
       if (attempt < config.retries) {
         await delay(config.intervalSeconds * 1000);
       }
@@ -1372,6 +1403,61 @@ const waitForServiceHealth = async ({ serviceName, healthcheck, hostPort, onProg
     `Healthcheck falhou para ${serviceName}: ${lastError?.message || 'sem resposta'}`,
     502
   );
+};
+
+const stripAnsiSequences = (value) =>
+  String(value || '').replace(/\x1B\[[0-?]*[ -/]*[@-~]/g, '');
+
+const decodeDockerLogData = (logData) => {
+  if (!logData) return '';
+  if (!Buffer.isBuffer(logData)) return stripAnsiSequences(String(logData));
+
+  let text = '';
+  let offset = 0;
+  while (offset + 8 <= logData.length) {
+    const size = logData.readUInt32BE(offset + 4);
+    const start = offset + 8;
+    const end = start + size;
+    if (!size || end > logData.length) break;
+    text += logData.slice(start, end).toString('utf8');
+    offset = end;
+  }
+  return stripAnsiSequences(text || logData.toString('utf8'));
+};
+
+const readContainerLogLines = async (containerId, tail = 40) => {
+  if (!containerId) return [];
+  try {
+    const container = dockerManager.docker.getContainer(containerId);
+    const logData = await container.logs({
+      stdout: true,
+      stderr: true,
+      tail,
+      timestamps: false
+    });
+    return decodeDockerLogData(logData)
+      .split(/\r?\n/)
+      .map((line) => line.trim())
+      .filter(Boolean);
+  } catch (err) {
+    appendServiceLog('warn', `Nao foi possivel ler logs do container ${containerId}: ${err.message}`);
+    return [];
+  }
+};
+
+const createDeploymentLogEmitter = ({ containerId, pushProgress, phase = 'compile', label = 'container' }) => {
+  const emitted = new Set();
+  return async () => {
+    const lines = await readContainerLogLines(containerId, 60);
+    const fresh = lines.filter((line) => {
+      if (emitted.has(line)) return false;
+      emitted.add(line);
+      return true;
+    });
+    fresh.slice(-6).forEach((line) => {
+      pushProgress(`${label}: ${line}`, phase);
+    });
+  };
 };
 
 const buildDockerHealthcheckConfig = (healthcheck, containerPort) => {
@@ -3708,6 +3794,30 @@ const startServiceContainerForDeployment = async ({
   return runContainerWithRetry(service.image, containerConfig, name);
 };
 
+const describeRuntimeStartStep = (service = {}, runtime = {}, stageLabel = 'versão') => {
+  const commandText = stringifyCommand(runtime.containerCmd).toLowerCase();
+  const isNodeService =
+    service.templateId === 'node-app' ||
+    service.templateId === 'node' ||
+    String(service.image || '').startsWith('node');
+  if (isNodeService && /npm\s+(install|ci)|npm run build|yarn install|pnpm install|pnpm run build/.test(commandText)) {
+    return {
+      phase: 'compile',
+      message: `Instalando dependências e compilando a ${stageLabel} dentro do container...`
+    };
+  }
+  if (isJavaRuntimeService(service) || commandText.includes('java ') || commandText.includes('-jar')) {
+    return {
+      phase: 'compile',
+      message: `Iniciando runtime Java da ${stageLabel}...`
+    };
+  }
+  return {
+    phase: 'candidate',
+    message: 'Container iniciado; aguardando aplicação responder...'
+  };
+};
+
 const rollbackToPreviousDeployment = async ({
   service,
   previousDeployment,
@@ -3825,12 +3935,22 @@ const promoteProjectDeployment = async ({
         'provirpanel.deployment.id': deployment.id
       }
     });
+    const candidateStartStep = describeRuntimeStartStep(candidateService, candidateRuntime, 'versão candidata');
+    pushProgress(candidateStartStep.message, candidateStartStep.phase);
+    const emitCandidateLogs = createDeploymentLogEmitter({
+      containerId: candidateContainer?.Id,
+      pushProgress,
+      phase: candidateStartStep.phase,
+      label: 'Logs candidato'
+    });
+    await emitCandidateLogs();
     pushProgress('Executando healthcheck na versão candidata...', 'healthcheck');
     await waitForServiceHealth({
       serviceName: `${service.name} candidato`,
       healthcheck,
       hostPort: candidatePort,
-      onProgress: (message) => pushProgress(message, 'healthcheck')
+      onProgress: (message) => pushProgress(message, 'healthcheck'),
+      onAttemptFailure: emitCandidateLogs
     });
     pushProgress('Versão candidata aprovada no healthcheck.', 'healthcheck');
   } catch (err) {
@@ -3877,12 +3997,23 @@ const promoteProjectDeployment = async ({
         'provirpanel.deployment.id': deployment.id
       }
     });
+    const finalStartStep = describeRuntimeStartStep(candidateService, finalRuntime, 'versão definitiva');
+    const finalStartPhase = finalStartStep.phase === 'candidate' ? 'promote' : finalStartStep.phase;
+    pushProgress(finalStartStep.message, finalStartPhase);
+    const emitFinalLogs = createDeploymentLogEmitter({
+      containerId: finalContainer?.Id,
+      pushProgress,
+      phase: finalStartPhase,
+      label: 'Logs definitivo'
+    });
+    await emitFinalLogs();
     pushProgress('Executando healthcheck final na porta pública...', 'healthcheck');
     await waitForServiceHealth({
       serviceName: service.name,
       healthcheck,
       hostPort: service.hostPort,
-      onProgress: (message) => pushProgress(message, 'healthcheck')
+      onProgress: (message) => pushProgress(message, 'healthcheck'),
+      onAttemptFailure: emitFinalLogs
     });
     pushProgress('Healthcheck final aprovado.', 'healthcheck');
   } catch (err) {
@@ -3952,11 +4083,23 @@ const publishProjectArchive = async (serviceId, file, options = {}) => {
   const progress = Array.isArray(options.progress) ? options.progress : [];
   const progressSessionId = String(options.progressSessionId || '').trim();
   const progressJobId = String(options.progressJobId || '').trim();
-  const pushProgress = (message, phase, extra = {}) =>
-    pushDeploymentProgress(progress, progressSessionId, message, phase, {
+  const pushProgress = (message, phase, extra = {}) => {
+    const payload = {
       ...(progressJobId ? { jobId: progressJobId } : {}),
       ...extra
-    });
+    };
+    if (typeof options.onProgressEvent === 'function') {
+      options.onProgressEvent({
+        message,
+        phase,
+        progressPercent: Object.prototype.hasOwnProperty.call(payload, 'progressPercent')
+          ? payload.progressPercent
+          : PROJECT_DEPLOY_PHASE_PROGRESS[phase] ?? 50,
+        ...payload
+      });
+    }
+    pushDeploymentProgress(progress, progressSessionId, message, phase, payload);
+  };
   const services = dockerManager.listServices();
   let service = services.find((s) => s.id === serviceId);
   if (!service) {
@@ -4114,6 +4257,8 @@ const startProjectPublishJob = ({
     id: jobId,
     serviceId,
     status: 'queued',
+    phase: 'prepare',
+    progressPercent: PROJECT_DEPLOY_PHASE_PROGRESS.prepare,
     message: 'Publicação recebida. Processamento iniciado em segundo plano.',
     progress,
     progressSessionId,
@@ -4137,8 +4282,11 @@ const startProjectPublishJob = ({
   setImmediate(async () => {
     updateJob({
       status: 'processing',
+      phase: 'process',
+      progressPercent: PROJECT_DEPLOY_PHASE_PROGRESS.process,
       message: 'Processando publicação no servidor.',
-      startedAt: new Date().toISOString()
+      startedAt: new Date().toISOString(),
+      updatedAt: new Date().toISOString()
     });
     pushDeploymentProgress(progress, progressSessionId, 'Processando publicação no servidor...', 'process', { jobId });
 
@@ -4148,20 +4296,37 @@ const startProjectPublishJob = ({
         ...options,
         progress,
         progressSessionId,
-        progressJobId: jobId
+        progressJobId: jobId,
+        onProgressEvent: (event = {}) => {
+          updateJob({
+            status: event.phase === 'done' ? 'success' : event.phase === 'error' ? 'error' : 'processing',
+            phase: event.phase || 'process',
+            progressPercent: event.progressPercent ?? PROJECT_DEPLOY_PHASE_PROGRESS[event.phase] ?? 50,
+            message: event.message || '',
+            error: event.error || null,
+            service: event.service || projectDeployJobs.get(jobId)?.service || null,
+            updatedAt: new Date().toISOString()
+          });
+        }
       });
       updateJob({
         status: 'success',
+        phase: 'done',
+        progressPercent: PROJECT_DEPLOY_PHASE_PROGRESS.done,
         message: 'Publicação concluída.',
         service: updatedService,
+        updatedAt: new Date().toISOString(),
         finishedAt: new Date().toISOString()
       });
     } catch (err) {
       const message = err?.message || 'Erro ao publicar projeto';
       updateJob({
         status: 'error',
+        phase: 'error',
+        progressPercent: PROJECT_DEPLOY_PHASE_PROGRESS.error,
         message,
         error: message,
+        updatedAt: new Date().toISOString(),
         finishedAt: new Date().toISOString()
       });
       appendServiceLog('error', `Erro no job de publicacao ${jobId}: ${message}`);
