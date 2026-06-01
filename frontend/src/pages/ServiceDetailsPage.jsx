@@ -1,0 +1,1321 @@
+import { createElement, useCallback, useEffect, useMemo, useState } from 'react'
+import { useNavigate, useParams, useSearchParams } from 'react-router-dom'
+import {
+  Activity,
+  AlertTriangle,
+  ArrowLeft,
+  BarChart3,
+  CheckCircle2,
+  Clock3,
+  Copy,
+  Cpu,
+  Database,
+  Download,
+  Edit3,
+  Globe2,
+  HardDrive,
+  History,
+  Layers,
+  Loader2,
+  Lock,
+  Network,
+  Package,
+  Play,
+  Plus,
+  RefreshCcw,
+  RotateCcw,
+  Save,
+  Search,
+  Server,
+  Settings,
+  ShieldCheck,
+  Square,
+  Terminal,
+  Trash2,
+  UploadCloud,
+  X,
+  Zap
+} from 'lucide-react'
+import {
+  serviceActivityApi,
+  serviceEnvironmentApi,
+  serviceLogsApi,
+  serviceMetricsApi,
+  servicesApi
+} from '../services/serviceDetailsApi.js'
+
+const TABS = [
+  { id: 'overview', label: 'Overview', icon: Layers },
+  { id: 'deploys', label: 'Deploys', icon: UploadCloud },
+  { id: 'environment', label: 'Environment', icon: Lock },
+  { id: 'logs', label: 'Logs', icon: Terminal },
+  { id: 'metrics', label: 'Metrics', icon: BarChart3 },
+  { id: 'activity', label: 'Activity', icon: History },
+  { id: 'settings', label: 'Settings', icon: Settings }
+]
+
+const STATUS_META = {
+  running: {
+    label: 'Running',
+    className: 'border-emerald-500/30 bg-emerald-500/10 text-emerald-200',
+    icon: CheckCircle2
+  },
+  exited: {
+    label: 'Stopped',
+    className: 'border-slate-600 bg-slate-900 text-slate-300',
+    icon: Square
+  },
+  stopped: {
+    label: 'Stopped',
+    className: 'border-slate-600 bg-slate-900 text-slate-300',
+    icon: Square
+  },
+  paused: {
+    label: 'Paused',
+    className: 'border-amber-500/30 bg-amber-500/10 text-amber-200',
+    icon: Clock3
+  },
+  unhealthy: {
+    label: 'Unhealthy',
+    className: 'border-rose-500/30 bg-rose-500/10 text-rose-200',
+    icon: AlertTriangle
+  },
+  unknown: {
+    label: 'Unknown',
+    className: 'border-slate-700 bg-slate-950 text-slate-400',
+    icon: AlertTriangle
+  }
+}
+
+const HEALTH_META = {
+  healthy: 'border-emerald-500/30 bg-emerald-500/10 text-emerald-200',
+  starting: 'border-sky-500/30 bg-sky-500/10 text-sky-200',
+  unhealthy: 'border-rose-500/30 bg-rose-500/10 text-rose-200'
+}
+
+const CHANGE_TYPE_OPTIONS = [
+  { value: 'fix', label: 'Correção' },
+  { value: 'content', label: 'Conteúdo' },
+  { value: 'feature', label: 'Funcionalidade' },
+  { value: 'security', label: 'Segurança' },
+  { value: 'maintenance', label: 'Manutenção' }
+]
+
+const formatDateTime = (value) => {
+  if (!value) return '-'
+  const date = new Date(value)
+  if (Number.isNaN(date.getTime())) return '-'
+  return new Intl.DateTimeFormat('pt-BR', {
+    day: '2-digit',
+    month: '2-digit',
+    year: '2-digit',
+    hour: '2-digit',
+    minute: '2-digit'
+  }).format(date)
+}
+
+const formatBytes = (value) => {
+  const number = Number(value || 0)
+  if (!number) return '0 B'
+  const units = ['B', 'KB', 'MB', 'GB', 'TB']
+  const index = Math.min(units.length - 1, Math.floor(Math.log(number) / Math.log(1024)))
+  return `${(number / 1024 ** index).toFixed(index === 0 ? 0 : 1)} ${units[index]}`
+}
+
+const formatUptime = (seconds) => {
+  const value = Number(seconds || 0)
+  if (!value) return '-'
+  const days = Math.floor(value / 86400)
+  const hours = Math.floor((value % 86400) / 3600)
+  const minutes = Math.floor((value % 3600) / 60)
+  if (days) return `${days}d ${hours}h`
+  if (hours) return `${hours}h ${minutes}m`
+  return `${minutes || 1}m`
+}
+
+const normalizeRuntimeState = (service = {}) => {
+  const raw = String(service.containerStatus || service.runtimeState || service.status || '').toLowerCase()
+  if (raw.includes('unhealthy')) return 'unhealthy'
+  if (raw.includes('running') || raw === 'up') return 'running'
+  if (raw.includes('exited') || raw.includes('stopped')) return 'stopped'
+  if (raw.includes('paused')) return 'paused'
+  return raw || 'unknown'
+}
+
+const resolveEnvironmentLabel = (service = {}) => {
+  const explicit = service.environment || service.env || service.zone
+  if (explicit) return String(explicit).toUpperCase()
+  const envVar = (service.envVars || []).find((env) => ['APP_ENV', 'NODE_ENV', 'ENV', 'STAGE'].includes(env.key))
+  if (envVar?.value && envVar.value !== '******') return String(envVar.value).toUpperCase()
+  return 'PROD'
+}
+
+const resolvePublicUrl = (service = {}) =>
+  service.publicUrl || service.domain || service.externalUrl || service.url || ''
+
+const getLastDeployment = (service = {}) => {
+  const deployments = Array.isArray(service.deployments) ? service.deployments : []
+  return deployments
+    .slice()
+    .sort((a, b) => new Date(b.finishedAt || b.updatedAt || b.createdAt || 0) - new Date(a.finishedAt || a.updatedAt || a.createdAt || 0))[0]
+}
+
+const cloneEnvRows = (rows = []) =>
+  rows.map((env) => ({
+    key: env.key || '',
+    value: env.value ?? '',
+    secret: Boolean(env.secret)
+  }))
+
+const fieldClass = 'rounded-lg border border-slate-700 bg-slate-950 px-3 py-2 text-sm text-white outline-none transition placeholder:text-slate-600 focus:border-blue-500/60'
+const smallButtonClass = 'inline-flex items-center justify-center gap-2 rounded-lg border border-slate-700 bg-slate-950 px-3 py-2 text-xs font-medium text-slate-200 transition hover:border-blue-500/40 hover:text-white disabled:cursor-not-allowed disabled:opacity-50'
+const primaryButtonClass = 'inline-flex items-center justify-center gap-2 rounded-lg border border-blue-500/40 bg-blue-600 px-3 py-2 text-xs font-semibold text-white transition hover:bg-blue-500 disabled:cursor-not-allowed disabled:opacity-50'
+
+const ServiceStatusBadge = ({ service }) => {
+  const state = normalizeRuntimeState(service)
+  const meta = STATUS_META[state] || STATUS_META.unknown
+  const Icon = meta.icon
+  return (
+    <span className={`inline-flex items-center gap-1.5 rounded-full border px-2.5 py-1 text-xs font-medium ${meta.className}`}>
+      <Icon className="h-3.5 w-3.5" />
+      {meta.label}
+    </span>
+  )
+}
+
+const HealthBadge = ({ service }) => {
+  const health = service?.healthStatus || (service?.healthcheck?.enabled ? 'configured' : 'not configured')
+  const className = HEALTH_META[health] || 'border-slate-700 bg-slate-950 text-slate-400'
+  return (
+    <span className={`inline-flex items-center gap-1.5 rounded-full border px-2.5 py-1 text-xs font-medium ${className}`}>
+      <ShieldCheck className="h-3.5 w-3.5" />
+      {health}
+    </span>
+  )
+}
+
+const HeaderButton = ({ children, icon: Icon, variant = 'default', ...props }) => {
+  const variantClass = variant === 'primary'
+    ? primaryButtonClass
+    : variant === 'danger'
+      ? 'inline-flex items-center justify-center gap-2 rounded-lg border border-rose-500/30 bg-rose-500/10 px-3 py-2 text-xs font-medium text-rose-200 transition hover:bg-rose-500/20 disabled:cursor-not-allowed disabled:opacity-50'
+      : smallButtonClass
+  return (
+    <button className={variantClass} type="button" {...props}>
+      {Icon ? <Icon className="h-4 w-4" /> : null}
+      {children}
+    </button>
+  )
+}
+
+const ServiceHeader = ({ service, actionState, onBack, onDeploy, onEdit, onRestart, onStop, onStart }) => {
+  const runtime = normalizeRuntimeState(service)
+  const isRunning = runtime === 'running'
+  const publicUrl = resolvePublicUrl(service)
+  const lastDeployment = getLastDeployment(service)
+  return (
+    <section className="rounded-2xl border border-slate-800 bg-slate-950/80 p-4 shadow-2xl shadow-slate-950/20">
+      <div className="flex flex-col gap-4 lg:flex-row lg:items-start lg:justify-between">
+        <div className="min-w-0">
+          <button
+            type="button"
+            className="mb-3 inline-flex items-center gap-2 text-xs font-medium text-slate-400 hover:text-white"
+            onClick={onBack}
+          >
+            <ArrowLeft className="h-4 w-4" />
+            Container Service
+          </button>
+          <div className="flex flex-wrap items-center gap-2">
+            <h1 className="truncate text-2xl font-semibold text-white">{service.name}</h1>
+            <ServiceStatusBadge service={service} />
+            <HealthBadge service={service} />
+            <span className="rounded-full border border-slate-700 bg-slate-900 px-2.5 py-1 text-xs text-slate-300">
+              {resolveEnvironmentLabel(service)}
+            </span>
+          </div>
+          <div className="mt-3 grid gap-2 text-xs text-slate-400 sm:grid-cols-2 xl:grid-cols-4">
+            <span className="inline-flex min-w-0 items-center gap-2">
+              <Package className="h-4 w-4 shrink-0 text-slate-500" />
+              <span className="truncate" title={service.image}>{service.image || 'custom-image'}</span>
+            </span>
+            <span className="inline-flex items-center gap-2">
+              <Network className="h-4 w-4 text-slate-500" />
+              {service.hostPort || 'auto'} -&gt; {service.containerPort || '-'}
+            </span>
+            <span className="inline-flex min-w-0 items-center gap-2">
+              <Globe2 className="h-4 w-4 shrink-0 text-slate-500" />
+              {publicUrl ? (
+                <a className="truncate text-blue-200 hover:text-blue-100" href={publicUrl} target="_blank" rel="noreferrer">
+                  {publicUrl}
+                </a>
+              ) : (
+                <span>sem URL pública</span>
+              )}
+            </span>
+            <span className="inline-flex items-center gap-2">
+              <Clock3 className="h-4 w-4 text-slate-500" />
+              {lastDeployment ? formatDateTime(lastDeployment.finishedAt || lastDeployment.createdAt) : formatDateTime(service.updatedAt || service.createdAt)}
+            </span>
+          </div>
+        </div>
+        <div className="flex flex-wrap gap-2">
+          <HeaderButton icon={UploadCloud} variant="primary" onClick={onDeploy}>Deploy</HeaderButton>
+          <HeaderButton icon={RefreshCcw} onClick={onRestart} disabled={!service.containerId || actionState}>
+            Restart
+          </HeaderButton>
+          {isRunning ? (
+            <HeaderButton icon={Square} variant="danger" onClick={onStop} disabled={!service.containerId || actionState}>
+              Stop
+            </HeaderButton>
+          ) : (
+            <HeaderButton icon={Play} onClick={onStart} disabled={!service.containerId || actionState}>
+              Start
+            </HeaderButton>
+          )}
+          <HeaderButton icon={Edit3} onClick={onEdit}>Edit config</HeaderButton>
+        </div>
+      </div>
+      {actionState ? (
+        <div className="mt-4 inline-flex items-center gap-2 rounded-lg border border-blue-500/30 bg-blue-500/10 px-3 py-2 text-xs text-blue-100">
+          <Loader2 className="h-4 w-4 animate-spin" />
+          {actionState}
+        </div>
+      ) : null}
+    </section>
+  )
+}
+
+const SummaryCard = ({ icon, label, value, detail, tone = 'slate' }) => {
+  const toneClass = {
+    slate: 'border-slate-800 bg-slate-950/70 text-slate-300',
+    green: 'border-emerald-500/20 bg-emerald-500/10 text-emerald-200',
+    amber: 'border-amber-500/20 bg-amber-500/10 text-amber-200',
+    rose: 'border-rose-500/20 bg-rose-500/10 text-rose-200',
+    blue: 'border-blue-500/20 bg-blue-500/10 text-blue-200'
+  }[tone]
+  return (
+    <div className={`rounded-xl border p-3 ${toneClass}`}>
+      <div className="flex items-center justify-between gap-3">
+        <span className="text-xs uppercase text-slate-500">{label}</span>
+        {icon ? createElement(icon, { className: 'h-4 w-4 text-slate-500' }) : null}
+      </div>
+      <p className="mt-2 text-xl font-semibold text-white">{value}</p>
+      <p className="mt-1 truncate text-xs text-slate-500">{detail}</p>
+    </div>
+  )
+}
+
+const ServiceSummaryCards = ({ service, metrics }) => {
+  const current = metrics?.current || {}
+  const lastDeployment = getLastDeployment(service)
+  const recentErrors = (service.deployments || []).filter((deployment) => deployment.status === 'failed').length
+  return (
+    <section className="grid gap-3 md:grid-cols-2 xl:grid-cols-7">
+      <SummaryCard icon={Cpu} label="CPU" value={`${current.cpuPercent ?? 0}%`} detail="uso atual" tone="blue" />
+      <SummaryCard icon={Database} label="Memória" value={formatBytes(current.memoryUsage)} detail={`${current.memoryPercent ?? 0}% do limite`} />
+      <SummaryCard icon={Activity} label="Req/min" value={current.requestsPerMinute ?? '-'} detail="aguardando métrica HTTP" />
+      <SummaryCard icon={Clock3} label="Uptime" value={formatUptime(current.uptimeSeconds)} detail={`${current.restartCount ?? 0} restart(s)`} tone="green" />
+      <SummaryCard icon={UploadCloud} label="Último deploy" value={lastDeployment?.versionLabel || lastDeployment?.status || '-'} detail={formatDateTime(lastDeployment?.finishedAt || lastDeployment?.createdAt)} />
+      <SummaryCard icon={AlertTriangle} label="Erros" value={recentErrors} detail="deploys com falha" tone={recentErrors ? 'rose' : 'slate'} />
+      <SummaryCard icon={Zap} label="Custo" value={service.estimatedCost || '-'} detail="não configurado" tone="amber" />
+    </section>
+  )
+}
+
+const ServiceTabs = ({ activeTab, onChange }) => (
+  <nav className="flex gap-1 overflow-x-auto rounded-xl border border-slate-800 bg-slate-950/70 p-1">
+    {TABS.map((tab) => {
+      const Icon = tab.icon
+      const active = tab.id === activeTab
+      return (
+        <button
+          key={tab.id}
+          type="button"
+          className={`inline-flex shrink-0 items-center gap-2 rounded-lg px-3 py-2 text-sm transition ${
+            active ? 'bg-blue-600 text-white' : 'text-slate-400 hover:bg-slate-900 hover:text-white'
+          }`}
+          onClick={() => onChange(tab.id)}
+        >
+          <Icon className="h-4 w-4" />
+          {tab.label}
+        </button>
+      )
+    })}
+  </nav>
+)
+
+const Panel = ({ title, icon: Icon, actions, children }) => (
+  <section className="rounded-xl border border-slate-800 bg-slate-950/70 p-4">
+    <div className="mb-4 flex flex-wrap items-center justify-between gap-3">
+      <h2 className="inline-flex items-center gap-2 text-sm font-semibold text-white">
+        {Icon ? <Icon className="h-4 w-4 text-blue-300" /> : null}
+        {title}
+      </h2>
+      {actions}
+    </div>
+    {children}
+  </section>
+)
+
+const InfoRow = ({ label, value, copyable = false }) => {
+  const displayValue = value || '-'
+  return (
+    <div className="flex min-w-0 items-center justify-between gap-3 border-b border-slate-900 py-2 last:border-0">
+      <span className="text-xs text-slate-500">{label}</span>
+      <span className="flex min-w-0 items-center gap-2 text-right text-xs text-slate-200">
+        <span className="truncate" title={String(displayValue)}>{displayValue}</span>
+        {copyable && value ? (
+          <button
+            type="button"
+            className="text-slate-500 hover:text-white"
+            onClick={() => navigator.clipboard?.writeText(String(value))}
+            title="Copiar"
+          >
+            <Copy className="h-3.5 w-3.5" />
+          </button>
+        ) : null}
+      </span>
+    </div>
+  )
+}
+
+const EnvPreview = ({ envVars = [] }) => {
+  if (!envVars.length) {
+    return <p className="text-sm text-slate-500">Nenhuma variável registrada.</p>
+  }
+  return (
+    <div className="grid gap-2 sm:grid-cols-2">
+      {envVars.slice(0, 8).map((env) => (
+        <div key={env.key} className="min-w-0 rounded-lg border border-slate-800 bg-slate-900/50 px-3 py-2">
+          <p className="truncate text-xs font-medium text-slate-200">{env.key}</p>
+          <p className="mt-1 truncate text-xs text-slate-500">{env.secret ? 'secret masked' : env.value || '-'}</p>
+        </div>
+      ))}
+    </div>
+  )
+}
+
+const ActivityTimeline = ({ events = [] }) => {
+  if (!events.length) {
+    return <p className="text-sm text-slate-500">Nenhum evento registrado.</p>
+  }
+  return (
+    <div className="space-y-3">
+      {events.map((event) => (
+        <div key={event.id} className="flex gap-3">
+          <span className={`mt-1 h-2.5 w-2.5 rounded-full ${
+            event.level === 'error'
+              ? 'bg-rose-400'
+              : event.level === 'warn'
+                ? 'bg-amber-300'
+                : event.level === 'success'
+                  ? 'bg-emerald-300'
+                  : 'bg-blue-300'
+          }`} />
+          <div className="min-w-0">
+            <div className="flex flex-wrap items-center gap-2">
+              <p className="text-sm font-medium text-white">{event.title}</p>
+              <span className="text-xs text-slate-500">{formatDateTime(event.createdAt)}</span>
+            </div>
+            <p className="mt-1 text-sm text-slate-400">{event.message}</p>
+            <p className="mt-1 text-xs text-slate-600">{event.actor}</p>
+          </div>
+        </div>
+      ))}
+    </div>
+  )
+}
+
+const ServiceOverviewTab = ({ service, detail, activity }) => {
+  const inspect = detail?.inspect || {}
+  return (
+    <div className="grid gap-4 xl:grid-cols-[1.2fr_0.8fr]">
+      <Panel title="Container" icon={Server}>
+        <div className="grid gap-4 md:grid-cols-2">
+          <div>
+            <InfoRow label="ID do serviço" value={service.id} copyable />
+            <InfoRow label="ID do container" value={service.containerId} copyable />
+            <InfoRow label="Imagem" value={service.image} copyable />
+            <InfoRow label="Template" value={service.templateId || '-'} />
+            <InfoRow label="Status Docker" value={service.containerStatus || inspect.State?.Status || '-'} />
+            <InfoRow label="Healthcheck" value={service.healthStatus || (service.healthcheck?.enabled ? 'configured' : 'not configured')} />
+          </div>
+          <div>
+            <InfoRow label="Porta host" value={service.hostPort || 'auto'} />
+            <InfoRow label="Porta container" value={service.containerPort} />
+            <InfoRow label="Network" value={service.networkName || 'bridge'} />
+            <InfoRow label="Bind local" value={service.bindLocalOnly ? 'sim' : 'não'} />
+            <InfoRow label="Criado em" value={formatDateTime(service.createdAt)} />
+            <InfoRow label="Atualizado em" value={formatDateTime(service.updatedAt)} />
+          </div>
+        </div>
+      </Panel>
+      <Panel title="Eventos recentes" icon={History}>
+        <ActivityTimeline events={activity.slice(0, 6)} />
+      </Panel>
+      <Panel title="Volumes" icon={HardDrive}>
+        {service.volumes?.length ? (
+          <div className="space-y-2">
+            {service.volumes.map((volume, index) => (
+              <div key={`${volume.hostPath}-${index}`} className="rounded-lg border border-slate-800 bg-slate-900/40 px-3 py-2 text-xs">
+                <p className="truncate text-slate-200">{volume.hostPath || '-'}</p>
+                <p className="mt-1 truncate text-slate-500">-&gt; {volume.containerPath || '-'}</p>
+              </div>
+            ))}
+          </div>
+        ) : (
+          <p className="text-sm text-slate-500">Nenhum volume configurado.</p>
+        )}
+      </Panel>
+      <Panel title="Environment masked" icon={Lock}>
+        <EnvPreview envVars={service.envVars || []} />
+      </Panel>
+    </div>
+  )
+}
+
+const DeployHistory = ({ service, busyVersionId, onRollback, onDownload, onRemove }) => {
+  const deployments = Array.isArray(service.deployments) ? service.deployments : []
+  if (!deployments.length) {
+    return <p className="text-sm text-slate-500">Nenhuma versão publicada registrada.</p>
+  }
+  return (
+    <div className="overflow-x-auto">
+      <table className="min-w-full text-left text-sm">
+        <thead className="text-xs uppercase text-slate-500">
+          <tr>
+            <th className="px-3 py-2">Versão</th>
+            <th className="px-3 py-2">Status</th>
+            <th className="px-3 py-2">Arquivo</th>
+            <th className="px-3 py-2">Publicado</th>
+            <th className="px-3 py-2 text-right">Ações</th>
+          </tr>
+        </thead>
+        <tbody>
+          {deployments.map((deployment) => {
+            const active = deployment.id === service.activeDeploymentId || deployment.status === 'active'
+            const busy = busyVersionId === deployment.id
+            return (
+              <tr key={deployment.id} className="border-t border-slate-800">
+                <td className="px-3 py-3 text-white">{deployment.versionLabel || deployment.id}</td>
+                <td className="px-3 py-3">
+                  <span className={`rounded-full border px-2 py-1 text-xs ${
+                    deployment.status === 'failed'
+                      ? 'border-rose-500/30 bg-rose-500/10 text-rose-200'
+                      : active
+                        ? 'border-emerald-500/30 bg-emerald-500/10 text-emerald-200'
+                        : 'border-slate-700 bg-slate-900 text-slate-300'
+                  }`}>
+                    {active ? 'active' : deployment.status || 'available'}
+                  </span>
+                </td>
+                <td className="max-w-xs truncate px-3 py-3 text-slate-400">{deployment.archiveName || deployment.projectDir || '-'}</td>
+                <td className="px-3 py-3 text-slate-400">{formatDateTime(deployment.finishedAt || deployment.createdAt)}</td>
+                <td className="px-3 py-3">
+                  <div className="flex justify-end gap-2">
+                    <button className={smallButtonClass} type="button" onClick={() => onDownload(deployment)} disabled={busy}>
+                      <Download className="h-4 w-4" />
+                      Baixar
+                    </button>
+                    <button className={smallButtonClass} type="button" onClick={() => onRollback(deployment)} disabled={active || busy}>
+                      <RotateCcw className="h-4 w-4" />
+                      Rollback
+                    </button>
+                    <button className="inline-flex items-center gap-2 rounded-lg border border-rose-500/30 bg-rose-500/10 px-3 py-2 text-xs text-rose-200 hover:bg-rose-500/20 disabled:cursor-not-allowed disabled:opacity-50" type="button" onClick={() => onRemove(deployment)} disabled={active || busy}>
+                      <Trash2 className="h-4 w-4" />
+                      Remover
+                    </button>
+                  </div>
+                </td>
+              </tr>
+            )
+          })}
+        </tbody>
+      </table>
+    </div>
+  )
+}
+
+const ServiceDeploysTab = ({ service, onReload }) => {
+  const [file, setFile] = useState(null)
+  const [versionMode, setVersionMode] = useState('auto')
+  const [versionAppVersion, setVersionAppVersion] = useState('')
+  const [versionBuildNumber, setVersionBuildNumber] = useState('')
+  const [versionChangeType, setVersionChangeType] = useState('fix')
+  const [progress, setProgress] = useState(null)
+  const [error, setError] = useState('')
+  const [busyVersionId, setBusyVersionId] = useState('')
+
+  const versionMetadata = useMemo(() => ({
+    mode: versionMode,
+    appVersion: versionAppVersion,
+    buildNumber: versionBuildNumber,
+    changeType: versionChangeType
+  }), [versionMode, versionAppVersion, versionBuildNumber, versionChangeType])
+
+  const monitorJob = useCallback(async (jobId) => {
+    if (!jobId) return
+    let keepPolling = true
+    while (keepPolling) {
+      await new Promise((resolve) => setTimeout(resolve, 2200))
+      const payload = await servicesApi.getDeployJob(service.id, jobId)
+      const job = payload.job || payload
+      setProgress({
+        status: job.status,
+        phase: job.phase,
+        progress: job.progressPercent ?? 80,
+        message: job.message || 'Publicação em andamento...',
+        events: job.progress || []
+      })
+      keepPolling = ['queued', 'running', 'processing'].includes(job.status)
+      if (job.status === 'success' || job.status === 'completed') {
+        setProgress({
+          status: 'success',
+          phase: 'done',
+          progress: 100,
+          message: 'Versão publicada com sucesso.',
+          events: job.progress || []
+        })
+        await onReload()
+        break
+      }
+      if (job.status === 'error' || job.status === 'failed') {
+        setError(job.error || job.message || 'Falha na publicação')
+        break
+      }
+    }
+  }, [onReload, service.id])
+
+  const handleDeploy = async () => {
+    setError('')
+    if (!file) {
+      setError('Selecione o pacote da versão.')
+      return
+    }
+    try {
+      const progressSessionId = `${service.id}-${Date.now()}`
+      const response = await servicesApi.deployProjectArchive(
+        service.id,
+        {
+          file,
+          progressSessionId,
+          healthcheck: service.healthcheck,
+          autoRollback: service.autoRollback ?? true,
+          versionMetadata,
+          nodeServiceMode: service.nodeServiceMode,
+          nodeSiteConfig: service.nodeSiteConfig
+        },
+        setProgress
+      )
+      const jobId = response.data?.jobId || response.data?.job?.id
+      if (response.status === 202 || response.data?.accepted) {
+        setProgress((current) => ({
+          ...(current || {}),
+          status: 'processing',
+          phase: 'process',
+          progress: Math.max(current?.progress || 0, 55),
+          message: response.data?.message || 'Publicação em andamento no servidor...'
+        }))
+        await monitorJob(jobId)
+        return
+      }
+      setProgress({
+        status: 'success',
+        phase: 'done',
+        progress: 100,
+        message: 'Versão publicada com sucesso.',
+        events: response.data?.progress || []
+      })
+      setFile(null)
+      await onReload()
+    } catch (err) {
+      setError(err.response?.data?.message || err.message || 'Falha na publicação')
+      setProgress((current) => ({
+        ...(current || {}),
+        status: 'error',
+        phase: 'error',
+        message: err.response?.data?.message || err.message || 'Falha na publicação'
+      }))
+    }
+  }
+
+  const handleRollback = async (deployment) => {
+    setBusyVersionId(deployment.id)
+    try {
+      await servicesApi.rollback(service.id, deployment.id)
+      await onReload()
+    } finally {
+      setBusyVersionId('')
+    }
+  }
+
+  const handleDownload = async (deployment) => {
+    setBusyVersionId(deployment.id)
+    try {
+      const { blob, filename } = await servicesApi.downloadVersion(service.id, deployment)
+      const url = window.URL.createObjectURL(blob)
+      const link = document.createElement('a')
+      link.href = url
+      link.download = filename
+      link.click()
+      window.URL.revokeObjectURL(url)
+    } finally {
+      setBusyVersionId('')
+    }
+  }
+
+  const handleRemove = async (deployment) => {
+    if (!window.confirm(`Remover a versão ${deployment.versionLabel || deployment.id}?`)) return
+    setBusyVersionId(deployment.id)
+    try {
+      await servicesApi.removeVersion(service.id, deployment.id)
+      await onReload()
+    } finally {
+      setBusyVersionId('')
+    }
+  }
+
+  return (
+    <div className="grid gap-4 xl:grid-cols-[0.9fr_1.1fr]">
+      <Panel title="Publicar nova versão" icon={UploadCloud}>
+        <div className="space-y-4">
+          <label className="block">
+            <span className="mb-2 block text-xs text-slate-500">Arquivo da versão</span>
+            <input
+              className="block w-full rounded-lg border border-dashed border-slate-700 bg-slate-950 p-3 text-sm text-slate-300 file:mr-3 file:rounded-md file:border-0 file:bg-blue-600 file:px-3 file:py-2 file:text-xs file:font-medium file:text-white"
+              type="file"
+              onChange={(event) => setFile(event.target.files?.[0] || null)}
+            />
+          </label>
+          <div className="grid gap-3 sm:grid-cols-2">
+            <label className="block">
+              <span className="mb-2 block text-xs text-slate-500">Modo de versão</span>
+              <select className={fieldClass} value={versionMode} onChange={(event) => setVersionMode(event.target.value)}>
+                <option value="auto">Gerar automaticamente</option>
+                <option value="manual">Informar versão</option>
+              </select>
+            </label>
+            <label className="block">
+              <span className="mb-2 block text-xs text-slate-500">Tipo</span>
+              <select className={fieldClass} value={versionChangeType} onChange={(event) => setVersionChangeType(event.target.value)}>
+                {CHANGE_TYPE_OPTIONS.map((option) => (
+                  <option key={option.value} value={option.value}>{option.label}</option>
+                ))}
+              </select>
+            </label>
+            <label className="block">
+              <span className="mb-2 block text-xs text-slate-500">Versão do app</span>
+              <input className={fieldClass} value={versionAppVersion} onChange={(event) => setVersionAppVersion(event.target.value)} placeholder="ex: 1.8.0" />
+            </label>
+            <label className="block">
+              <span className="mb-2 block text-xs text-slate-500">Build</span>
+              <input className={fieldClass} value={versionBuildNumber} onChange={(event) => setVersionBuildNumber(event.target.value)} placeholder="ex: 42" />
+            </label>
+          </div>
+          <div className="rounded-lg border border-slate-800 bg-slate-900/40 px-3 py-2 text-xs text-slate-400">
+            Healthcheck: {service.healthcheck?.enabled ? `${service.healthcheck.target} / ${service.healthcheck.retries} tentativa(s)` : 'não configurado'}.
+            Rollback automático: {service.autoRollback === false ? 'desativado' : 'ativado'}.
+          </div>
+          <button className={primaryButtonClass} type="button" onClick={handleDeploy} disabled={progress?.status === 'uploading' || progress?.status === 'processing'}>
+            <UploadCloud className="h-4 w-4" />
+            Publicar versão
+          </button>
+          {progress ? (
+            <div className="rounded-lg border border-blue-500/20 bg-blue-500/10 p-3">
+              <div className="flex items-center justify-between gap-3 text-xs text-blue-100">
+                <span>{progress.message || 'Processando...'}</span>
+                <span>{progress.progress ?? 0}%</span>
+              </div>
+              <div className="mt-2 h-2 overflow-hidden rounded-full bg-slate-900">
+                <div className="h-full rounded-full bg-blue-500" style={{ width: `${Math.min(100, progress.progress || 0)}%` }} />
+              </div>
+              {progress.events?.length ? (
+                <div className="mt-3 max-h-36 overflow-auto rounded bg-slate-950 p-2 font-mono text-[11px] text-slate-400">
+                  {progress.events.slice(-8).map((event, index) => (
+                    <p key={`${event}-${index}`}>{typeof event === 'string' ? event : event.message || JSON.stringify(event)}</p>
+                  ))}
+                </div>
+              ) : null}
+            </div>
+          ) : null}
+          {error ? <p className="rounded-lg border border-rose-500/30 bg-rose-500/10 px-3 py-2 text-sm text-rose-200">{error}</p> : null}
+        </div>
+      </Panel>
+      <Panel title="Versões publicadas" icon={History}>
+        <DeployHistory
+          service={service}
+          busyVersionId={busyVersionId}
+          onRollback={handleRollback}
+          onDownload={handleDownload}
+          onRemove={handleRemove}
+        />
+      </Panel>
+    </div>
+  )
+}
+
+const EnvVariablesEditor = ({ rows, onChange }) => {
+  const updateRow = (index, patch) => {
+    onChange(rows.map((row, rowIndex) => (rowIndex === index ? { ...row, ...patch } : row)))
+  }
+  const removeRow = (index) => {
+    onChange(rows.filter((_, rowIndex) => rowIndex !== index))
+  }
+  return (
+    <div className="space-y-3">
+      {rows.map((row, index) => (
+        <div key={`${row.key}-${index}`} className="grid gap-2 rounded-lg border border-slate-800 bg-slate-900/40 p-3 md:grid-cols-[1fr_1fr_auto_auto]">
+          <input className={fieldClass} value={row.key} onChange={(event) => updateRow(index, { key: event.target.value })} placeholder="KEY" />
+          <input className={fieldClass} value={row.value} type={row.secret ? 'password' : 'text'} onChange={(event) => updateRow(index, { value: event.target.value })} placeholder="value" />
+          <label className="inline-flex items-center gap-2 rounded-lg border border-slate-700 bg-slate-950 px-3 py-2 text-xs text-slate-300">
+            <input type="checkbox" checked={row.secret} onChange={(event) => updateRow(index, { secret: event.target.checked })} />
+            Secret
+          </label>
+          <button className="inline-flex items-center justify-center rounded-lg border border-rose-500/30 bg-rose-500/10 px-3 py-2 text-rose-200 hover:bg-rose-500/20" type="button" onClick={() => removeRow(index)}>
+            <Trash2 className="h-4 w-4" />
+          </button>
+        </div>
+      ))}
+      <button className={smallButtonClass} type="button" onClick={() => onChange([...rows, { key: '', value: '', secret: false }])}>
+        <Plus className="h-4 w-4" />
+        Adicionar variável
+      </button>
+    </div>
+  )
+}
+
+const ServiceEnvironmentTab = ({ service, envRows, setEnvRows, onReload }) => {
+  const [saving, setSaving] = useState('')
+  const [message, setMessage] = useState('')
+
+  const saveEnv = async (apply) => {
+    setSaving(apply ? 'apply' : 'save')
+    setMessage('')
+    try {
+      const cleanRows = envRows
+        .map((row) => ({ key: row.key.trim(), value: row.value, secret: Boolean(row.secret) }))
+        .filter((row) => row.key)
+      await serviceEnvironmentApi.upsert(service.id, cleanRows, { apply })
+      setMessage(apply ? 'ENV aplicada ao serviço.' : 'ENV salva como configuração pendente.')
+      await onReload()
+    } catch (err) {
+      setMessage(err.response?.data?.message || err.message || 'Falha ao salvar ENV')
+    } finally {
+      setSaving('')
+    }
+  }
+
+  return (
+    <Panel
+      title="Variáveis de ambiente"
+      icon={Lock}
+      actions={
+        <div className="flex flex-wrap gap-2">
+          <button className={smallButtonClass} type="button" onClick={() => setEnvRows(cloneEnvRows(service.envVars || []))}>
+            <X className="h-4 w-4" />
+            Descartar
+          </button>
+          <button className={smallButtonClass} type="button" onClick={() => saveEnv(false)} disabled={Boolean(saving)}>
+            <Save className="h-4 w-4" />
+            Salvar
+          </button>
+          <button className={primaryButtonClass} type="button" onClick={() => saveEnv(true)} disabled={Boolean(saving)}>
+            {saving === 'apply' ? <Loader2 className="h-4 w-4 animate-spin" /> : <Zap className="h-4 w-4" />}
+            Aplicar
+          </button>
+        </div>
+      }
+    >
+      <EnvVariablesEditor rows={envRows} onChange={setEnvRows} />
+      {message ? <p className="mt-3 rounded-lg border border-slate-800 bg-slate-900 px-3 py-2 text-sm text-slate-300">{message}</p> : null}
+    </Panel>
+  )
+}
+
+const LogsViewer = ({ logs, loading }) => {
+  if (loading) {
+    return (
+      <div className="flex h-80 items-center justify-center rounded-lg bg-slate-950 font-mono text-sm text-slate-500">
+        <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+        Carregando logs...
+      </div>
+    )
+  }
+  return (
+    <div className="h-[520px] overflow-auto rounded-lg border border-slate-800 bg-black p-3 font-mono text-xs leading-5 text-slate-300">
+      {logs?.entries?.length ? logs.entries.map((entry) => (
+        <div key={entry.id} className="grid gap-2 border-b border-white/5 py-1 md:grid-cols-[170px_60px_1fr]">
+          <span className="text-slate-600">{entry.timestamp || '-'}</span>
+          <span className={
+            entry.level === 'error'
+              ? 'text-rose-300'
+              : entry.level === 'warn'
+                ? 'text-amber-300'
+                : 'text-emerald-300'
+          }>
+            {entry.level}
+          </span>
+          <span className="whitespace-pre-wrap break-words">{entry.message}</span>
+        </div>
+      )) : <p className="text-slate-600">Sem logs para os filtros atuais.</p>}
+    </div>
+  )
+}
+
+const ServiceLogsTab = ({ service }) => {
+  const [filters, setFilters] = useState({ tail: 300, level: 'all', search: '' })
+  const [logs, setLogs] = useState({ entries: [] })
+  const [loading, setLoading] = useState(false)
+  const [autoRefresh, setAutoRefresh] = useState(false)
+
+  const loadLogs = useCallback(async () => {
+    setLoading(true)
+    try {
+      const payload = await serviceLogsApi.getLogs(service.id, filters)
+      setLogs(payload)
+    } finally {
+      setLoading(false)
+    }
+  }, [filters, service.id])
+
+  useEffect(() => {
+    loadLogs()
+  }, [loadLogs])
+
+  useEffect(() => {
+    if (!autoRefresh) return undefined
+    const timer = window.setInterval(loadLogs, 5000)
+    return () => window.clearInterval(timer)
+  }, [autoRefresh, loadLogs])
+
+  return (
+    <Panel
+      title="Logs"
+      icon={Terminal}
+      actions={
+        <div className="flex flex-wrap gap-2">
+          <label className="inline-flex items-center gap-2 rounded-lg border border-slate-700 bg-slate-950 px-3 py-2 text-xs text-slate-300">
+            <input type="checkbox" checked={autoRefresh} onChange={(event) => setAutoRefresh(event.target.checked)} />
+            Auto-refresh
+          </label>
+          <button className={smallButtonClass} type="button" onClick={loadLogs}>
+            <RefreshCcw className="h-4 w-4" />
+            Refresh
+          </button>
+        </div>
+      }
+    >
+      <div className="mb-3 grid gap-2 md:grid-cols-[140px_140px_1fr]">
+        <select className={fieldClass} value={filters.tail} onChange={(event) => setFilters((current) => ({ ...current, tail: Number(event.target.value) }))}>
+          <option value={100}>100 linhas</option>
+          <option value={300}>300 linhas</option>
+          <option value={1000}>1000 linhas</option>
+        </select>
+        <select className={fieldClass} value={filters.level} onChange={(event) => setFilters((current) => ({ ...current, level: event.target.value }))}>
+          <option value="all">Todos níveis</option>
+          <option value="info">Info</option>
+          <option value="warn">Warn</option>
+          <option value="error">Error</option>
+          <option value="debug">Debug</option>
+        </select>
+        <div className="relative">
+          <Search className="pointer-events-none absolute left-3 top-2.5 h-4 w-4 text-slate-600" />
+          <input className={`${fieldClass} w-full pl-9`} value={filters.search} onChange={(event) => setFilters((current) => ({ ...current, search: event.target.value }))} placeholder="Buscar nos logs" />
+        </div>
+      </div>
+      <LogsViewer logs={logs} loading={loading} />
+    </Panel>
+  )
+}
+
+const MetricsPanel = ({ metrics }) => {
+  const current = metrics?.current || {}
+  return (
+    <div className="grid gap-3 md:grid-cols-2 xl:grid-cols-4">
+      <SummaryCard icon={Cpu} label="CPU" value={`${current.cpuPercent ?? 0}%`} detail="Docker stats" tone="blue" />
+      <SummaryCard icon={Database} label="Memória" value={formatBytes(current.memoryUsage)} detail={`${current.memoryPercent ?? 0}% usado`} />
+      <SummaryCard icon={Network} label="Rede in/out" value="-" detail="preparado para coletor" />
+      <SummaryCard icon={HardDrive} label="Disco r/w" value="-" detail="preparado para coletor" />
+      <SummaryCard icon={RefreshCcw} label="Restarts" value={current.restartCount ?? 0} detail="desde criação do container" />
+      <SummaryCard icon={Clock3} label="Uptime" value={formatUptime(current.uptimeSeconds)} detail="container atual" tone="green" />
+      <SummaryCard icon={Activity} label="Requests" value={current.requestsPerMinute ?? '-'} detail="Loki/Otel futuro" />
+      <SummaryCard icon={AlertTriangle} label="Errors" value={current.errorRate ?? '-'} detail="Loki/Otel futuro" />
+    </div>
+  )
+}
+
+const ServiceMetricsTab = ({ service }) => {
+  const [range, setRange] = useState('15m')
+  const [metrics, setMetrics] = useState(null)
+  const [loading, setLoading] = useState(false)
+
+  const loadMetrics = useCallback(async () => {
+    setLoading(true)
+    try {
+      setMetrics(await serviceMetricsApi.getMetrics(service.id, range))
+    } finally {
+      setLoading(false)
+    }
+  }, [range, service.id])
+
+  useEffect(() => {
+    loadMetrics()
+  }, [loadMetrics])
+
+  return (
+    <Panel
+      title="Métricas"
+      icon={BarChart3}
+      actions={
+        <div className="flex gap-2">
+          <select className={fieldClass} value={range} onChange={(event) => setRange(event.target.value)}>
+            <option value="15m">15 min</option>
+            <option value="1h">1 hora</option>
+            <option value="6h">6 horas</option>
+            <option value="24h">24 horas</option>
+          </select>
+          <button className={smallButtonClass} type="button" onClick={loadMetrics}>
+            {loading ? <Loader2 className="h-4 w-4 animate-spin" /> : <RefreshCcw className="h-4 w-4" />}
+            Refresh
+          </button>
+        </div>
+      }
+    >
+      <MetricsPanel metrics={metrics} />
+    </Panel>
+  )
+}
+
+const ServiceActivityTab = ({ service }) => {
+  const [events, setEvents] = useState([])
+  const [level, setLevel] = useState('all')
+
+  useEffect(() => {
+    let active = true
+    serviceActivityApi.list(service.id, { level }).then((items) => {
+      if (active) setEvents(items)
+    }).catch(() => {
+      if (active) setEvents([])
+    })
+    return () => {
+      active = false
+    }
+  }, [level, service.id])
+
+  return (
+    <Panel
+      title="Activity timeline"
+      icon={History}
+      actions={
+        <select className={fieldClass} value={level} onChange={(event) => setLevel(event.target.value)}>
+          <option value="all">Todos</option>
+          <option value="success">Sucesso</option>
+          <option value="info">Info</option>
+          <option value="warn">Avisos</option>
+          <option value="error">Erros</option>
+        </select>
+      }
+    >
+      <ActivityTimeline events={events} />
+    </Panel>
+  )
+}
+
+const ServiceSettingsTab = ({ service, settingsState, setSettingsState, onReload }) => {
+  const [saving, setSaving] = useState('')
+  const [deleteText, setDeleteText] = useState('')
+  const [message, setMessage] = useState('')
+  const navigate = useNavigate()
+
+  const saveSettings = async (apply) => {
+    setSaving(apply ? 'apply' : 'save')
+    setMessage('')
+    try {
+      await servicesApi.update(service.id, {
+        hostPort: settingsState.hostPort ? Number(settingsState.hostPort) : null,
+        networkName: settingsState.networkName,
+        command: settingsState.command,
+        bindLocalOnly: settingsState.bindLocalOnly,
+        autoRollback: settingsState.autoRollback,
+        healthcheck: settingsState.healthcheck,
+        nodeServiceMode: settingsState.nodeServiceMode,
+        nodeSiteConfig: settingsState.nodeSiteConfig,
+        apply
+      })
+      setMessage(apply ? 'Configuração aplicada.' : 'Configuração salva como pendente.')
+      await onReload()
+    } catch (err) {
+      setMessage(err.response?.data?.message || err.message || 'Falha ao salvar configuração')
+    } finally {
+      setSaving('')
+    }
+  }
+
+  const removeService = async () => {
+    if (deleteText !== service.name) return
+    await servicesApi.remove(service.id, { removeFolder: false })
+    navigate('/docker')
+  }
+
+  const setHealthcheck = (patch) => {
+    setSettingsState((current) => ({
+      ...current,
+      healthcheck: {
+        ...(current.healthcheck || {}),
+        ...patch
+      }
+    }))
+  }
+
+  return (
+    <div className="grid gap-4 xl:grid-cols-[1fr_0.8fr]">
+      <Panel
+        title="Configuração"
+        icon={Settings}
+        actions={
+          <div className="flex flex-wrap gap-2">
+            <button className={smallButtonClass} type="button" onClick={() => saveSettings(false)} disabled={Boolean(saving)}>
+              <Save className="h-4 w-4" />
+              Salvar
+            </button>
+            <button className={primaryButtonClass} type="button" onClick={() => saveSettings(true)} disabled={Boolean(saving)}>
+              {saving === 'apply' ? <Loader2 className="h-4 w-4 animate-spin" /> : <Zap className="h-4 w-4" />}
+              Aplicar
+            </button>
+          </div>
+        }
+      >
+        <div className="grid gap-3 md:grid-cols-2">
+          <label className="block">
+            <span className="mb-2 block text-xs text-slate-500">Nome</span>
+            <input className={`${fieldClass} opacity-70`} value={service.name || ''} readOnly />
+          </label>
+          <label className="block">
+            <span className="mb-2 block text-xs text-slate-500">Imagem</span>
+            <input className={`${fieldClass} opacity-70`} value={service.image || ''} readOnly />
+          </label>
+          <label className="block">
+            <span className="mb-2 block text-xs text-slate-500">Porta host</span>
+            <input className={fieldClass} value={settingsState.hostPort} onChange={(event) => setSettingsState((current) => ({ ...current, hostPort: event.target.value }))} />
+          </label>
+          <label className="block">
+            <span className="mb-2 block text-xs text-slate-500">Network</span>
+            <input className={fieldClass} value={settingsState.networkName} onChange={(event) => setSettingsState((current) => ({ ...current, networkName: event.target.value }))} />
+          </label>
+          <label className="block md:col-span-2">
+            <span className="mb-2 block text-xs text-slate-500">Command</span>
+            <input className={fieldClass} value={settingsState.command} onChange={(event) => setSettingsState((current) => ({ ...current, command: event.target.value }))} placeholder="opcional" />
+          </label>
+          <label className="inline-flex items-center gap-2 rounded-lg border border-slate-800 bg-slate-900/40 px-3 py-2 text-sm text-slate-300">
+            <input type="checkbox" checked={settingsState.bindLocalOnly} onChange={(event) => setSettingsState((current) => ({ ...current, bindLocalOnly: event.target.checked }))} />
+            Bind local only
+          </label>
+          <label className="inline-flex items-center gap-2 rounded-lg border border-slate-800 bg-slate-900/40 px-3 py-2 text-sm text-slate-300">
+            <input type="checkbox" checked={settingsState.autoRollback} onChange={(event) => setSettingsState((current) => ({ ...current, autoRollback: event.target.checked }))} />
+            Rollback automático
+          </label>
+        </div>
+        <div className="mt-5 rounded-xl border border-slate-800 bg-slate-900/40 p-3">
+          <h3 className="mb-3 text-sm font-semibold text-white">Healthcheck</h3>
+          <div className="grid gap-3 md:grid-cols-2 xl:grid-cols-3">
+            <label className="inline-flex items-center gap-2 rounded-lg border border-slate-800 bg-slate-950 px-3 py-2 text-sm text-slate-300">
+              <input type="checkbox" checked={settingsState.healthcheck?.enabled || false} onChange={(event) => setHealthcheck({ enabled: event.target.checked })} />
+              Validar URL/path
+            </label>
+            <label className="inline-flex items-center gap-2 rounded-lg border border-slate-800 bg-slate-950 px-3 py-2 text-sm text-slate-300">
+              <input type="checkbox" checked={settingsState.healthcheck?.containerEnabled || false} onChange={(event) => setHealthcheck({ containerEnabled: event.target.checked })} />
+              Health no container
+            </label>
+            <input className={fieldClass} value={settingsState.healthcheck?.target || '/'} onChange={(event) => setHealthcheck({ target: event.target.value })} placeholder="/health" />
+            <input className={fieldClass} type="number" value={settingsState.healthcheck?.intervalSeconds || 10} onChange={(event) => setHealthcheck({ intervalSeconds: Number(event.target.value) })} placeholder="intervalo" />
+            <input className={fieldClass} type="number" value={settingsState.healthcheck?.timeoutSeconds || 5} onChange={(event) => setHealthcheck({ timeoutSeconds: Number(event.target.value) })} placeholder="timeout" />
+            <input className={fieldClass} type="number" value={settingsState.healthcheck?.retries || 6} onChange={(event) => setHealthcheck({ retries: Number(event.target.value) })} placeholder="tentativas" />
+          </div>
+        </div>
+        {message ? <p className="mt-3 rounded-lg border border-slate-800 bg-slate-900 px-3 py-2 text-sm text-slate-300">{message}</p> : null}
+      </Panel>
+      <Panel title="Danger zone" icon={AlertTriangle}>
+        <div className="space-y-3">
+          <p className="text-sm text-slate-400">Digite o nome do serviço para remover o registro e o container associado.</p>
+          <input className={fieldClass} value={deleteText} onChange={(event) => setDeleteText(event.target.value)} placeholder={service.name} />
+          <button className="inline-flex items-center gap-2 rounded-lg border border-rose-500/30 bg-rose-500/10 px-3 py-2 text-xs font-medium text-rose-200 hover:bg-rose-500/20 disabled:cursor-not-allowed disabled:opacity-50" type="button" onClick={removeService} disabled={deleteText !== service.name}>
+            <Trash2 className="h-4 w-4" />
+            Remover serviço
+          </button>
+        </div>
+      </Panel>
+    </div>
+  )
+}
+
+const buildSettingsState = (service = {}) => ({
+  hostPort: service.hostPort || '',
+  networkName: service.networkName || 'bridge',
+  command: Array.isArray(service.command) ? service.command.join(' ') : service.command || '',
+  bindLocalOnly: Boolean(service.bindLocalOnly),
+  autoRollback: service.autoRollback !== false,
+  healthcheck: {
+    enabled: Boolean(service.healthcheck?.enabled),
+    target: service.healthcheck?.target || '/',
+    intervalSeconds: service.healthcheck?.intervalSeconds || 10,
+    timeoutSeconds: service.healthcheck?.timeoutSeconds || 5,
+    retries: service.healthcheck?.retries || 6,
+    startPeriodSeconds: service.healthcheck?.startPeriodSeconds || 5,
+    containerEnabled: Boolean(service.healthcheck?.containerEnabled)
+  },
+  nodeServiceMode: service.nodeServiceMode || 'service',
+  nodeSiteConfig: service.nodeSiteConfig || null
+})
+
+const ServiceDetailsPage = () => {
+  const { serviceId } = useParams()
+  const navigate = useNavigate()
+  const [searchParams, setSearchParams] = useSearchParams()
+  const requestedTab = searchParams.get('tab')
+  const activeTab = TABS.some((tab) => tab.id === requestedTab) ? requestedTab : 'overview'
+  const [detail, setDetail] = useState(null)
+  const [metrics, setMetrics] = useState(null)
+  const [activity, setActivity] = useState([])
+  const [envRows, setEnvRows] = useState([])
+  const [settingsState, setSettingsState] = useState(buildSettingsState())
+  const [loading, setLoading] = useState(true)
+  const [error, setError] = useState('')
+  const [actionState, setActionState] = useState('')
+
+  const service = detail?.service
+
+  const setActiveTab = useCallback((tabId) => {
+    const nextParams = new URLSearchParams(searchParams)
+    nextParams.set('tab', tabId)
+    setSearchParams(nextParams, { replace: true })
+  }, [searchParams, setSearchParams])
+
+  const loadDetails = useCallback(async () => {
+    setError('')
+    const payload = await servicesApi.getById(serviceId)
+    setDetail(payload)
+    setActivity(payload.activity || [])
+    if (payload.stats) {
+      const memoryUsage = payload.stats.memoryUsage || 0
+      const memoryLimit = payload.stats.memoryLimit || 0
+      setMetrics((current) => ({
+        ...(current || {}),
+        current: {
+          ...(current?.current || {}),
+          cpuPercent: payload.stats.cpuPercent || 0,
+          memoryUsage,
+          memoryLimit,
+          memoryPercent: memoryLimit ? Number(((memoryUsage / memoryLimit) * 100).toFixed(2)) : 0
+        }
+      }))
+    }
+  }, [serviceId])
+
+  useEffect(() => {
+    let active = true
+    setLoading(true)
+    loadDetails()
+      .catch((err) => {
+        if (active) setError(err.response?.data?.message || err.message || 'Falha ao carregar serviço')
+      })
+      .finally(() => {
+        if (active) setLoading(false)
+      })
+    return () => {
+      active = false
+    }
+  }, [loadDetails])
+
+  useEffect(() => {
+    if (!service) return
+    setEnvRows(cloneEnvRows(service.envVars || []))
+    setSettingsState(buildSettingsState(service))
+  }, [service])
+
+  useEffect(() => {
+    if (!serviceId) return undefined
+    const timer = window.setInterval(() => {
+      loadDetails().catch(() => {})
+    }, 15000)
+    return () => window.clearInterval(timer)
+  }, [loadDetails, serviceId])
+
+  useEffect(() => {
+    if (!serviceId) return
+    serviceMetricsApi.getMetrics(serviceId).then(setMetrics).catch(() => {})
+    serviceActivityApi.list(serviceId).then(setActivity).catch(() => {})
+  }, [serviceId])
+
+  const runServiceAction = async (label, action) => {
+    setActionState(label)
+    setError('')
+    try {
+      await action()
+      await loadDetails()
+    } catch (err) {
+      setError(err.response?.data?.message || err.message || 'Falha na ação do serviço')
+    } finally {
+      setActionState('')
+    }
+  }
+
+  if (loading) {
+    return (
+      <div className="flex min-h-[60vh] items-center justify-center text-slate-400">
+        <Loader2 className="mr-2 h-5 w-5 animate-spin" />
+        Carregando serviço...
+      </div>
+    )
+  }
+
+  if (error && !service) {
+    return (
+      <div className="space-y-4">
+        <button className={smallButtonClass} type="button" onClick={() => navigate('/docker')}>
+          <ArrowLeft className="h-4 w-4" />
+          Container Service
+        </button>
+        <div className="rounded-xl border border-rose-500/30 bg-rose-500/10 p-4 text-rose-100">{error}</div>
+      </div>
+    )
+  }
+
+  if (!service) return null
+
+  return (
+    <div className="space-y-4">
+      <ServiceHeader
+        service={service}
+        actionState={actionState}
+        onBack={() => navigate('/docker')}
+        onDeploy={() => setActiveTab('deploys')}
+        onEdit={() => setActiveTab('settings')}
+        onStart={() => runServiceAction('Iniciando serviço...', () => servicesApi.start(service.id))}
+        onStop={() => runServiceAction('Parando serviço...', () => servicesApi.stop(service.id))}
+        onRestart={() => runServiceAction('Reiniciando serviço...', () => servicesApi.restart(service.id))}
+      />
+      {error ? <div className="rounded-xl border border-rose-500/30 bg-rose-500/10 p-3 text-sm text-rose-100">{error}</div> : null}
+      <ServiceSummaryCards service={service} metrics={metrics} />
+      <ServiceTabs activeTab={activeTab} onChange={setActiveTab} />
+
+      {activeTab === 'overview' ? <ServiceOverviewTab service={service} detail={detail} activity={activity} /> : null}
+      {activeTab === 'deploys' ? <ServiceDeploysTab service={service} onReload={loadDetails} /> : null}
+      {activeTab === 'environment' ? (
+        <ServiceEnvironmentTab service={service} envRows={envRows} setEnvRows={setEnvRows} onReload={loadDetails} />
+      ) : null}
+      {activeTab === 'logs' ? <ServiceLogsTab service={service} /> : null}
+      {activeTab === 'metrics' ? <ServiceMetricsTab service={service} /> : null}
+      {activeTab === 'activity' ? <ServiceActivityTab service={service} /> : null}
+      {activeTab === 'settings' ? (
+        <ServiceSettingsTab
+          service={service}
+          settingsState={settingsState}
+          setSettingsState={setSettingsState}
+          onReload={loadDetails}
+        />
+      ) : null}
+    </div>
+  )
+}
+
+export default ServiceDetailsPage

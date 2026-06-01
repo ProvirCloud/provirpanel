@@ -3523,14 +3523,13 @@ const DockerPanel = ({ showPageIntro = true }) => {
     }
 
     const instance = row.service
-    const container = containerLookup.get(instance.containerId) || containerLookup.get(instance.name)
     const isRunning = instance.stateMeta.key === 'running'
     return (
       <tr
         key={row.id}
         draggable
-        className="border-t border-slate-800 hover:bg-slate-900/40"
-        onClick={() => container && openLogs(container)}
+        className="cursor-pointer border-t border-slate-800 hover:bg-slate-900/40"
+        onClick={() => navigate(`/cloud/services/${instance.id}`)}
         onDragStart={(event) => {
           event.dataTransfer.effectAllowed = 'move'
           event.dataTransfer.setData('text/plain', instance.id)
@@ -3591,7 +3590,7 @@ const DockerPanel = ({ showPageIntro = true }) => {
               className="rounded-lg border border-blue-800 bg-blue-950 px-3 py-1.5 text-xs text-blue-200 hover:bg-blue-900"
               onClick={(event) => {
                 event.stopPropagation()
-                openEditServiceDialog(instance)
+                navigate(`/cloud/services/${instance.id}?tab=settings`)
               }}
             >
               Edit

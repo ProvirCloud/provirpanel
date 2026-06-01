@@ -871,6 +871,281 @@ const sendServicesResponse = async (res, next) => {
   }
 };
 
+const findManagedServiceById = async (serviceId) => {
+  const services = await dockerManager.listManagedServices();
+  return services.find((service) => service.id === serviceId) || null;
+};
+
+const findContainerSummaryForService = async (service) => {
+  if (!service) return null;
+  try {
+    const containers = await dockerManager.listContainers();
+    return containers.find((container) => {
+      const names = (container.Names || []).map((name) => String(name).replace(/^\//, ''));
+      return container.Id === service.containerId || names.includes(service.name);
+    }) || null;
+  } catch (err) {
+    return null;
+  }
+};
+
+const inspectServiceContainer = async (service) => {
+  if (!service?.containerId) return null;
+  try {
+    const container = dockerManager.docker.getContainer(service.containerId);
+    return await container.inspect();
+  } catch (err) {
+    return null;
+  }
+};
+
+const sanitizeContainerInspectForClient = (inspect = null) => {
+  if (!inspect) return null;
+  return {
+    Id: inspect.Id,
+    Name: inspect.Name,
+    Created: inspect.Created,
+    RestartCount: inspect.RestartCount ?? 0,
+    State: inspect.State
+      ? {
+          Status: inspect.State.Status,
+          Running: inspect.State.Running,
+          Paused: inspect.State.Paused,
+          Restarting: inspect.State.Restarting,
+          OOMKilled: inspect.State.OOMKilled,
+          Dead: inspect.State.Dead,
+          Pid: inspect.State.Pid,
+          ExitCode: inspect.State.ExitCode,
+          StartedAt: inspect.State.StartedAt,
+          FinishedAt: inspect.State.FinishedAt,
+          Health: inspect.State.Health
+            ? {
+                Status: inspect.State.Health.Status,
+                FailingStreak: inspect.State.Health.FailingStreak
+              }
+            : null
+        }
+      : null,
+    Config: inspect.Config
+      ? {
+          Image: inspect.Config.Image,
+          WorkingDir: inspect.Config.WorkingDir,
+          Entrypoint: inspect.Config.Entrypoint,
+          Cmd: inspect.Config.Cmd
+        }
+      : null,
+    HostConfig: inspect.HostConfig
+      ? {
+          NetworkMode: inspect.HostConfig.NetworkMode,
+          RestartPolicy: inspect.HostConfig.RestartPolicy
+        }
+      : null,
+    NetworkSettings: inspect.NetworkSettings
+      ? {
+          Networks: Object.keys(inspect.NetworkSettings.Networks || {})
+        }
+      : null
+  };
+};
+
+const resolveServiceDetailsPayload = async (serviceId) => {
+  const service = await findManagedServiceById(serviceId);
+  if (!service) return null;
+
+  const [container, inspect] = await Promise.all([
+    findContainerSummaryForService(service),
+    inspectServiceContainer(service)
+  ]);
+  let stats = null;
+  if (service.containerId && String(inspect?.State?.Status || '').toLowerCase() === 'running') {
+    try {
+      stats = await dockerManager.getContainerStats(service.containerId);
+    } catch (err) {
+      stats = null;
+    }
+  }
+
+  return {
+    service: sanitizeServiceForClient(service),
+    container,
+    inspect: sanitizeContainerInspectForClient(inspect),
+    stats,
+    activity: buildServiceActivity(service).slice(0, 12)
+  };
+};
+
+const inferLogLevel = (message = '') => {
+  const text = String(message || '').toLowerCase();
+  if (/(fatal|panic|exception|error|erro|failed|failure)/.test(text)) return 'error';
+  if (/(warn|warning|aviso|deprecated)/.test(text)) return 'warn';
+  if (/(debug|trace)/.test(text)) return 'debug';
+  return 'info';
+};
+
+const parseContainerLogEntry = (line, index) => {
+  const cleanLine = stripAnsiSequences(line || '').trim();
+  const match = cleanLine.match(/^(\d{4}-\d{2}-\d{2}T[^\s]+)\s+(.*)$/);
+  const timestamp = match ? match[1] : null;
+  const message = match ? match[2] : cleanLine;
+  return {
+    id: `${timestamp || 'line'}-${index}`,
+    timestamp,
+    level: inferLogLevel(message),
+    message
+  };
+};
+
+const readServiceLogEntries = async (service, filters = {}) => {
+  if (!service?.containerId) return { text: '', entries: [] };
+  const tail = clampNumber(filters.tail, 300, 10, 5000);
+  const sinceTimestamp = filters.since ? Math.floor(new Date(filters.since).getTime() / 1000) : null;
+  const logOptions = {
+    stdout: true,
+    stderr: true,
+    tail,
+    timestamps: true
+  };
+  if (Number.isFinite(sinceTimestamp) && sinceTimestamp > 0) {
+    logOptions.since = sinceTimestamp;
+  }
+
+  const container = dockerManager.docker.getContainer(service.containerId);
+  const logData = await container.logs(logOptions);
+  let entries = decodeDockerLogData(logData)
+    .split(/\r?\n/)
+    .map((line) => line.trim())
+    .filter(Boolean)
+    .map(parseContainerLogEntry);
+
+  const level = String(filters.level || '').trim().toLowerCase();
+  if (level && level !== 'all') {
+    entries = entries.filter((entry) => entry.level === level);
+  }
+
+  const search = String(filters.search || '').trim().toLowerCase();
+  if (search) {
+    entries = entries.filter((entry) => entry.message.toLowerCase().includes(search));
+  }
+
+  return {
+    text: entries.map((entry) => `${entry.timestamp ? `${entry.timestamp} ` : ''}${entry.message}`).join('\n'),
+    entries
+  };
+};
+
+const calculateUptimeSeconds = (inspect = null) => {
+  const startedAt = inspect?.State?.StartedAt;
+  if (!startedAt || startedAt.startsWith('0001-')) return 0;
+  const started = new Date(startedAt).getTime();
+  if (!Number.isFinite(started)) return 0;
+  return Math.max(0, Math.floor((Date.now() - started) / 1000));
+};
+
+const buildServiceMetrics = async (service) => {
+  const inspect = await inspectServiceContainer(service);
+  let stats = null;
+  if (service?.containerId && String(inspect?.State?.Status || '').toLowerCase() === 'running') {
+    try {
+      stats = await dockerManager.getContainerStats(service.containerId);
+    } catch (err) {
+      stats = null;
+    }
+  }
+  const memoryUsage = stats?.memoryUsage || 0;
+  const memoryLimit = stats?.memoryLimit || 0;
+  const now = new Date().toISOString();
+  return {
+    current: {
+      cpuPercent: stats?.cpuPercent ?? 0,
+      memoryUsage,
+      memoryLimit,
+      memoryPercent: memoryLimit ? Number(((memoryUsage / memoryLimit) * 100).toFixed(2)) : 0,
+      requestsPerMinute: null,
+      errorRate: null,
+      uptimeSeconds: calculateUptimeSeconds(inspect),
+      restartCount: inspect?.RestartCount ?? 0,
+      networkRxBytes: null,
+      networkTxBytes: null,
+      diskReadBytes: null,
+      diskWriteBytes: null
+    },
+    samples: [
+      {
+        timestamp: now,
+        cpuPercent: stats?.cpuPercent ?? 0,
+        memoryUsage,
+        memoryLimit
+      }
+    ],
+    source: stats ? 'docker' : 'service-registry'
+  };
+};
+
+const buildServiceActivity = (service = {}) => {
+  const events = [];
+  const addEvent = ({ id, type, title, message, level = 'info', createdAt, actor = 'ProvirPanel' }) => {
+    if (!createdAt) return;
+    events.push({ id, type, title, message, level, createdAt, actor });
+  };
+
+  addEvent({
+    id: `${service.id}-created`,
+    type: 'service.created',
+    title: 'Serviço criado',
+    message: `Serviço ${service.name || service.id} registrado no Container Service.`,
+    level: 'success',
+    createdAt: service.createdAt
+  });
+
+  addEvent({
+    id: `${service.id}-updated`,
+    type: 'service.updated',
+    title: 'Configuração atualizada',
+    message: 'Configuração do serviço atualizada.',
+    level: 'info',
+    createdAt: service.updatedAt
+  });
+
+  if (service.pendingConfig) {
+    addEvent({
+      id: `${service.id}-pending-config`,
+      type: 'service.pending_config',
+      title: 'Configuração pendente',
+      message: 'Existe uma configuração salva aguardando aplicação.',
+      level: 'warn',
+      createdAt: service.pendingConfig.updatedAt || service.updatedAt || service.createdAt
+    });
+  }
+
+  (service.deployments || []).forEach((deployment) => {
+    const status = deployment.status || 'available';
+    addEvent({
+      id: deployment.id || `${service.id}-deployment-${deployment.createdAt}`,
+      type: `deployment.${status}`,
+      title: status === 'failed' ? 'Deploy falhou' : status === 'active' ? 'Versão ativa' : 'Versão publicada',
+      message: deployment.versionLabel || deployment.archiveName || deployment.id || 'Deploy registrado.',
+      level: status === 'failed' ? 'error' : status === 'active' ? 'success' : 'info',
+      createdAt: deployment.finishedAt || deployment.updatedAt || deployment.createdAt,
+      actor: deployment.createdBy || deployment.actor || 'ProvirPanel'
+    });
+  });
+
+  if (service.healthStatus) {
+    addEvent({
+      id: `${service.id}-health-${service.healthStatus}`,
+      type: 'service.health',
+      title: 'Health atualizado',
+      message: `Status de health: ${service.healthStatus}.`,
+      level: service.healthStatus === 'healthy' ? 'success' : service.healthStatus === 'unhealthy' ? 'error' : 'info',
+      createdAt: service.lastActivityAt || service.updatedAt || service.createdAt
+    });
+  }
+
+  return events
+    .filter((event, index, list) => event.createdAt && list.findIndex((entry) => entry.id === event.id) === index)
+    .sort((a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime());
+};
+
 const resolveProjectPathFromVolume = (volumes = []) => {
   const volume = volumes.find((m) => m.hostPath && m.containerPath);
   if (!volume) return null;
@@ -2185,6 +2460,120 @@ router.put('/services/layout', async (req, res, next) => {
 
     dockerManager.writeRegistry(nextServices);
     await sendServicesResponse(res, next);
+  } catch (err) {
+    next(err);
+  }
+});
+
+router.get('/services/:id', async (req, res, next) => {
+  try {
+    const payload = await resolveServiceDetailsPayload(req.params.id);
+    if (!payload) {
+      return res.status(404).json({ message: 'Service not found' });
+    }
+    res.json(payload);
+  } catch (err) {
+    next(err);
+  }
+});
+
+router.get('/services/:id/logs', async (req, res, next) => {
+  try {
+    const service = await findManagedServiceById(req.params.id);
+    if (!service) {
+      return res.status(404).json({ message: 'Service not found' });
+    }
+    const logs = await readServiceLogEntries(service, req.query || {});
+    res.json(logs);
+  } catch (err) {
+    next(err);
+  }
+});
+
+router.get('/services/:id/metrics', async (req, res, next) => {
+  try {
+    const service = await findManagedServiceById(req.params.id);
+    if (!service) {
+      return res.status(404).json({ message: 'Service not found' });
+    }
+    const metrics = await buildServiceMetrics(service);
+    res.json({ metrics });
+  } catch (err) {
+    next(err);
+  }
+});
+
+router.get('/services/:id/activity', async (req, res, next) => {
+  try {
+    const service = await findManagedServiceById(req.params.id);
+    if (!service) {
+      return res.status(404).json({ message: 'Service not found' });
+    }
+    let events = buildServiceActivity(service);
+    const level = String(req.query?.level || '').trim().toLowerCase();
+    const type = String(req.query?.type || '').trim().toLowerCase();
+    if (level && level !== 'all') {
+      events = events.filter((event) => event.level === level);
+    }
+    if (type && type !== 'all') {
+      events = events.filter((event) => String(event.type || '').toLowerCase().includes(type));
+    }
+    res.json({ events });
+  } catch (err) {
+    next(err);
+  }
+});
+
+router.post('/services/:id/start', async (req, res, next) => {
+  try {
+    const service = await findManagedServiceById(req.params.id);
+    if (!service) {
+      return res.status(404).json({ message: 'Service not found' });
+    }
+    if (!service.containerId) {
+      return res.status(400).json({ message: 'Serviço sem container associado' });
+    }
+    await dockerManager.docker.getContainer(service.containerId).start();
+    appendServiceLog('info', `Servico ${service.name} iniciado`);
+    const payload = await resolveServiceDetailsPayload(req.params.id);
+    res.json(payload || { status: 'started' });
+  } catch (err) {
+    next(err);
+  }
+});
+
+router.post('/services/:id/stop', async (req, res, next) => {
+  try {
+    const service = await findManagedServiceById(req.params.id);
+    if (!service) {
+      return res.status(404).json({ message: 'Service not found' });
+    }
+    if (!service.containerId) {
+      return res.status(400).json({ message: 'Serviço sem container associado' });
+    }
+    await dockerManager.stopContainer(service.containerId);
+    appendServiceLog('info', `Servico ${service.name} parado`);
+    const payload = await resolveServiceDetailsPayload(req.params.id);
+    res.json(payload || { status: 'stopped' });
+  } catch (err) {
+    next(err);
+  }
+});
+
+router.post('/services/:id/restart', async (req, res, next) => {
+  try {
+    const service = await findManagedServiceById(req.params.id);
+    if (!service) {
+      return res.status(404).json({ message: 'Service not found' });
+    }
+    if (!service.containerId) {
+      return res.status(400).json({ message: 'Serviço sem container associado' });
+    }
+    await repairManagedContainerVolumePermissions(service.containerId);
+    await dockerManager.restartContainer(service.containerId);
+    appendServiceLog('info', `Servico ${service.name} reiniciado`);
+    const payload = await resolveServiceDetailsPayload(req.params.id);
+    res.json(payload || { status: 'restarted' });
   } catch (err) {
     next(err);
   }
