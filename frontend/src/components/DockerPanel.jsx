@@ -463,10 +463,10 @@ const getServiceHealthMeta = (service = {}, container = null) => {
   }
 
   const healthText = String(
-    service.healthStatus ||
-      container?.Health?.Status ||
+    container?.Health?.Status ||
       container?.State?.Health?.Status ||
       container?.Status ||
+      service.healthStatus ||
       ''
   ).toLowerCase()
 
@@ -1268,15 +1268,15 @@ const DockerPanel = ({ showPageIntro = true }) => {
     }, 4000)
   }
 
-  const loadContainers = async () => {
-    setLoading(true)
+  const loadContainers = async (options = {}) => {
+    if (!options.silent) setLoading(true)
     try {
       const response = await api.get('/docker/containers')
       setContainers(response.data.containers || [])
     } catch (err) {
-      addToast('Erro ao carregar containers', 'error')
+      if (!options.silent) addToast('Erro ao carregar containers', 'error')
     } finally {
-      setLoading(false)
+      if (!options.silent) setLoading(false)
     }
   }
 
@@ -1318,7 +1318,7 @@ const DockerPanel = ({ showPageIntro = true }) => {
     }
   }
 
-  const loadServices = async () => {
+  const loadServices = async (options = {}) => {
     try {
       const response = await api.get('/docker/services')
       const loadedServices = Array.isArray(response.data?.services)
@@ -1327,10 +1327,10 @@ const DockerPanel = ({ showPageIntro = true }) => {
           ? response.data
           : Array.isArray(response.data?.data)
             ? response.data.data
-            : []
+	            : []
       setServices(loadedServices)
     } catch (err) {
-      addToast('Erro ao carregar servicos', 'error')
+      if (!options.silent) addToast('Erro ao carregar servicos', 'error')
     }
   }
 
@@ -1432,6 +1432,17 @@ const DockerPanel = ({ showPageIntro = true }) => {
     loadPostgresDatabases()
     loadImages()
     loadRegistries()
+  }, [])
+
+  useEffect(() => {
+    const intervalId = setInterval(() => {
+      void Promise.all([
+        loadContainers({ silent: true }),
+        loadServices({ silent: true })
+      ])
+    }, 5000)
+
+    return () => clearInterval(intervalId)
   }, [])
 
   useEffect(() => {
