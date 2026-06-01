@@ -158,6 +158,30 @@ const pushBuildProgress = (progress, sessionId, message, phase = 'build') => {
   }
 };
 
+const pushDeploymentProgress = (progress, sessionId, message, phase = 'process') => {
+  if (!message) return;
+  if (Array.isArray(progress)) {
+    progress.push(message);
+  }
+  if (progressNamespace && sessionId) {
+    progressNamespace.emit('progress', {
+      type: 'project-deploy',
+      sessionId,
+      phase,
+      message,
+      ts: Date.now()
+    });
+  }
+};
+
+const sendProgressError = (res, err, progress = []) => {
+  const status = err.status || err.statusCode || 500;
+  res.status(status).json({
+    message: err.message || 'Erro ao processar operação',
+    progress
+  });
+};
+
 let dockerBaseDir =
   process.env.DOCKER_VOLUME_BASE ||
   (process.env.CLOUDPAINEL_PROJECTS_DIR
@@ -1181,9 +1205,10 @@ const requestHealthcheckUrl = (targetUrl, timeoutSeconds) =>
     req.end();
   });
 
-const waitForServiceHealth = async ({ serviceName, healthcheck, hostPort }) => {
+const waitForServiceHealth = async ({ serviceName, healthcheck, hostPort, onProgress = null }) => {
   const config = normalizeHealthcheckConfig(healthcheck);
   if (!config.enabled) {
+    if (onProgress) onProgress(`Healthcheck desativado para ${serviceName}.`);
     return { skipped: true };
   }
 
@@ -1193,12 +1218,18 @@ const waitForServiceHealth = async ({ serviceName, healthcheck, hostPort }) => {
       'info',
       `Aguardando ${config.startPeriodSeconds}s antes do healthcheck de ${serviceName}`
     );
+    if (onProgress) {
+      onProgress(`Aguardando ${config.startPeriodSeconds}s antes do healthcheck de ${serviceName}...`);
+    }
     await delay(config.startPeriodSeconds * 1000);
   }
 
   let lastError = null;
   for (let attempt = 1; attempt <= config.retries; attempt += 1) {
     try {
+      if (onProgress) {
+        onProgress(`Healthcheck ${serviceName} tentativa ${attempt}/${config.retries}: ${targetUrl}`);
+      }
       appendServiceLog(
         'info',
         `Healthcheck ${serviceName} tentativa ${attempt}/${config.retries}: ${targetUrl}`
@@ -1208,6 +1239,9 @@ const waitForServiceHealth = async ({ serviceName, healthcheck, hostPort }) => {
         'info',
         `Healthcheck ${serviceName} OK com status ${result.statusCode}`
       );
+      if (onProgress) {
+        onProgress(`Healthcheck ${serviceName} OK com status ${result.statusCode}.`);
+      }
       return { ok: true, targetUrl, statusCode: result.statusCode };
     } catch (err) {
       lastError = err;
@@ -1215,6 +1249,9 @@ const waitForServiceHealth = async ({ serviceName, healthcheck, hostPort }) => {
         'warn',
         `Healthcheck ${serviceName} falhou na tentativa ${attempt}/${config.retries}: ${err.message}`
       );
+      if (onProgress) {
+        onProgress(`Healthcheck ${serviceName} falhou na tentativa ${attempt}/${config.retries}: ${err.message}`);
+      }
       if (attempt < config.retries) {
         await delay(config.intervalSeconds * 1000);
       }
@@ -3516,10 +3553,12 @@ const rollbackToPreviousDeployment = async ({
   previousDeployment,
   healthcheck,
   networkName,
-  bindLocalOnly
+  bindLocalOnly,
+  pushProgress = () => {}
 }) => {
   if (!previousDeployment?.projectDir) return null;
   appendServiceLog('warn', `Rollback automatico para ${service.name}: ${previousDeployment.label || previousDeployment.id}`);
+  pushProgress(`Rollback automático iniciado para ${previousDeployment.label || previousDeployment.id}`, 'rollback');
   const rollbackService = {
     ...service,
     volumes: replacePrimaryVolumeHostPath(service.volumes, previousDeployment.projectDir),
@@ -3541,11 +3580,14 @@ const rollbackToPreviousDeployment = async ({
     networkName,
     healthcheck
   });
+  pushProgress('Container anterior recriado, validando saúde...', 'rollback');
   await waitForServiceHealth({
     serviceName: service.name,
     healthcheck,
-    hostPort: service.hostPort
+    hostPort: service.hostPort,
+    onProgress: (message) => pushProgress(message, 'healthcheck')
   });
+  pushProgress('Rollback automático concluído.', 'rollback');
 
   const rolledBack = {
     ...rollbackService,
@@ -3571,10 +3613,12 @@ const promoteProjectDeployment = async ({
   nodeServiceMode,
   nodeSiteConfig,
   healthcheck,
-  autoRollback
+  autoRollback,
+  pushProgress = () => {}
 }) => {
   const networkName = service.networkName || 'bridge';
   const bindLocalOnly = service.bindLocalOnly ?? false;
+  pushProgress('Reservando porta temporária para validar a nova versão...', 'prepare');
   const candidatePort = await dockerManager.findAvailablePort(
     Math.min(65000, Math.max(Number(service.hostPort || service.containerPort || 8080) + 1, 1024))
   );
@@ -3591,6 +3635,7 @@ const promoteProjectDeployment = async ({
     volumes: versionVolumes,
     healthcheck
   };
+  pushProgress('Preparando comando, variáveis e volume da versão candidata...', 'prepare');
   const candidateRuntime = prepareProjectRuntimeForDeploy({
     service: candidateService,
     envVars,
@@ -3605,6 +3650,7 @@ const promoteProjectDeployment = async ({
       'info',
       `Iniciando versao candidata ${deployment.id} de ${service.name} na porta ${candidatePort}`
     );
+    pushProgress(`Subindo versão candidata em porta temporária ${candidatePort}...`, 'candidate');
     candidateContainer = await startServiceContainerForDeployment({
       service: candidateService,
       runtime: candidateRuntime,
@@ -3618,11 +3664,14 @@ const promoteProjectDeployment = async ({
         'provirpanel.deployment.id': deployment.id
       }
     });
+    pushProgress('Executando healthcheck na versão candidata...', 'healthcheck');
     await waitForServiceHealth({
       serviceName: `${service.name} candidato`,
       healthcheck,
-      hostPort: candidatePort
+      hostPort: candidatePort,
+      onProgress: (message) => pushProgress(message, 'healthcheck')
     });
+    pushProgress('Versão candidata aprovada no healthcheck.', 'healthcheck');
   } catch (err) {
     await stopAndRemoveContainer(candidateContainer?.Id, candidateName);
     saveServiceDeploymentState(service, {
@@ -3632,9 +3681,11 @@ const promoteProjectDeployment = async ({
       error: err.message
     }, service.activeDeploymentId);
     appendServiceLog('error', `Versao candidata rejeitada para ${service.name}: ${err.message}`);
+    pushProgress(`Versão candidata falhou: ${err.message}`, 'error');
     throw err;
   }
 
+  pushProgress('Removendo container temporário da validação...', 'cleanup');
   await stopAndRemoveContainer(candidateContainer?.Id, candidateName);
 
   const finalRuntime = prepareProjectRuntimeForDeploy({
@@ -3644,12 +3695,14 @@ const promoteProjectDeployment = async ({
     nodeSiteConfig
   });
   const previousContainerId = service.containerId;
+  pushProgress('Parando a versão atual para promover a nova versão...', 'promote');
   await stopAndRemoveContainer(previousContainerId, service.name);
   await removeContainerByName(service.name);
 
   let finalContainer = null;
   try {
     appendServiceLog('info', `Promovendo versao ${deployment.id} para ${service.name}`);
+    pushProgress('Iniciando container definitivo com a nova versão...', 'promote');
     finalContainer = await startServiceContainerForDeployment({
       service: candidateService,
       runtime: finalRuntime,
@@ -3662,11 +3715,14 @@ const promoteProjectDeployment = async ({
         'provirpanel.deployment.id': deployment.id
       }
     });
+    pushProgress('Executando healthcheck final na porta pública...', 'healthcheck');
     await waitForServiceHealth({
       serviceName: service.name,
       healthcheck,
-      hostPort: service.hostPort
+      hostPort: service.hostPort,
+      onProgress: (message) => pushProgress(message, 'healthcheck')
     });
+    pushProgress('Healthcheck final aprovado.', 'healthcheck');
   } catch (err) {
     await stopAndRemoveContainer(finalContainer?.Id, service.name);
     saveServiceDeploymentState(service, {
@@ -3675,6 +3731,7 @@ const promoteProjectDeployment = async ({
       failedAt: new Date().toISOString(),
       error: err.message
     }, service.activeDeploymentId);
+    pushProgress(`Falha ao promover versão: ${err.message}`, 'error');
 
     if (autoRollback && previousDeployment?.projectDir) {
       const rolledBack = await rollbackToPreviousDeployment({
@@ -3682,7 +3739,8 @@ const promoteProjectDeployment = async ({
         previousDeployment,
         healthcheck,
         networkName,
-        bindLocalOnly
+        bindLocalOnly,
+        pushProgress
       });
       if (rolledBack) {
         throw createHttpError(
@@ -3724,10 +3782,15 @@ const promoteProjectDeployment = async ({
   };
 
   appendServiceLog('info', `Versao ${deployment.id} publicada para ${service.name}`);
+  pushProgress('Versão publicada e estado salvo no painel.', 'done');
   return saveServiceDeploymentState(updatedService, promotedDeployment, deployment.id);
 };
 
 const publishProjectArchive = async (serviceId, file, options = {}) => {
+  const progress = Array.isArray(options.progress) ? options.progress : [];
+  const progressSessionId = String(options.progressSessionId || '').trim();
+  const pushProgress = (message, phase) =>
+    pushDeploymentProgress(progress, progressSessionId, message, phase);
   const services = dockerManager.listServices();
   let service = services.find((s) => s.id === serviceId);
   if (!service) {
@@ -3738,9 +3801,11 @@ const publishProjectArchive = async (serviceId, file, options = {}) => {
   }
 
   appendServiceLog('info', `Atualizacao de projeto iniciada: ${service.name}`);
+  pushProgress(`Iniciando publicação de ${service.name}...`, 'prepare');
 
   const volumeInfo = ensureServiceProjectVolume(service);
   service = ensureActiveDeploymentRecord(volumeInfo.service);
+  pushProgress('Volume do projeto localizado e versão atual registrada.', 'prepare');
 
   const { nodeServiceMode, nodeSiteConfig } = resolveNodeServiceConfig({}, service);
   const isNodeSitesMode = service.templateId === 'node-app' && nodeServiceMode === 'sites';
@@ -3752,6 +3817,7 @@ const publishProjectArchive = async (serviceId, file, options = {}) => {
   const uploadTargetDir = isNodeSitesMode
     ? path.join(projectDir, normalizeNodeSiteFolder(nodeSiteConfig.siteFolder))
     : projectDir;
+  pushProgress(`Diretório da nova versão criado: ${path.basename(projectDir)}`, 'prepare');
 
   fs.mkdirSync(projectDir, { recursive: true });
   if (isNodeSitesMode) {
@@ -3762,13 +3828,16 @@ const publishProjectArchive = async (serviceId, file, options = {}) => {
       service.nodeSiteConfig
     );
     fs.mkdirSync(uploadTargetDir, { recursive: true });
+    pushProgress(`Estrutura Node Sites preparada em ${nodeSiteConfig.siteFolder}.`, 'prepare');
   }
 
   cleanDirectory(uploadTargetDir);
   const archivePath = file.path;
   try {
     appendServiceLog('info', `Extraindo arquivo ${file.originalname} em ${uploadTargetDir}`);
+    pushProgress(`Extraindo ${file.originalname || 'arquivo enviado'}...`, 'extract');
     await extractArchiveTo(archivePath, uploadTargetDir, file.originalname);
+    pushProgress('Arquivo extraído com sucesso.', 'extract');
   } finally {
     fs.unlink(archivePath, () => {});
   }
@@ -3780,11 +3849,13 @@ const publishProjectArchive = async (serviceId, file, options = {}) => {
     const normalized = normalizeStaticSiteRoot(projectDir);
     if (!normalized) {
       appendServiceLog('error', `Upload sem index.html para serviço estático ${service.name}`);
+      pushProgress('Falha: index.html não encontrado para site estático.', 'error');
       throw createHttpError(
         'Arquivo inválido para site estático: index.html não encontrado no .zip/.tar.',
         400
       );
     }
+    pushProgress('Raiz do site estático normalizada.', 'prepare');
   }
   if (isNodeSitesMode) {
     const normalized = normalizeStaticSiteRoot(
@@ -3796,16 +3867,21 @@ const publishProjectArchive = async (serviceId, file, options = {}) => {
         'warn',
         `Upload do site ${service.name} sem arquivo fallback ${nodeSiteConfig.fallbackFile} na raiz`
       );
+      pushProgress(`Aviso: fallback ${nodeSiteConfig.fallbackFile} não encontrado na raiz.`, 'prepare');
+    } else {
+      pushProgress(`Fallback ${nodeSiteConfig.fallbackFile} encontrado.`, 'prepare');
     }
   }
 
   const resolvedEnvVars = Array.isArray(options.envVars)
     ? mergeEnvVars(options.envVars, service.envVars || [])
     : service.envVars || [];
+  pushProgress(`Variáveis de ambiente preparadas: ${resolvedEnvVars.map((entry) => entry.key).join(', ') || 'nenhuma'}.`, 'prepare');
   const versionMetadata = buildDeploymentVersionMetadata(
     options.versionMetadata,
     service.deployments || []
   );
+  pushProgress(`Versão registrada como ${versionMetadata.label}.`, 'prepare');
   const deployment = {
     id: deploymentId,
     label: versionMetadata.label,
@@ -3833,25 +3909,33 @@ const publishProjectArchive = async (serviceId, file, options = {}) => {
     nodeServiceMode,
     nodeSiteConfig,
     healthcheck,
-    autoRollback
+    autoRollback,
+    pushProgress
   });
 
   appendServiceLog('info', `Atualizacao de projeto concluida: ${service.name}`);
+  pushProgress('Publicação concluída.', 'done');
   return updatedService;
 };
 
 router.post('/services/:id/project-upload', upload.single('archive'), async (req, res, next) => {
+  const progress = [];
   try {
     const updatedService = await publishProjectArchive(req.params.id, req.file, {
       envVars: parseEnvVarsPayload(req.body?.envVars),
       healthcheck: parseHealthcheckPayload(req.body?.healthcheck),
       autoRollback: req.body?.autoRollback,
-      versionMetadata: parseVersionMetadataPayload(req.body?.versionMetadata)
+      versionMetadata: parseVersionMetadataPayload(req.body?.versionMetadata),
+      progressSessionId: req.body?.progressSessionId,
+      progress
     });
-    res.json({ service: sanitizeServiceForClient(updatedService) });
+    res.json({ service: sanitizeServiceForClient(updatedService), progress });
   } catch (err) {
     appendServiceLog('error', `Erro ao atualizar projeto ${req.params.id}: ${err.message}`);
-    next(err);
+    if (req.body?.progressSessionId) {
+      pushDeploymentProgress(progress, req.body.progressSessionId, `Falha na publicação: ${err.message}`, 'error');
+    }
+    sendProgressError(res, err, progress);
   }
 });
 
@@ -3878,6 +3962,7 @@ router.post('/services/:id/project-upload/init', (req, res, next) => {
       healthcheck: parseHealthcheckPayload(req.body?.healthcheck),
       autoRollback: req.body?.autoRollback,
       versionMetadata: parseVersionMetadataPayload(req.body?.versionMetadata),
+      progressSessionId: String(req.body?.progressSessionId || ''),
       totalChunks,
       createdAt: new Date().toISOString()
     });
@@ -3903,12 +3988,15 @@ router.post('/services/:id/project-upload/chunk', upload.single('chunk'), (req, 
 
 router.post('/services/:id/project-upload/complete', async (req, res, next) => {
   const uploadId = req.body?.uploadId;
+  const progress = [];
   try {
     const { metadata } = readChunkMetadata(uploadId);
     if (metadata.type !== 'project-upload' || metadata.serviceId !== req.params.id) {
       return res.status(400).json({ message: 'Upload inválido para este serviço' });
     }
+    pushDeploymentProgress(progress, metadata.progressSessionId, 'Remontando arquivo enviado em partes...', 'upload');
     const { archivePath, filename } = assembleChunkUpload(uploadId);
+    pushDeploymentProgress(progress, metadata.progressSessionId, 'Arquivo remontado. Iniciando processamento no servidor...', 'upload');
     const updatedService = await publishProjectArchive(req.params.id, {
       path: archivePath,
       originalname: filename
@@ -3916,14 +4004,25 @@ router.post('/services/:id/project-upload/complete', async (req, res, next) => {
       envVars: metadata.envVars || null,
       healthcheck: metadata.healthcheck || null,
       autoRollback: metadata.autoRollback,
-      versionMetadata: metadata.versionMetadata || null
+      versionMetadata: metadata.versionMetadata || null,
+      progressSessionId: metadata.progressSessionId,
+      progress
     });
     cleanupChunkUpload(uploadId);
-    res.json({ service: sanitizeServiceForClient(updatedService) });
+    res.json({ service: sanitizeServiceForClient(updatedService), progress });
   } catch (err) {
+    let progressSessionId = '';
+    try {
+      progressSessionId = readChunkMetadata(uploadId)?.metadata?.progressSessionId || '';
+    } catch (metadataErr) {
+      progressSessionId = '';
+    }
+    if (progressSessionId) {
+      pushDeploymentProgress(progress, progressSessionId, `Falha na publicação: ${err.message}`, 'error');
+    }
     if (uploadId) cleanupChunkUpload(uploadId);
     appendServiceLog('error', `Erro ao finalizar upload em partes ${req.params.id}: ${err.message}`);
-    next(err);
+    sendProgressError(res, err, progress);
   }
 });
 

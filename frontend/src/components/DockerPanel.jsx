@@ -21,7 +21,6 @@ import {
 import { Area, AreaChart, ResponsiveContainer, Tooltip as RechartsTooltip } from 'recharts'
 import api, { uploadApi } from '../services/api.js'
 import { createDockerLogsSocket, createDockerProgressSocket } from '../services/socket.js'
-import { getPanelHref } from '../utils/panelPath.js'
 
 // Polyfill para crypto.randomUUID
 const generateUUID = () => {
@@ -374,6 +373,19 @@ const getFilenameFromDisposition = (disposition, fallback) => {
   }
   const asciiMatch = header.match(/filename="?([^";]+)"?/i)
   return asciiMatch?.[1] || fallback
+}
+
+const PROJECT_DEPLOY_PHASE_PROGRESS = {
+  upload: 18,
+  prepare: 32,
+  extract: 45,
+  candidate: 62,
+  healthcheck: 78,
+  cleanup: 84,
+  promote: 90,
+  rollback: 94,
+  done: 100,
+  error: 0
 }
 
 const formatShortDateTime = (value) => {
@@ -973,6 +985,7 @@ const DockerPanel = ({ showPageIntro = true }) => {
   const [envImportDialog, setEnvImportDialog] = useState(null)
   const [envImportStatus, setEnvImportStatus] = useState(null)
   const [projectUploadStatus, setProjectUploadStatus] = useState(null)
+  const [projectDeployEvents, setProjectDeployEvents] = useState([])
   const [serviceUpdateStatus, setServiceUpdateStatus] = useState(null)
   const [removeDialog, setRemoveDialog] = useState(null)
   const [postgresDatabases, setPostgresDatabases] = useState([])
@@ -995,6 +1008,7 @@ const DockerPanel = ({ showPageIntro = true }) => {
   const socket = useMemo(() => createDockerLogsSocket(), [])
   const progressSocket = useMemo(() => createDockerProgressSocket(), [])
   const buildSessionRef = useRef(null)
+  const projectDeploySessionRef = useRef(null)
 
   const templateMap = useMemo(
     () => new Map((templates || []).map((template) => [template.id, template])),
@@ -1412,6 +1426,36 @@ const DockerPanel = ({ showPageIntro = true }) => {
         }
         return
       }
+      if (payload.type === 'project-deploy') {
+        if (payload.sessionId && payload.sessionId !== projectDeploySessionRef.current) return
+        if (payload.message) {
+          const phaseProgress = PROJECT_DEPLOY_PHASE_PROGRESS[payload.phase] ?? 50
+          setProjectDeployEvents((prev) => [
+            ...prev,
+            {
+              message: payload.message,
+              phase: payload.phase || 'process',
+              ts: payload.ts || Date.now()
+            }
+          ].slice(-120))
+          setProjectUploadStatus((prev) => {
+            const previousProgress = prev?.progress || 0
+            const nextStatus =
+              payload.phase === 'error'
+                ? 'error'
+                : payload.phase === 'done'
+                  ? 'success'
+                  : 'processing'
+            return {
+              ...(prev || {}),
+              status: nextStatus,
+              progress: payload.phase === 'error' ? previousProgress : Math.max(previousProgress, phaseProgress),
+              message: payload.message
+            }
+          })
+        }
+        return
+      }
       if (payload.message) {
         setServiceProgress((prev) => [...prev, payload.message])
       }
@@ -1738,10 +1782,38 @@ const DockerPanel = ({ showPageIntro = true }) => {
     }
   }
 
+  const mergeProjectProgressFromResponse = (lines = []) => {
+    if (!Array.isArray(lines) || lines.length === 0) return
+    setProjectDeployEvents((prev) => {
+      const existing = new Set(prev.map((event) => event.message))
+      const next = [...prev]
+      lines.forEach((line) => {
+        if (!line || existing.has(line)) return
+        existing.add(line)
+        next.push({
+          message: line,
+          phase: 'response',
+          ts: Date.now()
+        })
+      })
+      return next.slice(-120)
+    })
+  }
+
   const uploadProjectArchive = async (serviceId, file, options = {}) => {
     if (!serviceId || !file) return false
+    const progressSessionId = generateUUID()
+    projectDeploySessionRef.current = progressSessionId
+    setProjectDeployEvents([
+      {
+        message: `Preparando envio de ${file.name || 'arquivo'}...`,
+        phase: 'upload',
+        ts: Date.now()
+      }
+    ])
     const formData = new FormData()
     formData.append('archive', file)
+    formData.append('progressSessionId', progressSessionId)
     const hasEnvVars = Object.prototype.hasOwnProperty.call(options, 'envVars')
     if (hasEnvVars) {
       formData.append('envVars', JSON.stringify(options.envVars || []))
@@ -1760,6 +1832,7 @@ const DockerPanel = ({ showPageIntro = true }) => {
       let response = null
       if (file.size > CHUNKED_UPLOAD_THRESHOLD_BYTES) {
         const metadata = hasEnvVars ? { envVars: options.envVars || [] } : {}
+        metadata.progressSessionId = progressSessionId
         if (options.healthcheck) metadata.healthcheck = options.healthcheck
         if (Object.prototype.hasOwnProperty.call(options, 'autoRollback')) {
           metadata.autoRollback = !!options.autoRollback
@@ -1778,7 +1851,10 @@ const DockerPanel = ({ showPageIntro = true }) => {
               ...(prev || {}),
               status: progress >= 99 ? 'processing' : 'uploading',
               progress,
-              message: `Enviando arquivo em partes (${chunkIndex}/${totalChunks})...`
+              message:
+                progress >= 99
+                  ? 'Arquivo enviado. Aguardando processamento no servidor...'
+                  : `Enviando arquivo em partes (${chunkIndex}/${totalChunks})...`
             }))
           }
         })
@@ -1791,11 +1867,16 @@ const DockerPanel = ({ showPageIntro = true }) => {
             setProjectUploadStatus((prev) => ({
               ...(prev || {}),
               status: total && event.loaded >= total ? 'processing' : 'uploading',
-              progress
+              progress,
+              message:
+                total && event.loaded >= total
+                  ? 'Arquivo enviado. Aguardando processamento no servidor...'
+                  : 'Enviando arquivo...'
             }))
           }
         })
       }
+      mergeProjectProgressFromResponse(response?.data?.progress || [])
       const updated = response?.data?.service
       if (updated) {
         setEditDialog((prev) => {
@@ -1820,7 +1901,7 @@ const DockerPanel = ({ showPageIntro = true }) => {
       setProjectUploadStatus({
         status: 'success',
         progress: 100,
-        message: 'Projeto publicado com sucesso. Consulte os logs se precisar.'
+        message: 'Projeto publicado com sucesso.'
       })
       addToast('Projeto atualizado com sucesso')
       loadContainers()
@@ -1828,11 +1909,13 @@ const DockerPanel = ({ showPageIntro = true }) => {
       return true
     } catch (err) {
       const message = err.response?.data?.message || err.message || 'Erro ao enviar projeto'
-      setProjectUploadStatus({
+      mergeProjectProgressFromResponse(err.response?.data?.progress || [])
+      setProjectUploadStatus((prev) => ({
+        ...(prev || {}),
         status: 'error',
-        progress: 0,
+        progress: prev?.progress || 0,
         message
-      })
+      }))
       addToast(message, 'error')
       return false
     }
@@ -1973,6 +2056,8 @@ const DockerPanel = ({ showPageIntro = true }) => {
 
   const openEditServiceDialog = (svc) => {
     setProjectUploadStatus(null)
+    setProjectDeployEvents([])
+    projectDeploySessionRef.current = null
     setServiceUpdateStatus(null)
     setEnvImportStatus(null)
     const pending = svc.pendingConfig || null
@@ -4016,14 +4101,27 @@ const DockerPanel = ({ showPageIntro = true }) => {
                           {projectUploadStatus?.status === 'error' && 'Falha na atualizacao'}
                           {!projectUploadStatus && 'Aguardando arquivo para enviar.'}
                         </span>
-                        <a
-                          className="text-blue-300 underline"
-                          href={getPanelHref('/logs')}
-                          target="_blank"
-                          rel="noreferrer"
+                        <button
+                          className="text-blue-300 underline disabled:cursor-not-allowed disabled:text-slate-500"
+                          disabled={projectDeployEvents.length === 0}
+                          onClick={() =>
+                            navigator.clipboard.writeText(
+                              projectDeployEvents
+                                .map((event) => {
+                                  const time = new Date(event.ts || Date.now()).toLocaleTimeString('pt-BR', {
+                                    hour: '2-digit',
+                                    minute: '2-digit',
+                                    second: '2-digit',
+                                    hour12: false
+                                  })
+                                  return `[${time}] ${event.message}`
+                                })
+                                .join('\n')
+                            )
+                          }
                         >
-                          Ver logs
-                        </a>
+                          Copiar detalhes
+                        </button>
                       </div>
                       {(projectUploadStatus?.status === 'uploading' || projectUploadStatus?.status === 'processing') && (
                         <div className="mt-2">
@@ -4043,6 +4141,32 @@ const DockerPanel = ({ showPageIntro = true }) => {
                         <p className="mt-2 text-slate-300 break-all">
                           {projectUploadStatus.message}
                         </p>
+                      )}
+                      {projectDeployEvents.length > 0 && (
+                        <div className="mt-3 rounded-lg border border-slate-700 bg-slate-950/70 p-2">
+                          <div className="mb-2 flex items-center justify-between gap-2">
+                            <span className="font-semibold text-slate-200">Processo em andamento</span>
+                            <span className="text-[10px] uppercase tracking-[0.16em] text-slate-500">
+                              {projectDeployEvents.length} etapa(s)
+                            </span>
+                          </div>
+                          <div className="max-h-44 space-y-1 overflow-y-auto pr-1">
+                            {projectDeployEvents.slice(-80).map((event, idx) => (
+                              <div key={`${event.ts || idx}-${idx}`} className="flex gap-2 text-[11px] leading-5 text-slate-300">
+                                <span className="mt-1 h-1.5 w-1.5 shrink-0 rounded-full bg-blue-300" />
+                                <span className="min-w-[56px] font-mono text-slate-500">
+                                  {new Date(event.ts || Date.now()).toLocaleTimeString('pt-BR', {
+                                    hour: '2-digit',
+                                    minute: '2-digit',
+                                    second: '2-digit',
+                                    hour12: false
+                                  })}
+                                </span>
+                                <span className="break-all">{event.message}</span>
+                              </div>
+                            ))}
+                          </div>
+                        </div>
                       )}
                     </div>
                     <div className="rounded-xl border border-slate-700 bg-slate-800/60 p-3 text-xs">
