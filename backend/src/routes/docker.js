@@ -10,7 +10,7 @@ const net = require('net');
 const os = require('os');
 const http = require('http');
 const https = require('https');
-const { execFile, execSync } = require('child_process');
+const { execFile, execFileSync } = require('child_process');
 const { pipeline } = require('stream/promises');
 const zlib = require('zlib');
 const tarfs = require('tar-fs');
@@ -40,14 +40,90 @@ const CONTAINER_VOLUME_PERMISSIONS = {
   }
 };
 
-const applyContainerVolumePermissions = (templateId, hostPath, progress) => {
-  const permission = CONTAINER_VOLUME_PERMISSIONS[templateId];
+const DATABASE_TEMPLATE_IDS = new Set(['postgres-db', 'mysql-db', 'redis-cache']);
+
+const isPostgresImage = (imageName = '') => {
+  const image = String(imageName || '').toLowerCase();
+  return image === 'postgres' || image.startsWith('postgres:') || image.includes('/postgres:');
+};
+
+const isDatabaseServiceTemplate = (templateId, imageName = '') =>
+  DATABASE_TEMPLATE_IDS.has(templateId) || isPostgresImage(imageName);
+
+const resolveContainerVolumePermission = (templateId, imageName = '') => {
+  if (CONTAINER_VOLUME_PERMISSIONS[templateId]) {
+    return CONTAINER_VOLUME_PERMISSIONS[templateId];
+  }
+  if (isPostgresImage(imageName)) {
+    return CONTAINER_VOLUME_PERMISSIONS['postgres-db'];
+  }
+  return null;
+};
+
+const applyContainerVolumePermissions = (templateId, hostPath, progress, imageName = '') => {
+  const permission = resolveContainerVolumePermission(templateId, imageName);
   if (!permission || !hostPath) return;
 
-  execSync(`chown -R ${permission.uid}:${permission.gid} "${hostPath}"`, { stdio: 'ignore' });
-  execSync(`chmod -R ${permission.mode} "${hostPath}"`, { stdio: 'ignore' });
+  const resolvedPath = path.resolve(hostPath);
+  fs.mkdirSync(resolvedPath, { recursive: true });
+  execFileSync('chown', ['-R', `${permission.uid}:${permission.gid}`, resolvedPath], { stdio: 'ignore' });
+  execFileSync('chmod', ['-R', permission.mode, resolvedPath], { stdio: 'ignore' });
   if (progress) {
     progress.push(`✅ Permissões ${permission.label} ajustadas`);
+  }
+};
+
+const applyContainerVolumePermissionsForMappings = ({
+  templateId,
+  imageName = '',
+  volumes = [],
+  progress = null,
+  onWarning = null
+}) => {
+  const permission = resolveContainerVolumePermission(templateId, imageName);
+  if (!permission) return;
+  (Array.isArray(volumes) ? volumes : [])
+    .filter((volume) => volume?.hostPath)
+    .forEach((volume) => {
+      try {
+        applyContainerVolumePermissions(templateId, volume.hostPath, progress, imageName);
+      } catch (err) {
+        const message = `Aviso ao ajustar volume ${permission.label}: ${err.message}`;
+        if (progress) progress.push(`⚠️ ${message}`);
+        if (onWarning) onWarning(message);
+      }
+    });
+};
+
+const repairManagedContainerVolumePermissions = async (containerId) => {
+  if (!containerId) return;
+  try {
+    const container = dockerManager.docker.getContainer(containerId);
+    const info = await container.inspect();
+    const labels = info?.Config?.Labels || {};
+    const serviceId = labels['provirpanel.service.id'];
+    const services = dockerManager.listServices();
+    const service =
+      services.find((entry) => entry.id === serviceId) ||
+      services.find((entry) => entry.containerId === containerId);
+    const templateId = service?.templateId || labels['provirpanel.template.id'] || '';
+    const imageName = service?.image || info?.Config?.Image || '';
+    const volumes =
+      service?.volumes?.length
+        ? service.volumes
+        : (info?.Mounts || []).map((mount) => ({
+            hostPath: mount.Source,
+            containerPath: mount.Destination
+          }));
+
+    applyContainerVolumePermissionsForMappings({
+      templateId,
+      imageName,
+      volumes,
+      onWarning: (message) => appendServiceLog('warn', `${info?.Name || containerId}: ${message}`)
+    });
+  } catch (err) {
+    appendServiceLog('warn', `Nao foi possivel reparar permissoes do container ${containerId}: ${err.message}`);
   }
 };
 
@@ -2544,9 +2620,9 @@ router.post('/services', async (req, res, next) => {
           progress.push(`📂 Criando diretório: ${m.hostPath}`);
           fs.mkdirSync(path.resolve(m.hostPath), { recursive: true });
           
-          if (CONTAINER_VOLUME_PERMISSIONS[templateId]) {
+          if (resolveContainerVolumePermission(templateId, imageName)) {
             try {
-              applyContainerVolumePermissions(templateId, m.hostPath, progress);
+              applyContainerVolumePermissions(templateId, m.hostPath, progress, imageName);
             } catch (err) {
               progress.push(`⚠️ Aviso: ${err.message}`);
             }
@@ -2572,11 +2648,14 @@ router.post('/services', async (req, res, next) => {
       }
     }
 
-    const projectPath = getNodeServiceProjectPath(finalizedVolumes, nodeServiceMode);
-    const envProjectPath = getEnvProjectPath(finalizedVolumes, projectPath);
+    const isDatabaseService = isDatabaseServiceTemplate(templateId, imageName);
+    const projectPath = isDatabaseService ? null : getNodeServiceProjectPath(finalizedVolumes, nodeServiceMode);
+    const envProjectPath = isDatabaseService ? null : getEnvProjectPath(finalizedVolumes, projectPath);
     if (envProjectPath?.hostPath) {
       writeEnvFile(envProjectPath, normalizedEnvVars, template.env);
       progress.push(`📝 .env gerado em ${envProjectPath.hostPath}`);
+    } else if (isDatabaseService) {
+      progress.push('📝 Variáveis aplicadas diretamente no container do banco; .env não será gravado no volume de dados');
     } else {
       progress.push('⚠️ Nao foi possivel resolver o diretorio do projeto para gerar .env');
     }
@@ -2671,7 +2750,7 @@ router.post('/services', async (req, res, next) => {
       if (containerCmd) {
         containerConfig.Cmd = containerCmd;
       }
-    if (projectPath?.containerPath || template.workdir) {
+    if (!isDatabaseService && (projectPath?.containerPath || template.workdir)) {
       containerConfig.WorkingDir = projectPath?.containerPath || template.workdir;
     }
     if (containerUser) {
@@ -2747,7 +2826,7 @@ router.post('/services', async (req, res, next) => {
         const pgAdminVolumePath = path.join(dockerBaseDir, `${name}-pgadmin`);
         fs.mkdirSync(pgAdminVolumePath, { recursive: true });
         try {
-          applyContainerVolumePermissions('pgadmin', pgAdminVolumePath, progress);
+          applyContainerVolumePermissions('pgadmin', pgAdminVolumePath, progress, 'dpage/pgadmin4:latest');
         } catch (err) {
           progress.push(`⚠️ Aviso ao ajustar volume do pgAdmin: ${err.message}`);
         }
@@ -2904,6 +2983,7 @@ router.get("/containers/:id/logs", async (req, res, next) => {
 router.post("/containers/:id/start", async (req, res, next) => {
   try {
     const container = dockerManager.docker.getContainer(req.params.id);
+    await repairManagedContainerVolumePermissions(req.params.id);
     await container.start();
     res.json({ status: "started" });
   } catch (err) {
@@ -2925,6 +3005,7 @@ router.post('/containers/:id/stop', async (req, res, next) => {
 
 router.post('/containers/:id/restart', async (req, res, next) => {
   try {
+    await repairManagedContainerVolumePermissions(req.params.id);
     await dockerManager.restartContainer(req.params.id);
     res.json({ status: 'restarted' });
   } catch (err) {
@@ -3066,7 +3147,12 @@ router.put('/services/:id', async (req, res, next) => {
     }
 
     appendServiceLog('info', `Atualizacao de servico iniciada: ${service.name}`);
-    if (normalizeEnvVars(envVars).length && !resolvePrimaryVolumeProjectPath(service.volumes)) {
+    const isDatabaseServiceForConfig = isDatabaseServiceTemplate(service.templateId, service.image);
+    if (
+      !isDatabaseServiceForConfig &&
+      normalizeEnvVars(envVars).length &&
+      !resolvePrimaryVolumeProjectPath(service.volumes)
+    ) {
       const volumeInfo = ensureServiceProjectVolume(service);
       service = volumeInfo.service;
       appendServiceLog('info', `Volume padrao garantido para .env de ${service.name}`);
@@ -3110,9 +3196,11 @@ router.put('/services/:id', async (req, res, next) => {
           isJavaRuntimeService(service)
         )
     );
-    const projectPath = canAutoProjectLaunch
-      ? resolvePrimaryVolumeProjectPath(service.volumes)
-      : getNodeServiceProjectPath(service.volumes, nodeServiceMode);
+    const projectPath = isDatabaseServiceForConfig
+      ? null
+      : canAutoProjectLaunch
+        ? resolvePrimaryVolumeProjectPath(service.volumes)
+        : getNodeServiceProjectPath(service.volumes, nodeServiceMode);
     if (isNodeSitesMode && projectPath?.hostPath) {
       ensureNodeSiteScaffold(projectPath, service.name, nodeSiteConfig, previousNodeSiteConfig);
       appendServiceLog(
@@ -3120,9 +3208,11 @@ router.put('/services/:id', async (req, res, next) => {
         `Estrutura de site preparada em ${path.join(projectPath.hostPath, nodeSiteConfig.siteFolder)}`
       );
     }
-    const workdir = projectPath?.containerPath || template.workdir || null;
+    const workdir = isDatabaseServiceForConfig ? null : projectPath?.containerPath || template.workdir || null;
     if (projectPath?.hostPath) {
       appendServiceLog('info', `Projeto resolvido em ${projectPath.hostPath}`);
+    } else if (isDatabaseServiceForConfig) {
+      appendServiceLog('info', `Servico de banco ${service.name}: volume de dados nao sera tratado como projeto`);
     } else {
       appendServiceLog('warn', `Nao foi possivel resolver o diretorio do projeto para ${service.name}`);
     }
@@ -3134,10 +3224,12 @@ router.put('/services/:id', async (req, res, next) => {
     }
     
     const resolvedEnvVars = savedEnvVars;
-    const envProjectPath = getEnvProjectPath(service.volumes, projectPath);
+    const envProjectPath = isDatabaseServiceForConfig ? null : getEnvProjectPath(service.volumes, projectPath);
     if (envProjectPath?.hostPath) {
       writeEnvFile(envProjectPath, resolvedEnvVars, template.env);
       appendServiceLog('info', `Arquivo .env atualizado em ${envProjectPath.hostPath}`);
+    } else if (isDatabaseServiceForConfig) {
+      appendServiceLog('info', `Variaveis de ${service.name} aplicadas somente ao container do banco`);
     } else {
       appendServiceLog('warn', `Nao foi possivel resolver diretorio para arquivo .env de ${service.name}`);
     }
@@ -3224,6 +3316,8 @@ router.put('/services/:id', async (req, res, next) => {
     }
     if (workdir) {
       appendServiceLog('info', `WorkingDir para ${service.name}: ${workdir}`);
+    } else if (isDatabaseServiceForConfig) {
+      appendServiceLog('info', `WorkingDir padrao da imagem mantido para banco ${service.name}`);
     } else {
       appendServiceLog('warn', `WorkingDir nao resolvido para ${service.name}`);
     }
@@ -3282,6 +3376,13 @@ router.put('/services/:id', async (req, res, next) => {
     if ((service.hasProject || isNodeSitesMode) && service.templateId === 'node-app' && !containerCmd) {
       containerConfig.Cmd = ['sh', '-c', 'npm install && npm start'];
     }
+
+    applyContainerVolumePermissionsForMappings({
+      templateId: service.templateId,
+      imageName: service.image,
+      volumes: service.volumes,
+      onWarning: (message) => appendServiceLog('warn', `${service.name}: ${message}`)
+    });
 
     appendServiceLog('info', `Garantindo nome livre para ${service.name}`);
     await removeContainerByName(service.name);

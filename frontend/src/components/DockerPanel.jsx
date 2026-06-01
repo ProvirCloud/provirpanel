@@ -1025,6 +1025,7 @@ const DockerPanel = ({ showPageIntro = true }) => {
   const [envImportStatus, setEnvImportStatus] = useState(null)
   const [projectUploadStatus, setProjectUploadStatus] = useState(null)
   const [projectDeployEvents, setProjectDeployEvents] = useState([])
+  const [projectUploadServiceId, setProjectUploadServiceId] = useState(null)
   const [serviceUpdateStatus, setServiceUpdateStatus] = useState(null)
   const [removeDialog, setRemoveDialog] = useState(null)
   const [postgresDatabases, setPostgresDatabases] = useState([])
@@ -1387,9 +1388,14 @@ const DockerPanel = ({ showPageIntro = true }) => {
     const terminalKey = jobId || `${serviceId}:${status}:${message}`
     if (terminalKey && completedProjectJobsRef.current.has(terminalKey)) return
     if (terminalKey) completedProjectJobsRef.current.add(terminalKey)
+    const isTrackedService = !serviceId || projectDeployServiceRef.current === serviceId
 
     if (status === 'success') {
       applyPublishedServiceToDialog(serviceId, service)
+      if (!isTrackedService) {
+        await loadServices()
+        return
+      }
       setProjectUploadStatus((prev) => ({
         ...(prev || {}),
         status: 'success',
@@ -1402,6 +1408,10 @@ const DockerPanel = ({ showPageIntro = true }) => {
       return
     }
 
+    if (!isTrackedService) {
+      await loadServices()
+      return
+    }
     setProjectUploadStatus((prev) => ({
       ...(prev || {}),
       status: 'error',
@@ -1959,6 +1969,7 @@ const DockerPanel = ({ showPageIntro = true }) => {
     const progressSessionId = generateUUID()
     projectDeploySessionRef.current = progressSessionId
     projectDeployServiceRef.current = serviceId
+    setProjectUploadServiceId(serviceId)
     completedProjectJobsRef.current = new Set()
     setProjectDeployEvents([
       {
@@ -2226,9 +2237,14 @@ const DockerPanel = ({ showPageIntro = true }) => {
   }
 
   const openEditServiceDialog = (svc) => {
-    setProjectUploadStatus(null)
-    setProjectDeployEvents([])
-    projectDeploySessionRef.current = null
+    const hasRunningProjectUpload = ['uploading', 'processing'].includes(projectUploadStatus?.status)
+    if (!hasRunningProjectUpload && projectUploadServiceId !== svc.id) {
+      setProjectUploadStatus(null)
+      setProjectDeployEvents([])
+      setProjectUploadServiceId(null)
+      projectDeploySessionRef.current = null
+      projectDeployServiceRef.current = null
+    }
     setServiceUpdateStatus(null)
     setEnvImportStatus(null)
     const pending = svc.pendingConfig || null
@@ -3032,12 +3048,15 @@ const DockerPanel = ({ showPageIntro = true }) => {
   }
 
   const serviceUpdateInProgress = ['saving', 'applying'].includes(serviceUpdateStatus?.status)
-  const projectUploadInProgress = ['uploading', 'processing'].includes(projectUploadStatus?.status)
+  const isProjectUploadForEditService = Boolean(editDialog?.id && projectUploadServiceId === editDialog.id)
+  const activeProjectUploadStatus = isProjectUploadForEditService ? projectUploadStatus : null
+  const activeProjectDeployEvents = isProjectUploadForEditService ? projectDeployEvents : []
+  const projectUploadInProgress = ['uploading', 'processing'].includes(activeProjectUploadStatus?.status)
   const editOperationInProgress = serviceUpdateInProgress || projectUploadInProgress
   const editVersionPreview = editDialog ? buildVersionPreview(editDialog) : null
-  const latestProjectDeployEvent = projectDeployEvents[projectDeployEvents.length - 1] || null
+  const latestProjectDeployEvent = activeProjectDeployEvents[activeProjectDeployEvents.length - 1] || null
   const currentProjectDeployPhase =
-    projectUploadStatus?.phase || latestProjectDeployEvent?.phase || (projectUploadInProgress ? 'process' : null)
+    activeProjectUploadStatus?.phase || latestProjectDeployEvent?.phase || (projectUploadInProgress ? 'process' : null)
   const currentProjectDeployLabel = currentProjectDeployPhase
     ? getProjectDeployPhaseLabel(currentProjectDeployPhase)
     : null
@@ -3701,7 +3720,12 @@ const DockerPanel = ({ showPageIntro = true }) => {
       {editDialog && (
         <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50">
           <div className="bg-slate-900 border border-slate-700 rounded-2xl p-6 max-w-2xl w-full mx-4 max-h-[85vh] flex flex-col">
-            <h3 className="text-lg font-semibold text-white mb-4">⚙️ Editar Serviço</h3>
+            <div className="mb-4">
+              <h3 className="text-lg font-semibold text-white">⚙️ Editar Serviço</h3>
+              <p className="mt-1 text-sm text-slate-300">
+                {editDialog.name || editDialog.id || 'Serviço sem nome'}
+              </p>
+            </div>
             <div className="space-y-4 overflow-y-auto pr-1 flex-1">
               <div>
                 <label className="block text-sm text-slate-300 mb-2">Porta Externa</label>
@@ -4252,8 +4276,8 @@ const DockerPanel = ({ showPageIntro = true }) => {
                         }}
                       >
                         <span className="inline-flex items-center gap-2">
-                          {(projectUploadStatus?.status === 'uploading' ||
-                            projectUploadStatus?.status === 'processing') && (
+                          {(activeProjectUploadStatus?.status === 'uploading' ||
+                            activeProjectUploadStatus?.status === 'processing') && (
                             <>
                               <span className="inline-flex h-3 w-3 animate-spin rounded-full border-2 border-slate-500 border-t-blue-400" />
                               <span className="flex items-center gap-1">
@@ -4263,11 +4287,11 @@ const DockerPanel = ({ showPageIntro = true }) => {
                               </span>
                             </>
                           )}
-                          {projectUploadStatus?.status === 'uploading' && 'Enviando...'}
-                          {projectUploadStatus?.status === 'processing' && (currentProjectDeployLabel || 'Processando...')}
-                          {!projectUploadStatus ||
-                          (projectUploadStatus?.status !== 'uploading' &&
-                            projectUploadStatus?.status !== 'processing')
+                          {activeProjectUploadStatus?.status === 'uploading' && 'Enviando...'}
+                          {activeProjectUploadStatus?.status === 'processing' && (currentProjectDeployLabel || 'Processando...')}
+                          {!activeProjectUploadStatus ||
+                          (activeProjectUploadStatus?.status !== 'uploading' &&
+                            activeProjectUploadStatus?.status !== 'processing')
                             ? 'Atualizar serviço publicado'
                             : ''}
                         </span>
@@ -4281,18 +4305,18 @@ const DockerPanel = ({ showPageIntro = true }) => {
                     <div className="rounded-xl border border-slate-700 bg-slate-800/60 p-3 text-xs">
                       <div className="flex items-center justify-between">
                         <span className="text-slate-200">
-                          {projectUploadStatus?.status === 'uploading' && 'Enviando...'}
-                          {projectUploadStatus?.status === 'processing' && (currentProjectDeployLabel || 'Processando no servidor...')}
-                          {projectUploadStatus?.status === 'success' && 'Atualizacao concluida'}
-                          {projectUploadStatus?.status === 'error' && 'Falha na atualizacao'}
-                          {!projectUploadStatus && 'Aguardando arquivo para enviar.'}
+                          {activeProjectUploadStatus?.status === 'uploading' && 'Enviando...'}
+                          {activeProjectUploadStatus?.status === 'processing' && (currentProjectDeployLabel || 'Processando no servidor...')}
+                          {activeProjectUploadStatus?.status === 'success' && 'Atualizacao concluida'}
+                          {activeProjectUploadStatus?.status === 'error' && 'Falha na atualizacao'}
+                          {!activeProjectUploadStatus && 'Aguardando arquivo para enviar.'}
                         </span>
                         <button
                           className="text-blue-300 underline disabled:cursor-not-allowed disabled:text-slate-500"
-                          disabled={projectDeployEvents.length === 0}
+                          disabled={activeProjectDeployEvents.length === 0}
                           onClick={() =>
                             navigator.clipboard.writeText(
-                              projectDeployEvents
+                              activeProjectDeployEvents
                                 .map((event) => {
                                   const time = new Date(event.ts || Date.now()).toLocaleTimeString('pt-BR', {
                                     hour: '2-digit',
@@ -4309,21 +4333,21 @@ const DockerPanel = ({ showPageIntro = true }) => {
                           Copiar detalhes
                         </button>
                       </div>
-                      {(projectUploadStatus?.status === 'uploading' || projectUploadStatus?.status === 'processing') && (
+                      {(activeProjectUploadStatus?.status === 'uploading' || activeProjectUploadStatus?.status === 'processing') && (
                         <div className="mt-2">
                           <div className="flex items-center gap-2 text-slate-300">
                             <span className="inline-flex h-4 w-4 animate-spin rounded-full border-2 border-slate-500 border-t-blue-400" />
-                            <span>{projectUploadStatus.progress || 0}%</span>
+                            <span>{activeProjectUploadStatus.progress || 0}%</span>
                           </div>
                           <div className="mt-2 h-2 w-full rounded-full bg-slate-700">
                             <div
                               className="h-2 rounded-full bg-blue-500 transition-all"
-                              style={{ width: `${projectUploadStatus.progress || 0}%` }}
+                              style={{ width: `${activeProjectUploadStatus.progress || 0}%` }}
                             />
                           </div>
                         </div>
                       )}
-                      {currentProjectDeployLabel && projectUploadStatus && (
+                      {currentProjectDeployLabel && activeProjectUploadStatus && (
                         <div className="mt-3 border-t border-slate-700 pt-3">
                           <div className="flex flex-wrap items-center justify-between gap-2">
                             <span className="text-[10px] uppercase tracking-[0.16em] text-slate-500">
@@ -4335,21 +4359,21 @@ const DockerPanel = ({ showPageIntro = true }) => {
                           </div>
                         </div>
                       )}
-                      {projectUploadStatus?.message && (
+                      {activeProjectUploadStatus?.message && (
                         <p className="mt-2 text-slate-300 break-all">
-                          {projectUploadStatus.message}
+                          {activeProjectUploadStatus.message}
                         </p>
                       )}
-                      {projectDeployEvents.length > 0 && (
+                      {activeProjectDeployEvents.length > 0 && (
                         <div className="mt-3 rounded-lg border border-slate-700 bg-slate-950/70 p-2">
                           <div className="mb-2 flex items-center justify-between gap-2">
                             <span className="font-semibold text-slate-200">Processo em andamento</span>
                             <span className="text-[10px] uppercase tracking-[0.16em] text-slate-500">
-                              {projectDeployEvents.length} etapa(s)
+                              {activeProjectDeployEvents.length} etapa(s)
                             </span>
                           </div>
                           <div className="max-h-44 space-y-1 overflow-y-auto pr-1">
-                            {projectDeployEvents.slice(-80).map((event, idx) => (
+                            {activeProjectDeployEvents.slice(-80).map((event, idx) => (
                               <div key={`${event.ts || idx}-${idx}`} className="flex gap-2 text-[11px] leading-5 text-slate-300">
                                 <span className="mt-1 h-1.5 w-1.5 shrink-0 rounded-full bg-blue-300" />
                                 <span className="min-w-[56px] font-mono text-slate-500">
@@ -4410,8 +4434,7 @@ const DockerPanel = ({ showPageIntro = true }) => {
                                   className="inline-flex items-center gap-1.5 rounded-lg border border-blue-700 px-3 py-1.5 text-[11px] text-blue-200 hover:bg-blue-950 disabled:cursor-not-allowed disabled:opacity-50"
                                   disabled={
                                     !deployment.projectDir ||
-                                    projectUploadStatus?.status === 'uploading' ||
-                                    projectUploadStatus?.status === 'processing'
+                                    projectUploadInProgress
                                   }
                                   onClick={() => downloadServiceVersion(editDialog.id, deployment)}
                                 >
@@ -4422,8 +4445,7 @@ const DockerPanel = ({ showPageIntro = true }) => {
                                   className="inline-flex items-center gap-1.5 rounded-lg border border-rose-700 px-3 py-1.5 text-[11px] text-rose-200 hover:bg-rose-950 disabled:cursor-not-allowed disabled:opacity-50"
                                   disabled={
                                     isActive ||
-                                    projectUploadStatus?.status === 'uploading' ||
-                                    projectUploadStatus?.status === 'processing'
+                                    projectUploadInProgress
                                   }
                                   onClick={() => removeServiceVersion(editDialog.id, deployment)}
                                 >
@@ -4434,8 +4456,7 @@ const DockerPanel = ({ showPageIntro = true }) => {
                                   className="inline-flex items-center gap-1.5 rounded-lg border border-slate-600 px-3 py-1.5 text-[11px] text-slate-200 hover:bg-slate-700 disabled:cursor-not-allowed disabled:opacity-50"
                                   disabled={
                                     isActive ||
-                                    projectUploadStatus?.status === 'uploading' ||
-                                    projectUploadStatus?.status === 'processing'
+                                    projectUploadInProgress
                                   }
                                   onClick={() => rollbackServiceVersion(editDialog.id, deployment.id)}
                                 >
