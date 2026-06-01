@@ -381,26 +381,18 @@ const mergeEnvEntries = (...groups) => {
 };
 
 const resolveEnvValue = (key, rawValue, lookup = {}) => {
-  let value = rawValue ?? '';
-  if (value === '' && Object.prototype.hasOwnProperty.call(process.env, key)) {
-    value = process.env[key] ?? '';
-  }
-  const text = String(value);
+  const text = String(rawValue ?? '');
   return text.replace(ENV_REFERENCE_PATTERN, (token, bracketed, simple) => {
     const refKey = bracketed || simple;
     if (Object.prototype.hasOwnProperty.call(lookup, refKey)) {
       return lookup[refKey];
     }
-    if (Object.prototype.hasOwnProperty.call(process.env, refKey)) {
-      return process.env[refKey] ?? '';
-    }
     return token;
   });
 };
 
-const buildContainerEnv = ({ templateEnv = [], explicitEnvVars = [], projectPath = null }) => {
-  const envFromFile = readProjectEnvVars(projectPath);
-  const merged = mergeEnvEntries(templateEnv, envFromFile, explicitEnvVars);
+const buildContainerEnv = ({ explicitEnvVars = [] }) => {
+  const merged = mergeEnvEntries(explicitEnvVars);
   const rawLookup = Object.fromEntries(
     merged.map((entry) => [entry.key, String(entry.value ?? '')])
   );
@@ -937,10 +929,11 @@ const runContainerWithRetry = async (image, config, name) => {
 
 const writeEnvFile = (projectPath, envVars = [], templateEnv = []) => {
   if (!projectPath?.hostPath) return;
-  const existingEnv = readProjectEnvVars(projectPath);
-  const merged = mergeEnvEntries(templateEnv, existingEnv, envVars);
-  if (!merged.length) return;
-  const content = merged.map((entry) => `${entry.key}=${entry.value ?? ''}`).join('\n') + '\n';
+  fs.mkdirSync(projectPath.hostPath, { recursive: true });
+  const merged = mergeEnvEntries(envVars);
+  const content = merged.length
+    ? merged.map((entry) => `${entry.key}=${entry.value ?? ''}`).join('\n') + '\n'
+    : '';
   fs.writeFileSync(path.join(projectPath.hostPath, '.env'), content, 'utf8');
 };
 
