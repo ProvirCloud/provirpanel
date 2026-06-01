@@ -4920,7 +4920,8 @@ const SERVICE_TEMPLATES = [
       '-c',
       'printf "server { listen 80; server_name _; root /usr/share/nginx/html; index index.html; location / { try_files \\$uri \\$uri/ /index.html; } }" > /etc/nginx/conf.d/default.conf && nginx -g "daemon off;"'
     ],
-    description: 'Serve arquivos estáticos rapidamente'
+    description: 'Site estático com fallback SPA e volume de publicação',
+    features: ['Site estático', 'Fallback SPA', 'Volume público']
   },
   {
     id: 'node-app',
@@ -4935,7 +4936,8 @@ const SERVICE_TEMPLATES = [
     env: [{ key: 'NODE_ENV', value: 'production' }],
     command: ['npm', 'start'],
     workdir: '/usr/src/app',
-    description: 'Aplicação Node com npm start'
+    description: 'Node.js com modos Serviço/Sites, build automático e versões publicadas',
+    features: ['Serviço ou Sites', 'Build automático', 'Versões e rollback']
   },
   {
     id: 'postgres-db',
@@ -4952,7 +4954,8 @@ const SERVICE_TEMPLATES = [
       { key: 'POSTGRES_PASSWORD', value: 'change-me' },
       { key: 'POSTGRES_DB', value: 'appdb' }
     ],
-    description: 'Banco PostgreSQL pronto para uso',
+    description: 'Banco PostgreSQL com volume dedicado, permissões ajustadas e pgAdmin opcional',
+    features: ['Volume dedicado', 'Permissões ajustadas', 'pgAdmin opcional'],
     hasProjectOption: false,
     hasManagerOption: true,
     managerLabel: 'Instalar pgAdmin (gerenciador web)'
@@ -4971,7 +4974,8 @@ const SERVICE_TEMPLATES = [
       { key: 'PGADMIN_DEFAULT_EMAIL', value: 'admin@admin.com' },
       { key: 'PGADMIN_DEFAULT_PASSWORD', value: 'admin' }
     ],
-    description: 'Interface web para gerenciar PostgreSQL',
+    description: 'Interface web para gerenciar PostgreSQL existente',
+    features: ['Banco existente', 'Configuração automática'],
     isManager: true,
     hasProjectOption: false,
     hasDbConfigOption: true,
@@ -4991,7 +4995,9 @@ const SERVICE_TEMPLATES = [
       { key: 'MYSQL_ROOT_PASSWORD', value: 'root' },
       { key: 'MYSQL_DATABASE', value: 'app' }
     ],
-    description: 'Banco MySQL pronto para uso'
+    description: 'Banco MySQL com volume persistente e variáveis padrão',
+    features: ['Volume persistente', 'Env padrão'],
+    hasProjectOption: false
   },
   {
     id: 'redis-cache',
@@ -5004,7 +5010,9 @@ const SERVICE_TEMPLATES = [
       { hostPath: '', containerPath: '/data' }
     ],
     env: [],
-    description: 'Cache Redis pronto para uso'
+    description: 'Cache Redis com volume /data opcional',
+    features: ['Cache', 'Volume /data'],
+    hasProjectOption: false
   }
 ];
 

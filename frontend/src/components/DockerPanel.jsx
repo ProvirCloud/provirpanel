@@ -51,11 +51,11 @@ const formatLogChunk = (chunk, ts) => {
 }
 
 const presetImages = [
-  { id: 'postgres-db', name: 'PostgreSQL', image: 'postgres', tag: '16', description: 'Banco relacional' },
-  { id: 'mysql-db', name: 'MySQL', image: 'mysql', tag: '8', description: 'Banco relacional' },
-  { id: 'redis-cache', name: 'Redis', image: 'redis', tag: '7', description: 'Cache em memoria' },
-  { id: 'nginx-static', name: 'Nginx', image: 'nginx', tag: 'latest', description: 'Proxy reverso' },
-  { id: 'node-app', name: 'Node.js', image: 'node', tag: '20', description: 'Runtime JS' }
+  { id: 'postgres-db', name: 'PostgreSQL', image: 'postgres', tag: '16', description: 'Banco com volume dedicado e permissões ajustadas' },
+  { id: 'mysql-db', name: 'MySQL', image: 'mysql', tag: '8', description: 'Banco relacional com volume persistente' },
+  { id: 'redis-cache', name: 'Redis', image: 'redis', tag: '7', description: 'Cache com volume /data opcional' },
+  { id: 'nginx-static', name: 'Nginx', image: 'nginx', tag: 'latest', description: 'Site estático com fallback SPA' },
+  { id: 'node-app', name: 'Node.js', image: 'node', tag: '20', description: 'Serviço Node ou hospedagem de build estático' }
 ]
 
 const guessContainerPort = (imageTag) => {
@@ -250,6 +250,69 @@ const NODE_SITE_TYPES = {
 }
 
 const NODE_SITE_FOLDERS = ['www', 'publish']
+
+const INSTALL_TEMPLATE_BADGES = {
+  'nginx-static': ['Site estático', 'Fallback SPA', 'Volume público'],
+  'node-app': ['Serviço ou Sites', 'Build automático', 'Versões e rollback'],
+  'postgres-db': ['Volume dedicado', 'Permissões ajustadas', 'pgAdmin opcional'],
+  pgadmin: ['Banco existente', 'Configuração automática'],
+  'mysql-db': ['Volume persistente', 'Env padrão'],
+  'redis-cache': ['Cache', 'Volume /data']
+}
+
+const DATA_SERVICE_TEMPLATE_IDS = new Set(['postgres-db', 'mysql-db', 'redis-cache'])
+const NON_PROJECT_TEMPLATE_IDS = new Set(['postgres-db', 'mysql-db', 'redis-cache', 'pgadmin'])
+
+const getTemplateFeatureBadges = (tpl = {}) => {
+  const features = Array.isArray(tpl.features) && tpl.features.length
+    ? tpl.features
+    : INSTALL_TEMPLATE_BADGES[tpl.id]
+  return (features || []).slice(0, 3)
+}
+
+const getInstallWizardHighlights = (tpl = {}, form = {}) => {
+  const highlights = []
+  const templateId = tpl.id
+
+  if (templateId === 'node-app') {
+    if (form.nodeServiceMode === NODE_SERVICE_MODES.sites) {
+      highlights.push(`Modo Sites: recebe build pronto e publica em ${form.nodeSiteConfig?.siteFolder || NODE_SITE_FOLDERS[0]}.`)
+      highlights.push('Rotas internas de Angular/React/Vue usam fallback para o arquivo padrão quando o tipo SPA estiver ativo.')
+    } else {
+      highlights.push('Modo Serviço: recebe o fonte completo, instala dependências, executa build quando existir e inicia pelo package.json.')
+      highlights.push('O comando pode ficar vazio para o painel detectar o start automaticamente.')
+    }
+  } else if (templateId === 'nginx-static') {
+    highlights.push('Nginx serve arquivos estáticos com fallback para index.html.')
+    highlights.push('Use o volume público para publicar builds prontos sem compilar dentro do container.')
+  } else if (templateId === 'postgres-db') {
+    highlights.push('PostgreSQL usa volume dedicado para dados e ajuste automático de permissões antes de iniciar.')
+    highlights.push('O pgAdmin opcional é criado separado e configurado para acessar este banco.')
+  } else if (templateId === 'pgadmin') {
+    highlights.push('pgAdmin pode ser vinculado a um PostgreSQL existente selecionado no instalador.')
+  } else if (templateId === 'mysql-db') {
+    highlights.push('MySQL mantém os dados no volume configurado e usa as variáveis padrão do template.')
+  } else if (templateId === 'redis-cache') {
+    highlights.push('Redis usa /data como volume quando você quiser persistência do cache.')
+  } else {
+    highlights.push('A imagem será criada com porta, rede, volumes e variáveis definidos neste formulário.')
+  }
+
+  if (DATA_SERVICE_TEMPLATE_IDS.has(templateId)) {
+    highlights.push('Volumes de banco não recebem .env nem arquivos de aplicação dentro da pasta de dados.')
+  } else if (NON_PROJECT_TEMPLATE_IDS.has(templateId)) {
+    highlights.push('Este template cria apenas o serviço base, sem fluxo de upload de projeto.')
+  } else {
+    highlights.push('Uploads de projeto entram no histórico de versões publicadas, com download, remoção e rollback.')
+    highlights.push('Healthcheck e rollback automático ficam disponíveis em Editar serviço para validar os próximos deploys.')
+  }
+
+  if (form.networkName) {
+    highlights.push(`Rede Docker selecionada: ${form.networkName}.`)
+  }
+
+  return highlights.slice(0, 5)
+}
 
 const CHUNKED_UPLOAD_THRESHOLD_BYTES = 50 * 1024 * 1024
 const UPLOAD_CHUNK_SIZE_BYTES = 25 * 1024 * 1024
@@ -964,6 +1027,7 @@ const StackClusterCard = ({ stack, onOpen, onToggle, expanded = false, telemetry
 const DockerCatalogCard = ({ tpl, installedCount, onInstall }) => {
   const appMeta = getTemplateMeta(tpl.id)
   const Icon = appMeta.icon || Layers
+  const featureBadges = getTemplateFeatureBadges(tpl)
 
   return (
     <div className={`group rounded-2xl border bg-gradient-to-br p-4 transition duration-300 hover:-translate-y-0.5 hover:shadow-xl hover:shadow-slate-950/40 ${appMeta.border} ${appMeta.accent}`}>
@@ -981,6 +1045,16 @@ const DockerCatalogCard = ({ tpl, installedCount, onInstall }) => {
           <p className="text-base font-semibold text-white">{tpl.label}</p>
           <p className="mt-1 text-sm leading-5 text-slate-300">{tpl.description}</p>
         </div>
+
+        {featureBadges.length > 0 && (
+          <div className="flex flex-wrap gap-1.5">
+            {featureBadges.map((feature) => (
+              <span key={feature} className="rounded-full border border-slate-700 bg-slate-950/70 px-2 py-0.5 text-[10px] text-slate-300">
+                {feature}
+              </span>
+            ))}
+          </div>
+        )}
 
         <div className="flex flex-wrap gap-2 text-[11px] text-slate-300">
           <span className="rounded-full border border-slate-700 bg-slate-950/70 px-2.5 py-1">{tpl.image}:{tpl.tag}</span>
@@ -2386,6 +2460,8 @@ const DockerPanel = ({ showPageIntro = true }) => {
     const isNodeTemplate = tpl?.id === 'node-app'
     const isNodeSitesMode =
       isNodeTemplate && serviceForm.nodeServiceMode === NODE_SERVICE_MODES.sites
+    const supportsProjectUpload = !NON_PROJECT_TEMPLATE_IDS.has(tpl?.id)
+    const installHighlights = getInstallWizardHighlights(tpl, serviceForm)
 
     return (
       <div className="wizard-container rounded-2xl border border-blue-500/30 bg-blue-500/10 p-5">
@@ -2526,8 +2602,30 @@ const DockerPanel = ({ showPageIntro = true }) => {
               ))}
             </select>
             <p className="text-xs text-slate-400">
-              📌 Serviços na mesma rede podem se comunicar diretamente pelo nome do container
+              Serviços na mesma rede podem se comunicar diretamente pelo nome do container.
             </p>
+          </div>
+
+          <div className="rounded-xl border border-slate-800 bg-slate-950/70 p-4">
+            <div className="flex flex-wrap items-center justify-between gap-2">
+              <p className="text-sm font-semibold text-white">Resumo da instalação</p>
+              <span className="rounded-full border border-slate-700 bg-slate-900 px-2.5 py-1 text-[11px] text-slate-300">
+                {tpl?.image}:{tpl?.tag}
+              </span>
+            </div>
+            <div className="mt-3 grid gap-2 text-xs text-slate-300 md:grid-cols-2">
+              {installHighlights.map((item) => (
+                <div key={item} className="flex gap-2 rounded-lg border border-slate-800 bg-slate-900/60 px-3 py-2">
+                  <span className="mt-1 h-1.5 w-1.5 shrink-0 rounded-full bg-blue-400" />
+                  <span>{item}</span>
+                </div>
+              ))}
+            </div>
+            {supportsProjectUpload && (
+              <p className="mt-3 text-[11px] leading-5 text-slate-400">
+                Ao enviar um arquivo, o painel mostra as etapas de upload, preparação, compilação, healthcheck e publicação quando essas fases forem aplicáveis.
+              </p>
+            )}
           </div>
 
           {isNodeTemplate && (
@@ -2549,7 +2647,7 @@ const DockerPanel = ({ showPageIntro = true }) => {
                   />
                   Serviço
                   <span className="mt-1 block text-xs text-slate-400">
-                    Recebe o fonte completo, instala dependências, executa build quando existir e inicia o app.
+                    Recebe o fonte completo, instala dependências, executa build quando existir e inicia pelo package.json.
                   </span>
                 </label>
                 <label className={`rounded-xl border p-3 text-sm ${serviceForm.nodeServiceMode === NODE_SERVICE_MODES.sites ? 'border-cyan-400 bg-cyan-500/10 text-white' : 'border-slate-800 bg-slate-950 text-slate-300'}`}>
@@ -2568,7 +2666,7 @@ const DockerPanel = ({ showPageIntro = true }) => {
                   />
                   Sites
                   <span className="mt-1 block text-xs text-slate-400">
-                    Recebe arquivos já buildados e publica em <code>www</code> ou <code>publish</code>.
+                    Recebe build pronto e publica em <code>www</code> ou <code>publish</code>, sem instalar dependências.
                   </span>
                 </label>
               </div>
@@ -2647,7 +2745,7 @@ const DockerPanel = ({ showPageIntro = true }) => {
 
                   <div className="rounded-xl border border-slate-800 bg-slate-950/70 p-3 text-xs text-slate-300">
                     <p className="font-semibold text-slate-200">Fluxo automático</p>
-                    <p className="mt-1">Ao criar ou atualizar, o serviço gera a estrutura base, grava o arquivo <code>.env</code> e serve a pasta publicada.</p>
+                    <p className="mt-1">Ao criar ou atualizar, o serviço gera a estrutura base, grava o arquivo <code>.env</code> e serve a pasta publicada. Com healthcheck configurado, a versão só é promovida depois da validação.</p>
                   </div>
                 </div>
               )}
@@ -2809,7 +2907,7 @@ const DockerPanel = ({ showPageIntro = true }) => {
             </p>
           </div>
 
-          {!isNodeSitesMode && (
+          {!isNodeSitesMode && supportsProjectUpload && (
             <div className="grid gap-2">
               <label className="text-xs text-slate-300">Comando de inicializacao</label>
               <input
@@ -2824,39 +2922,41 @@ const DockerPanel = ({ showPageIntro = true }) => {
             </div>
           )}
 
-          <div className="grid gap-2">
-            <label className="text-xs text-slate-300">Projeto ou JAR (zip/tar/jar)</label>
-            <input
-              type="file"
-              accept=".jar,.zip,.tar,.tar.gz,.tgz"
-              className="rounded-xl border border-slate-800 bg-slate-950 px-3 py-2 text-sm text-slate-200 file:mr-3 file:rounded-lg file:border-0 file:bg-blue-500 file:px-3 file:py-1.5 file:text-xs file:font-semibold file:text-slate-950"
-              onChange={(e) => {
-                const file = e.target.files?.[0] || null
-                setServiceForm((p) => ({ ...p, projectArchive: file }))
-              }}
-            />
-            <p className="text-xs text-slate-400">
-              {isNodeSitesMode
-                ? `Envie os arquivos do site para a pasta ${serviceForm.nodeSiteConfig?.siteFolder || NODE_SITE_FOLDERS[0]} apos a criacao.`
-                : 'Envie um .jar ou .zip/.tar para publicar no volume do servico apos a criacao.'}
-            </p>
-          </div>
+          {supportsProjectUpload && (
+            <div className="grid gap-2">
+              <label className="text-xs text-slate-300">Projeto, build ou JAR (zip/tar/jar)</label>
+              <input
+                type="file"
+                accept=".jar,.zip,.tar,.tar.gz,.tgz"
+                className="rounded-xl border border-slate-800 bg-slate-950 px-3 py-2 text-sm text-slate-200 file:mr-3 file:rounded-lg file:border-0 file:bg-blue-500 file:px-3 file:py-1.5 file:text-xs file:font-semibold file:text-slate-950"
+                onChange={(e) => {
+                  const file = e.target.files?.[0] || null
+                  setServiceForm((p) => ({ ...p, projectArchive: file }))
+                }}
+              />
+              <p className="text-xs text-slate-400">
+                {isNodeSitesMode
+                  ? `Envie um .zip/.tar com o build pronto. Ele será publicado em ${serviceForm.nodeSiteConfig?.siteFolder || NODE_SITE_FOLDERS[0]} e registrado como versão.`
+                  : 'Envie um .jar ou .zip/.tar com o fonte/projeto. O arquivo será publicado no volume do serviço e registrado no histórico de versões.'}
+              </p>
+            </div>
+          )}
 
           <div className="rounded-xl border border-blue-500/30 bg-blue-500/5 p-4">
             <div className="flex items-center justify-between mb-3">
               <div>
                 <label className="text-sm font-semibold text-blue-200">
                   {isNodeSitesMode
-                    ? '🌐 Publicação de sites'
+                    ? 'Publicação de sites'
                     : tpl?.hasProjectOption !== false
-                      ? '🚀 Criar projeto exemplo'
-                      : '🔧 Opções adicionais'}
+                      ? 'Publicação inicial / projeto exemplo'
+                      : 'Opções adicionais'}
                 </label>
                 <p className="text-xs text-blue-300/80 mt-1">
                   {isNodeSitesMode
-                    ? 'A estrutura base do serviço é criada automaticamente.'
+                    ? 'A estrutura base do serviço é criada automaticamente e as próximas publicações ficam versionadas.'
                     : tpl?.hasProjectOption !== false 
-                    ? 'Inclui código inicial pronto para usar'
+                    ? 'Inclui código inicial pronto para usar ou aceita um arquivo para publicação versionada.'
                     : tpl?.managerLabel || 'Opções especiais para este serviço'
                   }
                 </p>
@@ -2881,14 +2981,14 @@ const DockerPanel = ({ showPageIntro = true }) => {
                   : 'text-slate-400'
               }`}>
                 {serviceForm.createProject 
-                  ? '✅ Será criado um projeto exemplo com código inicial, dependências e documentação'
-                  : '📦 Apenas o container será criado, sem arquivos de exemplo'
+                  ? 'Será criado um projeto exemplo com código inicial, dependências e documentação.'
+                  : 'Apenas o container será criado, sem arquivos de exemplo.'
                 }
               </div>
             )}
             {isNodeSitesMode && (
               <div className="mb-3 text-xs text-emerald-300">
-                ✅ O painel cria a estrutura Node automaticamente e publica o site na pasta escolhida.
+                O painel cria a estrutura Node automaticamente e publica o site na pasta escolhida.
               </div>
             )}
             
