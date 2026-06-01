@@ -46,6 +46,8 @@
 const fs = require('fs');
 const path = require('path');
 const crypto = require('crypto');
+const http = require('http');
+const https = require('https');
 const Docker = require('dockerode');
 
 const STACKS_PATH = path.join(__dirname, '../../data/stacks.json');
@@ -59,6 +61,128 @@ if (!fs.existsSync(STACKS_PATH)) {
 const generateId = () => {
   if (typeof crypto.randomUUID === 'function') return crypto.randomUUID();
   return crypto.randomBytes(16).toString('hex').replace(/(.{8})(.{4})(.{4})(.{4})(.{12})/, '$1-$2-$3-$4-$5');
+};
+
+const parseBooleanOption = (value, fallback = false) => {
+  if (value === undefined || value === null || value === '') return fallback;
+  if (typeof value === 'boolean') return value;
+  const text = String(value).trim().toLowerCase();
+  if (['1', 'true', 'yes', 'sim', 'on'].includes(text)) return true;
+  if (['0', 'false', 'no', 'nao', 'não', 'off'].includes(text)) return false;
+  return fallback;
+};
+
+const clampNumber = (value, fallback, min, max) => {
+  const number = Number(value);
+  if (!Number.isFinite(number)) return fallback;
+  return Math.min(max, Math.max(min, Math.trunc(number)));
+};
+
+const normalizeHealthcheck = (healthcheck = {}) => {
+  const target = String(healthcheck.target || healthcheck.url || healthcheck.path || '').trim();
+  return {
+    enabled: parseBooleanOption(healthcheck.enabled, false),
+    target: target || '/',
+    intervalSeconds: clampNumber(healthcheck.intervalSeconds, 10, 1, 3600),
+    timeoutSeconds: clampNumber(healthcheck.timeoutSeconds, 5, 1, 300),
+    retries: clampNumber(healthcheck.retries, 6, 1, 120),
+    startPeriodSeconds: clampNumber(healthcheck.startPeriodSeconds, 5, 0, 3600),
+    containerEnabled: parseBooleanOption(healthcheck.containerEnabled, false)
+  };
+};
+
+const shellQuote = (value) => `'${String(value).replace(/'/g, "'\\''")}'`;
+
+const buildDockerHealthcheck = (healthcheck, containerPort) => {
+  const config = normalizeHealthcheck(healthcheck);
+  if (!config.enabled || !config.containerEnabled) return null;
+  const target = String(config.target || '/').trim() || '/';
+  const url = /^https?:\/\//i.test(target)
+    ? target.replace(/\{host\}/g, '127.0.0.1').replace(/\{port\}/g, String(containerPort))
+    : `http://127.0.0.1:${containerPort}${target.startsWith('/') ? target : `/${target}`}`;
+  return {
+    Test: ['CMD-SHELL', `curl -fsS ${shellQuote(url)} >/dev/null || wget -qO- ${shellQuote(url)} >/dev/null || exit 1`],
+    Interval: config.intervalSeconds * 1000 * 1000 * 1000,
+    Timeout: config.timeoutSeconds * 1000 * 1000 * 1000,
+    Retries: config.retries,
+    StartPeriod: config.startPeriodSeconds * 1000 * 1000 * 1000
+  };
+};
+
+const delay = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
+
+const buildHealthcheckUrl = (healthcheck, hostPort) => {
+  const target = String(healthcheck?.target || '/').trim() || '/';
+  if (/^https?:\/\//i.test(target)) {
+    return target
+      .replace(/\{host\}/g, '127.0.0.1')
+      .replace(/\{port\}/g, String(hostPort));
+  }
+  return `http://127.0.0.1:${hostPort}${target.startsWith('/') ? target : `/${target}`}`;
+};
+
+const requestHealthcheck = (targetUrl, timeoutSeconds) =>
+  new Promise((resolve, reject) => {
+    let parsed;
+    try {
+      parsed = new URL(targetUrl);
+    } catch (err) {
+      reject(new Error(`URL de healthcheck invalida: ${targetUrl}`));
+      return;
+    }
+    const client = parsed.protocol === 'https:' ? https : http;
+    const req = client.request(
+      parsed,
+      {
+        method: 'GET',
+        timeout: Math.max(1, Number(timeoutSeconds || 5)) * 1000,
+        headers: { 'User-Agent': 'ProvirPanel-Stack-Healthcheck' }
+      },
+      (res) => {
+        res.resume();
+        res.on('end', () => {
+          const status = Number(res.statusCode || 0);
+          if (status >= 200 && status < 400) {
+            resolve({ statusCode: status });
+            return;
+          }
+          reject(new Error(`HTTP ${status}`));
+        });
+      }
+    );
+    req.on('timeout', () => req.destroy(new Error(`timeout apos ${timeoutSeconds}s`)));
+    req.on('error', reject);
+    req.end();
+  });
+
+const waitForStackServiceHealth = async (svc, onProgress) => {
+  const healthcheck = normalizeHealthcheck(svc.healthcheck);
+  if (!healthcheck.enabled) return { skipped: true };
+  const hostPort = Number((svc.ports || []).find((port) => port?.host)?.host || 0);
+  if (!hostPort && !/^https?:\/\//i.test(healthcheck.target)) {
+    throw new Error(`Healthcheck de ${svc.name} precisa de porta publicada ou URL absoluta`);
+  }
+  const targetUrl = buildHealthcheckUrl(healthcheck, hostPort);
+  if (healthcheck.startPeriodSeconds > 0) {
+    if (onProgress) onProgress(`⏳ Aguardando ${healthcheck.startPeriodSeconds}s para healthcheck de ${svc.name}`);
+    await delay(healthcheck.startPeriodSeconds * 1000);
+  }
+  let lastError = null;
+  for (let attempt = 1; attempt <= healthcheck.retries; attempt += 1) {
+    try {
+      if (onProgress) onProgress(`🔎 Healthcheck ${svc.name} ${attempt}/${healthcheck.retries}`);
+      const result = await requestHealthcheck(targetUrl, healthcheck.timeoutSeconds);
+      if (onProgress) onProgress(`✅ Healthcheck ${svc.name} OK (${result.statusCode})`);
+      return { ok: true, targetUrl, statusCode: result.statusCode };
+    } catch (err) {
+      lastError = err;
+      if (onProgress) onProgress(`⚠️ Healthcheck ${svc.name} falhou: ${err.message}`);
+      if (attempt < healthcheck.retries) {
+        await delay(healthcheck.intervalSeconds * 1000);
+      }
+    }
+  }
+  throw new Error(`Healthcheck falhou para ${svc.name}: ${lastError?.message || 'sem resposta'}`);
 };
 
 const normalizeResources = (resources = {}) => {
@@ -203,6 +327,8 @@ class StackManager {
       volumes: svc.volumes || [],
       env: svc.env || [],
       command: svc.command || [],
+      healthcheck: normalizeHealthcheck(svc.healthcheck),
+      autoRollback: svc.autoRollback !== undefined ? parseBooleanOption(svc.autoRollback, true) : true,
       dependencies: svc.dependencies || [],
       containerId: null,
       containerIds: [],
@@ -329,6 +455,8 @@ class StackManager {
       volumes: serviceData.volumes || [],
       env: serviceData.env || [],
       command: serviceData.command || [],
+      healthcheck: normalizeHealthcheck(serviceData.healthcheck),
+      autoRollback: serviceData.autoRollback !== undefined ? parseBooleanOption(serviceData.autoRollback, true) : true,
       dependencies: serviceData.dependencies || [],
       containerId: null,
       containerIds: [],
@@ -361,12 +489,19 @@ class StackManager {
 
     const nextResources = normalizeResources(updates.resources ?? stacks[stackIdx].services[svcIdx].resources);
     const nextScaling = normalizeScaling(updates.scaling ?? stacks[stackIdx].services[svcIdx].scaling);
+    const nextHealthcheck = normalizeHealthcheck(
+      updates.healthcheck ?? stacks[stackIdx].services[svcIdx].healthcheck
+    );
 
     stacks[stackIdx].services[svcIdx] = {
       ...stacks[stackIdx].services[svcIdx],
       ...allowed,
       resources: nextResources,
       scaling: nextScaling,
+      healthcheck: nextHealthcheck,
+      autoRollback: updates.autoRollback !== undefined
+        ? parseBooleanOption(updates.autoRollback, true)
+        : stacks[stackIdx].services[svcIdx].autoRollback ?? true,
       updatedAt: new Date().toISOString()
     };
 
@@ -536,12 +671,27 @@ class StackManager {
       }
     };
 
+    const primaryContainerPort = Number((svc.ports || []).find((port) => port?.container)?.container || 0);
+    const dockerHealthcheck = buildDockerHealthcheck(svc.healthcheck, primaryContainerPort || 80);
+    if (dockerHealthcheck) {
+      containerConfig.Healthcheck = dockerHealthcheck;
+    }
+
     // Use DockerManager.runContainer — same as DockerPanel
     const DockerManager = require('./DockerManager');
     const dockerManager = new DockerManager();
     const container = await dockerManager.runContainer(imageFull, containerConfig, onProgress);
 
     const containerId = container.Id || container.id;
+    try {
+      await waitForStackServiceHealth(svc, onProgress);
+    } catch (err) {
+      try {
+        await this.docker.getContainer(containerId).remove({ force: true });
+      } catch { /* ignore cleanup */ }
+      this._updateServiceStatus(stackId, serviceId, [containerId], 'error');
+      throw err;
+    }
     if (onProgress) onProgress(`✅ ${svc.name} rodando (${containerId.slice(0, 12)})`);
     this._updateServiceStatus(stackId, serviceId, [containerId], 'running');
     return containerId;

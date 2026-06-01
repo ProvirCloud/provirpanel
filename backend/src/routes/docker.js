@@ -8,6 +8,8 @@ const fs = require('fs');
 const path = require('path');
 const net = require('net');
 const os = require('os');
+const http = require('http');
+const https = require('https');
 const { execFile, execSync } = require('child_process');
 const multer = require('multer');
 
@@ -165,6 +167,10 @@ try {
   dockerBaseDir = path.join(process.cwd(), 'backend/data/projects/docker');
   fs.mkdirSync(dockerBaseDir, { recursive: true });
 }
+const deploymentVersionLimit = Math.max(
+  2,
+  Number(process.env.DOCKER_DEPLOYMENT_VERSION_LIMIT || 10)
+);
 let progressNamespace = null;
 const portCheckHost = '0.0.0.0';
 const registriesPath = path.join(__dirname, '..', 'data', 'docker-registries.json');
@@ -287,6 +293,11 @@ const maskEnvVars = (envVars = []) =>
     value: env.secret ? SECRET_MASK : env.value
   }));
 
+const sanitizeDeploymentForClient = (deployment = {}) => ({
+  ...deployment,
+  envVars: maskEnvVars(deployment.envVars || [])
+});
+
 const normalizeEnvVars = (envVars = []) =>
   envVars
     .filter((env) => env && env.key)
@@ -328,6 +339,56 @@ const parseEnvVarsPayload = (value) => {
     throw createHttpError('envVars inválido', 400);
   }
   return parsed;
+};
+
+const parseJsonObjectPayload = (value, label) => {
+  if (value === undefined || value === null || value === '') return null;
+  let parsed = value;
+  if (typeof value === 'string') {
+    try {
+      parsed = JSON.parse(value);
+    } catch (err) {
+      throw createHttpError(`${label} inválido`, 400);
+    }
+  }
+  if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) {
+    throw createHttpError(`${label} inválido`, 400);
+  }
+  return parsed;
+};
+
+const parseBooleanOption = (value, fallback = false) => {
+  if (value === undefined || value === null || value === '') return fallback;
+  if (typeof value === 'boolean') return value;
+  const text = String(value).trim().toLowerCase();
+  if (['1', 'true', 'yes', 'sim', 'on'].includes(text)) return true;
+  if (['0', 'false', 'no', 'nao', 'não', 'off'].includes(text)) return false;
+  return fallback;
+};
+
+const clampNumber = (value, fallback, min, max) => {
+  const number = Number(value);
+  if (!Number.isFinite(number)) return fallback;
+  return Math.min(max, Math.max(min, Math.trunc(number)));
+};
+
+const normalizeHealthcheckConfig = (incoming = null, existing = {}) => {
+  const source = incoming === null || incoming === undefined ? existing || {} : incoming || {};
+  const target = String(source.target || source.url || source.path || '').trim();
+  return {
+    enabled: parseBooleanOption(source.enabled, false),
+    target: target || '/',
+    intervalSeconds: clampNumber(source.intervalSeconds, 10, 1, 3600),
+    timeoutSeconds: clampNumber(source.timeoutSeconds, 5, 1, 300),
+    retries: clampNumber(source.retries, 6, 1, 120),
+    startPeriodSeconds: clampNumber(source.startPeriodSeconds, 5, 0, 3600),
+    containerEnabled: parseBooleanOption(source.containerEnabled, false)
+  };
+};
+
+const parseHealthcheckPayload = (value) => {
+  const parsed = parseJsonObjectPayload(value, 'healthcheck');
+  return parsed ? normalizeHealthcheckConfig(parsed) : null;
 };
 
 const ENV_REFERENCE_PATTERN = /\$\{([A-Za-z_][A-Za-z0-9_]*)\}|\$([A-Za-z_][A-Za-z0-9_]*)/g;
@@ -429,7 +490,8 @@ const buildServiceLabels = ({
 const sanitizeServiceForClient = (service) => ({
   ...service,
   networkName: service.networkName || 'bridge',
-  envVars: maskEnvVars(service.envVars || [])
+  envVars: maskEnvVars(service.envVars || []),
+  deployments: (service.deployments || []).map(sanitizeDeploymentForClient)
 });
 
 const sendServicesResponse = async (res, next) => {
@@ -935,6 +997,124 @@ const writeEnvFile = (projectPath, envVars = [], templateEnv = []) => {
     ? merged.map((entry) => `${entry.key}=${entry.value ?? ''}`).join('\n') + '\n'
     : '';
   fs.writeFileSync(path.join(projectPath.hostPath, '.env'), content, 'utf8');
+};
+
+const delay = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
+
+const buildHealthcheckTargetUrl = (healthcheck, hostPort) => {
+  const target = String(healthcheck?.target || '/').trim() || '/';
+  if (/^https?:\/\//i.test(target)) {
+    return target
+      .replace(/\{host\}/g, '127.0.0.1')
+      .replace(/\{port\}/g, String(hostPort));
+  }
+  const pathTarget = target.startsWith('/') ? target : `/${target}`;
+  return `http://127.0.0.1:${hostPort}${pathTarget}`;
+};
+
+const requestHealthcheckUrl = (targetUrl, timeoutSeconds) =>
+  new Promise((resolve, reject) => {
+    let parsed;
+    try {
+      parsed = new URL(targetUrl);
+    } catch (err) {
+      reject(new Error(`URL de healthcheck invalida: ${targetUrl}`));
+      return;
+    }
+
+    const client = parsed.protocol === 'https:' ? https : http;
+    const req = client.request(
+      parsed,
+      {
+        method: 'GET',
+        timeout: Math.max(1, Number(timeoutSeconds || 5)) * 1000,
+        headers: {
+          'User-Agent': 'ProvirPanel-Healthcheck'
+        }
+      },
+      (res) => {
+        res.resume();
+        res.on('end', () => {
+          const status = Number(res.statusCode || 0);
+          if (status >= 200 && status < 400) {
+            resolve({ statusCode: status });
+            return;
+          }
+          reject(new Error(`HTTP ${status}`));
+        });
+      }
+    );
+
+    req.on('timeout', () => {
+      req.destroy(new Error(`timeout apos ${timeoutSeconds}s`));
+    });
+    req.on('error', reject);
+    req.end();
+  });
+
+const waitForServiceHealth = async ({ serviceName, healthcheck, hostPort }) => {
+  const config = normalizeHealthcheckConfig(healthcheck);
+  if (!config.enabled) {
+    return { skipped: true };
+  }
+
+  const targetUrl = buildHealthcheckTargetUrl(config, hostPort);
+  if (config.startPeriodSeconds > 0) {
+    appendServiceLog(
+      'info',
+      `Aguardando ${config.startPeriodSeconds}s antes do healthcheck de ${serviceName}`
+    );
+    await delay(config.startPeriodSeconds * 1000);
+  }
+
+  let lastError = null;
+  for (let attempt = 1; attempt <= config.retries; attempt += 1) {
+    try {
+      appendServiceLog(
+        'info',
+        `Healthcheck ${serviceName} tentativa ${attempt}/${config.retries}: ${targetUrl}`
+      );
+      const result = await requestHealthcheckUrl(targetUrl, config.timeoutSeconds);
+      appendServiceLog(
+        'info',
+        `Healthcheck ${serviceName} OK com status ${result.statusCode}`
+      );
+      return { ok: true, targetUrl, statusCode: result.statusCode };
+    } catch (err) {
+      lastError = err;
+      appendServiceLog(
+        'warn',
+        `Healthcheck ${serviceName} falhou na tentativa ${attempt}/${config.retries}: ${err.message}`
+      );
+      if (attempt < config.retries) {
+        await delay(config.intervalSeconds * 1000);
+      }
+    }
+  }
+
+  throw createHttpError(
+    `Healthcheck falhou para ${serviceName}: ${lastError?.message || 'sem resposta'}`,
+    502
+  );
+};
+
+const buildDockerHealthcheckConfig = (healthcheck, containerPort) => {
+  const config = normalizeHealthcheckConfig(healthcheck);
+  if (!config.enabled || !config.containerEnabled) return null;
+
+  const target = String(config.target || '/').trim() || '/';
+  const containerUrl = /^https?:\/\//i.test(target)
+    ? target.replace(/\{host\}/g, '127.0.0.1').replace(/\{port\}/g, String(containerPort))
+    : `http://127.0.0.1:${containerPort}${target.startsWith('/') ? target : `/${target}`}`;
+  const command = `curl -fsS ${shellQuote(containerUrl)} >/dev/null || wget -qO- ${shellQuote(containerUrl)} >/dev/null || exit 1`;
+
+  return {
+    Test: ['CMD-SHELL', command],
+    Interval: config.intervalSeconds * 1000 * 1000 * 1000,
+    Timeout: config.timeoutSeconds * 1000 * 1000 * 1000,
+    Retries: config.retries,
+    StartPeriod: config.startPeriodSeconds * 1000 * 1000 * 1000
+  };
 };
 
 const DEFAULT_NODE_SITE_MODE = 'service';
@@ -1832,6 +2012,8 @@ router.post('/services', async (req, res, next) => {
       networkName = 'provirpanel',
       command,
       bindLocalOnly = true,
+      healthcheck: requestedHealthcheck,
+      autoRollback: requestedAutoRollback,
       nodeServiceMode: requestedNodeServiceMode,
       nodeSiteConfig: requestedNodeSiteConfig
     } = req.body || {};
@@ -1891,6 +2073,8 @@ router.post('/services', async (req, res, next) => {
       },
       {}
     );
+    const resolvedHealthcheck = normalizeHealthcheckConfig(requestedHealthcheck || {});
+    const resolvedAutoRollback = parseBooleanOption(requestedAutoRollback, true);
     const usedPorts = await dockerManager.getUsedPorts();
     const desiredPort = hostPort ? Number(hostPort) : null;
     
@@ -2078,6 +2262,11 @@ router.post('/services', async (req, res, next) => {
       }
     };
 
+    const dockerHealthcheck = buildDockerHealthcheckConfig(resolvedHealthcheck, template.containerPort);
+    if (dockerHealthcheck) {
+      containerConfig.Healthcheck = dockerHealthcheck;
+    }
+
       if (containerCmd) {
         containerConfig.Cmd = containerCmd;
       }
@@ -2101,6 +2290,16 @@ router.post('/services', async (req, res, next) => {
       });
       
       progress.push(`✅ Container criado com ID: ${container.Id}`);
+      try {
+        await waitForServiceHealth({
+          serviceName: name,
+          healthcheck: resolvedHealthcheck,
+          hostPort: resolvedPort
+        });
+      } catch (err) {
+        await stopAndRemoveContainer(container.Id, name);
+        throw err;
+      }
       
       const service = {
         id: serviceId,
@@ -2118,6 +2317,8 @@ router.post('/services', async (req, res, next) => {
         url: `http://localhost:${resolvedPort}`,
         serverIP: getLocalIP(),
         externalUrl: bindLocalOnly ? null : `http://${getLocalIP()}:${resolvedPort}`,
+        healthcheck: resolvedHealthcheck,
+        autoRollback: resolvedAutoRollback,
         createdAt: new Date().toISOString(),
         hasProject:
           isNodeSitesMode ||
@@ -2369,6 +2570,8 @@ router.put('/services/:id', async (req, res, next) => {
       networkName,
       command,
       bindLocalOnly,
+      healthcheck: requestedHealthcheck,
+      autoRollback: requestedAutoRollback,
       nodeServiceMode: requestedNodeServiceMode,
       nodeSiteConfig: requestedNodeSiteConfig
     } = req.body || {};
@@ -2385,6 +2588,8 @@ router.put('/services/:id', async (req, res, next) => {
       service
     );
     const isNodeSitesMode = service.templateId === 'node-app' && nodeServiceMode === 'sites';
+    const resolvedHealthcheck = normalizeHealthcheckConfig(requestedHealthcheck || service.healthcheck);
+    const resolvedAutoRollback = parseBooleanOption(requestedAutoRollback, service.autoRollback ?? true);
 
     // Verificar se a nova porta está disponível (se foi alterada)
     const newPort = Number(hostPort);
@@ -2593,6 +2798,11 @@ router.put('/services/:id', async (req, res, next) => {
       }
     };
 
+    const dockerHealthcheck = buildDockerHealthcheckConfig(resolvedHealthcheck, service.containerPort);
+    if (dockerHealthcheck) {
+      containerConfig.Healthcheck = dockerHealthcheck;
+    }
+
     if (autoProjectLaunch) {
       containerConfig.Entrypoint = ['sh', '-c'];
       containerConfig.Cmd = [autoProjectLaunch.commandText];
@@ -2623,6 +2833,8 @@ router.put('/services/:id', async (req, res, next) => {
       autoCommandType: autoProjectLaunch ? autoProjectLaunch.type : null,
       networkName: targetNetwork,
       bindLocalOnly: resolvedBindLocal,
+      healthcheck: resolvedHealthcheck,
+      autoRollback: resolvedAutoRollback,
       nodeServiceMode,
       nodeSiteConfig,
       hasProject: isNodeSitesMode ? true : service.hasProject,
@@ -2632,9 +2844,24 @@ router.put('/services/:id', async (req, res, next) => {
       updatedAt: new Date().toISOString()
     };
 
-    dockerManager.saveService(updatedService);
+    const activeDeployment = (updatedService.deployments || []).find(
+      (deployment) => deployment.id === updatedService.activeDeploymentId
+    );
+    const persistedService = activeDeployment
+      ? saveServiceDeploymentState(updatedService, {
+          ...activeDeployment,
+          envVars: resolvedEnvVars,
+          command: updatedService.command,
+          autoCommandType: updatedService.autoCommandType,
+          healthcheck: resolvedHealthcheck,
+          nodeServiceMode,
+          nodeSiteConfig,
+          status: 'active',
+          promotedAt: new Date().toISOString()
+        }, activeDeployment.id)
+      : dockerManager.saveService(updatedService);
     appendServiceLog('info', `Atualizacao de servico concluida: ${service.name}`);
-    res.json({ service: sanitizeServiceForClient(updatedService) });
+    res.json({ service: sanitizeServiceForClient(persistedService) });
   } catch (err) {
     appendServiceLog('error', `Erro ao atualizar servico ${req.params.id}: ${err.message}`);
     next(err);
@@ -2680,10 +2907,629 @@ const ensureServiceProjectVolume = (service) => {
   return { service: nextService, projectDir: hostPath };
 };
 
+const sanitizePathSegment = (value, fallback = 'service') => {
+  const safe = String(value || fallback).replace(/[^a-zA-Z0-9_.-]/g, '-');
+  return safe.replace(/^-+|-+$/g, '') || fallback;
+};
+
+const getDeploymentRoot = (service) =>
+  path.join(dockerBaseDir, '.versions', sanitizePathSegment(service.id || service.name));
+
+const createDeploymentProjectDir = (service, deploymentId) => {
+  const root = getDeploymentRoot(service);
+  fs.mkdirSync(root, { recursive: true });
+  const projectDir = path.join(root, sanitizePathSegment(deploymentId, crypto.randomUUID()));
+  fs.rmSync(projectDir, { recursive: true, force: true });
+  fs.mkdirSync(projectDir, { recursive: true });
+  return projectDir;
+};
+
+const replacePrimaryVolumeHostPath = (volumes = [], hostPath) => {
+  let replaced = false;
+  const next = (Array.isArray(volumes) ? volumes : []).map((volume) => {
+    if (!replaced && volume?.hostPath && volume?.containerPath) {
+      replaced = true;
+      return { ...volume, hostPath };
+    }
+    return volume;
+  });
+  if (!replaced) {
+    next.push({ hostPath, containerPath: '/app' });
+  }
+  return next;
+};
+
+const removeOldDeploymentDirs = (service, deployments = []) => {
+  const keepDirs = new Set(deployments.map((deployment) => deployment.projectDir).filter(Boolean));
+  const root = getDeploymentRoot(service);
+  try {
+    if (!fs.existsSync(root)) return;
+    fs.readdirSync(root, { withFileTypes: true })
+      .filter((entry) => entry.isDirectory())
+      .forEach((entry) => {
+        const dir = path.join(root, entry.name);
+        if (!keepDirs.has(dir)) {
+          fs.rmSync(dir, { recursive: true, force: true });
+        }
+      });
+  } catch (err) {
+    appendServiceLog('warn', `Nao foi possivel limpar versoes antigas de ${service.name}: ${err.message}`);
+  }
+};
+
+const mergeServiceDeployments = (service, deployment, activeDeploymentId) => {
+  const byId = new Map(
+    (Array.isArray(service.deployments) ? service.deployments : [])
+      .filter((entry) => entry?.id)
+      .map((entry) => [entry.id, entry])
+  );
+  if (deployment?.id) {
+    byId.set(deployment.id, {
+      ...byId.get(deployment.id),
+      ...deployment
+    });
+  }
+
+  const normalized = Array.from(byId.values())
+    .filter((entry) => entry?.id)
+    .map((entry) => ({
+      ...entry,
+      status:
+        entry.status === 'failed'
+          ? 'failed'
+          : entry.id === activeDeploymentId
+            ? 'active'
+            : 'available'
+    }))
+    .sort((a, b) => String(b.createdAt || '').localeCompare(String(a.createdAt || '')));
+
+  const keep = [];
+  for (const entry of normalized) {
+    if (entry.id === activeDeploymentId || keep.length < deploymentVersionLimit) {
+      keep.push(entry);
+    }
+  }
+
+  removeOldDeploymentDirs(service, keep);
+  return keep;
+};
+
+const saveServiceDeploymentState = (service, deployment, activeDeploymentId = service.activeDeploymentId) => {
+  const deployments = mergeServiceDeployments(service, deployment, activeDeploymentId);
+  const nextService = {
+    ...service,
+    activeDeploymentId,
+    deployments,
+    updatedAt: new Date().toISOString()
+  };
+  dockerManager.saveService(nextService);
+  return nextService;
+};
+
+const ensureActiveDeploymentRecord = (service) => {
+  const projectPath = resolvePrimaryVolumeProjectPath(service.volumes);
+  if (!projectPath?.hostPath) return service;
+  const deployments = Array.isArray(service.deployments) ? service.deployments : [];
+  const existing =
+    deployments.find((deployment) => deployment.id === service.activeDeploymentId) ||
+    deployments.find((deployment) => deployment.projectDir === projectPath.hostPath);
+
+  if (existing) {
+    return saveServiceDeploymentState(
+      service,
+      {
+        ...existing,
+        projectDir: existing.projectDir || projectPath.hostPath,
+        status: 'active'
+      },
+      existing.id
+    );
+  }
+
+  const now = new Date().toISOString();
+  const deployment = {
+    id: crypto.randomUUID(),
+    label: 'Versao atual',
+    filename: null,
+    projectDir: projectPath.hostPath,
+    envVars: service.envVars || [],
+    command: service.command || null,
+    autoCommandType: service.autoCommandType || null,
+    nodeServiceMode: service.nodeServiceMode || DEFAULT_NODE_SITE_MODE,
+    nodeSiteConfig: service.nodeSiteConfig || null,
+    healthcheck: normalizeHealthcheckConfig(service.healthcheck),
+    status: 'active',
+    createdAt: service.updatedAt || service.createdAt || now,
+    promotedAt: now
+  };
+
+  return saveServiceDeploymentState(service, deployment, deployment.id);
+};
+
+const stopAndRemoveContainer = async (containerId, serviceName) => {
+  if (!containerId) return;
+  try {
+    appendServiceLog('info', `Parando container ${containerId} (${serviceName})`);
+    await dockerManager.stopContainer(containerId);
+  } catch (err) {
+    // Container might already be stopped.
+  }
+  try {
+    appendServiceLog('info', `Removendo container ${containerId} (${serviceName})`);
+    await dockerManager.removeContainer(containerId);
+  } catch (err) {
+    // Container might already be removed.
+  }
+};
+
+const ensureServiceNetwork = async (networkName) => {
+  if (!networkName || ['bridge', 'host', 'none'].includes(networkName)) return;
+  await dockerManager.ensureNetwork(networkName);
+};
+
+const buildServiceContainerConfig = ({
+  service,
+  name,
+  env,
+  containerCmd,
+  autoProjectLaunch,
+  workdir,
+  hostPort,
+  bindLocalOnly,
+  networkName,
+  volumes,
+  healthcheck,
+  hasProject,
+  extraLabels = {}
+}) => {
+  const resolvedHealthcheck = normalizeHealthcheckConfig(healthcheck || service.healthcheck);
+  const containerConfig = {
+    name,
+    Labels: {
+      ...buildServiceLabels({
+        serviceId: service.id,
+        name: service.name,
+        templateId: service.templateId,
+        parentService: service.parentService,
+        hasProject
+      }),
+      ...extraLabels
+    },
+    HostConfig: {
+      NetworkMode: networkName,
+      PortBindings: {
+        [`${service.containerPort}/tcp`]: [
+          bindLocalOnly
+            ? { HostPort: String(hostPort), HostIp: '127.0.0.1' }
+            : { HostPort: String(hostPort) }
+        ]
+      },
+      Binds: (volumes || [])
+        .filter((m) => m.hostPath && m.containerPath)
+        .map((m) => `${m.hostPath}:${m.containerPath}`)
+    },
+    Env: env,
+    ExposedPorts: {
+      [`${service.containerPort}/tcp`]: {}
+    }
+  };
+
+  const dockerHealthcheck = buildDockerHealthcheckConfig(resolvedHealthcheck, service.containerPort);
+  if (dockerHealthcheck) {
+    containerConfig.Healthcheck = dockerHealthcheck;
+  }
+  if (autoProjectLaunch) {
+    containerConfig.Entrypoint = ['sh', '-c'];
+    containerConfig.Cmd = [autoProjectLaunch.commandText];
+  } else if (containerCmd) {
+    containerConfig.Cmd = containerCmd;
+  }
+  if (workdir) {
+    containerConfig.WorkingDir = workdir;
+  }
+
+  return containerConfig;
+};
+
+const prepareProjectRuntimeForDeploy = ({
+  service,
+  envVars = [],
+  nodeServiceMode = DEFAULT_NODE_SITE_MODE,
+  nodeSiteConfig = null
+}) => {
+  const template =
+    SERVICE_TEMPLATES.find((t) => t.id === service.templateId) ||
+    { env: [], workdir: null, command: null };
+  const isNodeSitesMode = service.templateId === 'node-app' && nodeServiceMode === 'sites';
+  const isNodeService =
+    service.templateId === 'node-app' ||
+    service.templateId === 'node' ||
+    String(service.image || '').startsWith('node');
+  const isNginxStaticService =
+    service.templateId === 'nginx-static' ||
+    String(service.image || '').startsWith('nginx');
+  const projectLaunch = resolveProjectAutoLaunch({
+    service,
+    isNodeService,
+    isNginxStaticService,
+    isNodeSitesMode
+  });
+  const persistedCommand = isAutoProjectLaunchCommand(service.command) ? null : service.command;
+  const canAutoProjectLaunch = Boolean(
+    projectLaunch &&
+      !persistedCommand &&
+      (
+        projectLaunch.type === 'project-entrypoint' ||
+        service.autoCommandType ||
+        service.templateId === 'custom-image' ||
+        isJavaRuntimeService(service)
+      )
+  );
+  const projectPath = canAutoProjectLaunch
+    ? resolvePrimaryVolumeProjectPath(service.volumes)
+    : getNodeServiceProjectPath(service.volumes, nodeServiceMode);
+  const workdir = projectPath?.containerPath || template.workdir || null;
+  if (projectPath?.hostPath) {
+    appendServiceLog('info', `Projeto resolvido em ${projectPath.hostPath}`);
+  } else {
+    appendServiceLog('warn', `Nao foi possivel resolver o diretorio do projeto para ${service.name}`);
+  }
+
+  const envProjectPath = getEnvProjectPath(service.volumes, projectPath);
+  if (envProjectPath?.hostPath) {
+    writeEnvFile(envProjectPath, envVars, template.env);
+    appendServiceLog('info', `Arquivo .env atualizado em ${envProjectPath.hostPath}`);
+  } else {
+    appendServiceLog('warn', `Nao foi possivel resolver diretorio para arquivo .env de ${service.name}`);
+  }
+
+  if (projectPath?.hostPath && isNodeService && !isNodeSitesMode) {
+    const expectedFiles = [
+      'package.json',
+      'tsconfig.json',
+      'app/v1/api/boleto/route.ts',
+      'app/v1/api/pix/route.ts',
+      'lib/db.ts'
+    ];
+    const missing = checkProjectFiles(projectPath, expectedFiles);
+    if (missing.length) {
+      appendServiceLog('warn', `Arquivos ausentes no projeto: ${missing.join(', ')}`);
+      missing.forEach((file) => {
+        const suggestion = findPathCaseInsensitive(projectPath.hostPath, file);
+        if (suggestion) {
+          appendServiceLog('warn', `Possivel diferenca de maiusculas: esperado ${file}, encontrado ${suggestion}`);
+        }
+      });
+    }
+  }
+
+  let env = buildContainerEnv({
+    templateEnv: template.env,
+    explicitEnvVars: envVars,
+    projectPath: envProjectPath
+  });
+  env = ensureExplicitContainerEnv(env, envVars);
+  appendServiceLog(
+    'info',
+    `Env do container atualizada para ${service.name}: ${envVars.map((entry) => entry.key).join(', ') || 'nenhuma'}`
+  );
+
+  const hasUserCommand = isNodeSitesMode ? false : !!persistedCommand;
+  let autoProjectLaunch = null;
+  let containerCmd = persistedCommand || template.command;
+  if (isNodeSitesMode) {
+    containerCmd = ['sh', '-c', 'npm install && npm start'];
+  } else if (isNodeService && !persistedCommand) {
+    containerCmd = resolveNodeCommand(service.volumes) || containerCmd;
+  } else if (canAutoProjectLaunch) {
+    autoProjectLaunch = projectLaunch;
+    containerCmd = projectLaunch.command;
+    appendServiceLog(
+      'info',
+      projectLaunch.type === 'project-entrypoint'
+        ? `Entrypoint do projeto detectado para ${service.name}: ${projectLaunch.containerPath}`
+        : `JAR detectado para ${service.name}: ${projectLaunch.containerJarPath}`
+    );
+  }
+  if (isNodeService && !hasUserCommand) {
+    containerCmd = ensureCommandWorkdir(containerCmd, workdir);
+    const commandBeforeDev = stringifyCommand(containerCmd);
+    containerCmd = ensureNpmDevDependencies(containerCmd);
+    const commandAfterDev = stringifyCommand(containerCmd);
+    containerCmd = ensureNextBuildTimeout(containerCmd);
+    const commandAfterTimeout = stringifyCommand(containerCmd);
+    if (commandAfterDev !== commandBeforeDev) {
+      appendServiceLog('info', 'Forcando instalacao de dependencias de desenvolvimento para build');
+    }
+    if (commandAfterTimeout !== commandAfterDev) {
+      appendServiceLog('info', 'Ajustando timeout do Next.js para build');
+    }
+  }
+  appendServiceLog('info', `Comando detectado para ${service.name}: ${stringifyCommand(containerCmd) || 'padrao'}`);
+  if (autoProjectLaunch) {
+    env = applyProjectRuntimeEnv(env, projectPath, autoProjectLaunch);
+    appendServiceLog(
+      'info',
+      `Runtime do projeto definido para ${service.name}: ${autoProjectLaunch.containerPath}`
+    );
+  }
+  if (workdir) {
+    appendServiceLog('info', `WorkingDir para ${service.name}: ${workdir}`);
+  } else {
+    appendServiceLog('warn', `WorkingDir nao resolvido para ${service.name}`);
+  }
+  if (isNodeService && !hasUserCommand) {
+    const envBefore = env;
+    env = ensureNextBuildEnv(env, containerCmd);
+    if (env !== envBefore) {
+      appendServiceLog('info', 'Variavel de ambiente de timeout do Next.js adicionada');
+    }
+  }
+
+  return {
+    template,
+    env,
+    projectPath,
+    envProjectPath,
+    containerCmd,
+    autoProjectLaunch,
+    workdir,
+    command: isNodeSitesMode || autoProjectLaunch ? null : containerCmd || null,
+    autoCommandType: autoProjectLaunch ? autoProjectLaunch.type : null,
+    hasProject: true,
+    isNodeSitesMode
+  };
+};
+
+const startServiceContainerForDeployment = async ({
+  service,
+  runtime,
+  name,
+  hostPort,
+  bindLocalOnly,
+  networkName,
+  healthcheck,
+  extraLabels = {}
+}) => {
+  await ensureServiceNetwork(networkName);
+  const containerConfig = buildServiceContainerConfig({
+    service,
+    name,
+    env: runtime.env,
+    containerCmd: runtime.containerCmd,
+    autoProjectLaunch: runtime.autoProjectLaunch,
+    workdir: runtime.workdir,
+    hostPort,
+    bindLocalOnly,
+    networkName,
+    volumes: service.volumes,
+    healthcheck,
+    hasProject: true,
+    extraLabels
+  });
+  await removeContainerByName(name);
+  return runContainerWithRetry(service.image, containerConfig, name);
+};
+
+const rollbackToPreviousDeployment = async ({
+  service,
+  previousDeployment,
+  healthcheck,
+  networkName,
+  bindLocalOnly
+}) => {
+  if (!previousDeployment?.projectDir) return null;
+  appendServiceLog('warn', `Rollback automatico para ${service.name}: ${previousDeployment.label || previousDeployment.id}`);
+  const rollbackService = {
+    ...service,
+    volumes: replacePrimaryVolumeHostPath(service.volumes, previousDeployment.projectDir),
+    command: previousDeployment.command || null,
+    autoCommandType: previousDeployment.autoCommandType || null
+  };
+  const rollbackRuntime = prepareProjectRuntimeForDeploy({
+    service: rollbackService,
+    envVars: previousDeployment.envVars || service.envVars || [],
+    nodeServiceMode: previousDeployment.nodeServiceMode || service.nodeServiceMode || DEFAULT_NODE_SITE_MODE,
+    nodeSiteConfig: previousDeployment.nodeSiteConfig || service.nodeSiteConfig || null
+  });
+  const rollbackContainer = await startServiceContainerForDeployment({
+    service: rollbackService,
+    runtime: rollbackRuntime,
+    name: service.name,
+    hostPort: service.hostPort,
+    bindLocalOnly,
+    networkName,
+    healthcheck
+  });
+  await waitForServiceHealth({
+    serviceName: service.name,
+    healthcheck,
+    hostPort: service.hostPort
+  });
+
+  const rolledBack = {
+    ...rollbackService,
+    containerId: rollbackContainer.Id,
+    envVars: previousDeployment.envVars || service.envVars || [],
+    command: rollbackRuntime.command,
+    autoCommandType: rollbackRuntime.autoCommandType,
+    healthcheck,
+    hasProject: true,
+    updatedAt: new Date().toISOString()
+  };
+  return saveServiceDeploymentState(rolledBack, {
+    ...previousDeployment,
+    status: 'active',
+    promotedAt: new Date().toISOString()
+  }, previousDeployment.id);
+};
+
+const promoteProjectDeployment = async ({
+  service,
+  deployment,
+  envVars,
+  nodeServiceMode,
+  nodeSiteConfig,
+  healthcheck,
+  autoRollback
+}) => {
+  const networkName = service.networkName || 'bridge';
+  const bindLocalOnly = service.bindLocalOnly ?? false;
+  const candidatePort = await dockerManager.findAvailablePort(
+    Math.min(65000, Math.max(Number(service.hostPort || service.containerPort || 8080) + 1, 1024))
+  );
+  if (!candidatePort) {
+    throw createHttpError('Nao foi possivel reservar porta temporaria para healthcheck.', 500);
+  }
+
+  const previousDeployment = (service.deployments || []).find(
+    (entry) => entry.id === service.activeDeploymentId
+  );
+  const versionVolumes = replacePrimaryVolumeHostPath(service.volumes, deployment.projectDir);
+  const candidateService = {
+    ...service,
+    volumes: versionVolumes,
+    healthcheck
+  };
+  const candidateRuntime = prepareProjectRuntimeForDeploy({
+    service: candidateService,
+    envVars,
+    nodeServiceMode,
+    nodeSiteConfig
+  });
+  const candidateName = `${sanitizePathSegment(service.name)}-candidate-${deployment.id.slice(0, 8)}`;
+  let candidateContainer = null;
+
+  try {
+    appendServiceLog(
+      'info',
+      `Iniciando versao candidata ${deployment.id} de ${service.name} na porta ${candidatePort}`
+    );
+    candidateContainer = await startServiceContainerForDeployment({
+      service: candidateService,
+      runtime: candidateRuntime,
+      name: candidateName,
+      hostPort: candidatePort,
+      bindLocalOnly: true,
+      networkName,
+      healthcheck,
+      extraLabels: {
+        'provirpanel.deployment.candidate': 'true',
+        'provirpanel.deployment.id': deployment.id
+      }
+    });
+    await waitForServiceHealth({
+      serviceName: `${service.name} candidato`,
+      healthcheck,
+      hostPort: candidatePort
+    });
+  } catch (err) {
+    await stopAndRemoveContainer(candidateContainer?.Id, candidateName);
+    saveServiceDeploymentState(service, {
+      ...deployment,
+      status: 'failed',
+      failedAt: new Date().toISOString(),
+      error: err.message
+    }, service.activeDeploymentId);
+    appendServiceLog('error', `Versao candidata rejeitada para ${service.name}: ${err.message}`);
+    throw err;
+  }
+
+  await stopAndRemoveContainer(candidateContainer?.Id, candidateName);
+
+  const finalRuntime = prepareProjectRuntimeForDeploy({
+    service: candidateService,
+    envVars,
+    nodeServiceMode,
+    nodeSiteConfig
+  });
+  const previousContainerId = service.containerId;
+  await stopAndRemoveContainer(previousContainerId, service.name);
+  await removeContainerByName(service.name);
+
+  let finalContainer = null;
+  try {
+    appendServiceLog('info', `Promovendo versao ${deployment.id} para ${service.name}`);
+    finalContainer = await startServiceContainerForDeployment({
+      service: candidateService,
+      runtime: finalRuntime,
+      name: service.name,
+      hostPort: service.hostPort,
+      bindLocalOnly,
+      networkName,
+      healthcheck,
+      extraLabels: {
+        'provirpanel.deployment.id': deployment.id
+      }
+    });
+    await waitForServiceHealth({
+      serviceName: service.name,
+      healthcheck,
+      hostPort: service.hostPort
+    });
+  } catch (err) {
+    await stopAndRemoveContainer(finalContainer?.Id, service.name);
+    saveServiceDeploymentState(service, {
+      ...deployment,
+      status: 'failed',
+      failedAt: new Date().toISOString(),
+      error: err.message
+    }, service.activeDeploymentId);
+
+    if (autoRollback && previousDeployment?.projectDir) {
+      const rolledBack = await rollbackToPreviousDeployment({
+        service,
+        previousDeployment,
+        healthcheck,
+        networkName,
+        bindLocalOnly
+      });
+      if (rolledBack) {
+        throw createHttpError(
+          `Nova versao falhou e o rollback automatico foi executado: ${err.message}`,
+          502
+        );
+      }
+    }
+    throw err;
+  }
+
+  const promotedDeployment = {
+    ...deployment,
+    envVars,
+    command: finalRuntime.command,
+    autoCommandType: finalRuntime.autoCommandType,
+    nodeServiceMode,
+    nodeSiteConfig,
+    healthcheck,
+    status: 'active',
+    containerId: finalContainer.Id,
+    promotedAt: new Date().toISOString()
+  };
+  const updatedService = {
+    ...candidateService,
+    containerId: finalContainer.Id,
+    envVars,
+    command: finalRuntime.command,
+    autoCommandType: finalRuntime.autoCommandType,
+    hasProject: true,
+    healthcheck,
+    autoRollback,
+    nodeServiceMode,
+    nodeSiteConfig,
+    url: `http://localhost:${service.hostPort}`,
+    serverIP: getLocalIP(),
+    externalUrl: bindLocalOnly ? null : `http://${getLocalIP()}:${service.hostPort}`,
+    updatedAt: new Date().toISOString()
+  };
+
+  appendServiceLog('info', `Versao ${deployment.id} publicada para ${service.name}`);
+  return saveServiceDeploymentState(updatedService, promotedDeployment, deployment.id);
+};
+
 const publishProjectArchive = async (serviceId, file, options = {}) => {
-  let service = null;
   const services = dockerManager.listServices();
-  service = services.find((s) => s.id === serviceId);
+  let service = services.find((s) => s.id === serviceId);
   if (!service) {
     throw createHttpError('Service not found', 404);
   }
@@ -2694,262 +3540,102 @@ const publishProjectArchive = async (serviceId, file, options = {}) => {
   appendServiceLog('info', `Atualizacao de projeto iniciada: ${service.name}`);
 
   const volumeInfo = ensureServiceProjectVolume(service);
-  service = volumeInfo.service;
-  const projectDir = volumeInfo.projectDir;
+  service = ensureActiveDeploymentRecord(volumeInfo.service);
 
-    const { nodeServiceMode, nodeSiteConfig } = resolveNodeServiceConfig({}, service);
-    const isNodeSitesMode = service.templateId === 'node-app' && nodeServiceMode === 'sites';
-    const uploadTargetDir = isNodeSitesMode
-      ? path.join(projectDir, normalizeNodeSiteFolder(nodeSiteConfig.siteFolder))
-      : projectDir;
+  const { nodeServiceMode, nodeSiteConfig } = resolveNodeServiceConfig({}, service);
+  const isNodeSitesMode = service.templateId === 'node-app' && nodeServiceMode === 'sites';
+  const healthcheck = normalizeHealthcheckConfig(options.healthcheck || service.healthcheck);
+  const autoRollback = parseBooleanOption(options.autoRollback, service.autoRollback ?? true);
+  const deploymentId = crypto.randomUUID();
+  const projectDir = createDeploymentProjectDir(service, deploymentId);
+  const versionVolumes = replacePrimaryVolumeHostPath(service.volumes, projectDir);
+  const uploadTargetDir = isNodeSitesMode
+    ? path.join(projectDir, normalizeNodeSiteFolder(nodeSiteConfig.siteFolder))
+    : projectDir;
 
-    fs.mkdirSync(projectDir, { recursive: true });
-    if (isNodeSitesMode) {
-      ensureNodeSiteScaffold(
-        { hostPath: projectDir, containerPath: service.volumes?.[0]?.containerPath || '/usr/src/app' },
-        service.name,
-        nodeSiteConfig,
-        service.nodeSiteConfig
-      );
-      fs.mkdirSync(uploadTargetDir, { recursive: true });
-    }
-    // Replace published project content to avoid stale files in static deployments.
-    cleanDirectory(uploadTargetDir);
-    const archivePath = file.path;
-    try {
-      appendServiceLog('info', `Extraindo arquivo ${file.originalname} em ${uploadTargetDir}`);
-      await extractArchiveTo(archivePath, uploadTargetDir, file.originalname);
-    } finally {
-      fs.unlink(archivePath, () => {});
-    }
-
-    const isNginxStaticService =
-      service.templateId === 'nginx-static' ||
-      String(service.image || '').startsWith('nginx');
-    if (isNginxStaticService) {
-      const normalized = normalizeStaticSiteRoot(projectDir);
-      if (!normalized) {
-        appendServiceLog('error', `Upload sem index.html para serviço estático ${service.name}`);
-        throw createHttpError(
-          'Arquivo inválido para site estático: index.html não encontrado no .zip/.tar.',
-          400
-        );
-      }
-    }
-    if (isNodeSitesMode) {
-      const normalized = normalizeStaticSiteRoot(
-        uploadTargetDir,
-        normalizeFallbackFile(nodeSiteConfig.fallbackFile)
-      );
-      if (!normalized) {
-        appendServiceLog(
-          'warn',
-          `Upload do site ${service.name} sem arquivo fallback ${nodeSiteConfig.fallbackFile} na raiz`
-        );
-      }
-    }
-
-    const template =
-      SERVICE_TEMPLATES.find((t) => t.id === service.templateId) ||
-      { env: [], workdir: null, command: null };
-    const isNodeService =
-      service.templateId === 'node-app' ||
-      service.templateId === 'node' ||
-      String(service.image || '').startsWith('node');
-    const projectLaunch = resolveProjectAutoLaunch({
-      service,
-      isNodeService,
-      isNginxStaticService,
-      isNodeSitesMode
-    });
-    const persistedCommand = isAutoProjectLaunchCommand(service.command) ? null : service.command;
-    const canAutoProjectLaunch = Boolean(
-      projectLaunch &&
-        !persistedCommand &&
-        (
-          projectLaunch.type === 'project-entrypoint' ||
-          service.autoCommandType ||
-          service.templateId === 'custom-image' ||
-          isJavaRuntimeService(service)
-        )
+  fs.mkdirSync(projectDir, { recursive: true });
+  if (isNodeSitesMode) {
+    ensureNodeSiteScaffold(
+      { hostPath: projectDir, containerPath: versionVolumes?.[0]?.containerPath || '/usr/src/app' },
+      service.name,
+      nodeSiteConfig,
+      service.nodeSiteConfig
     );
-    const projectPath = canAutoProjectLaunch
-      ? resolvePrimaryVolumeProjectPath(service.volumes)
-      : getNodeServiceProjectPath(service.volumes, nodeServiceMode);
-    const workdir = projectPath?.containerPath || template.workdir || null;
-    if (projectPath?.hostPath) {
-      appendServiceLog('info', `Projeto resolvido em ${projectPath.hostPath}`);
-    } else {
-      appendServiceLog('warn', `Nao foi possivel resolver o diretorio do projeto para ${service.name}`);
-    }
+    fs.mkdirSync(uploadTargetDir, { recursive: true });
+  }
 
-    const resolvedEnvVars = Array.isArray(options.envVars)
-      ? mergeEnvVars(options.envVars, service.envVars || [])
-      : service.envVars || [];
-    const envProjectPath = getEnvProjectPath(service.volumes, projectPath);
-    if (envProjectPath?.hostPath) {
-      writeEnvFile(envProjectPath, resolvedEnvVars, template.env);
-      appendServiceLog('info', `Arquivo .env atualizado em ${envProjectPath.hostPath}`);
-    } else {
-      appendServiceLog('warn', `Nao foi possivel resolver diretorio para arquivo .env de ${service.name}`);
+  cleanDirectory(uploadTargetDir);
+  const archivePath = file.path;
+  try {
+    appendServiceLog('info', `Extraindo arquivo ${file.originalname} em ${uploadTargetDir}`);
+    await extractArchiveTo(archivePath, uploadTargetDir, file.originalname);
+  } finally {
+    fs.unlink(archivePath, () => {});
+  }
+
+  const isNginxStaticService =
+    service.templateId === 'nginx-static' ||
+    String(service.image || '').startsWith('nginx');
+  if (isNginxStaticService) {
+    const normalized = normalizeStaticSiteRoot(projectDir);
+    if (!normalized) {
+      appendServiceLog('error', `Upload sem index.html para serviço estático ${service.name}`);
+      throw createHttpError(
+        'Arquivo inválido para site estático: index.html não encontrado no .zip/.tar.',
+        400
+      );
     }
-    if (projectPath?.hostPath) {
-      if (isNodeService && !isNodeSitesMode) {
-        const expectedFiles = [
-          'package.json',
-          'tsconfig.json',
-          'app/v1/api/boleto/route.ts',
-          'app/v1/api/pix/route.ts',
-          'lib/db.ts'
-        ];
-        const missing = checkProjectFiles(projectPath, expectedFiles);
-        if (missing.length) {
-          appendServiceLog('warn', `Arquivos ausentes no projeto: ${missing.join(', ')}`);
-          missing.forEach((file) => {
-            const suggestion = findPathCaseInsensitive(projectPath.hostPath, file);
-            if (suggestion) {
-              appendServiceLog('warn', `Possivel diferenca de maiusculas: esperado ${file}, encontrado ${suggestion}`);
-            }
-          });
-        }
-      }
-    }
-    let env = buildContainerEnv({
-      templateEnv: template.env,
-      explicitEnvVars: resolvedEnvVars,
-      projectPath: envProjectPath
-    });
-    env = ensureExplicitContainerEnv(env, resolvedEnvVars);
-    appendServiceLog(
-      'info',
-      `Env do container atualizada para ${service.name}: ${resolvedEnvVars.map((entry) => entry.key).join(', ') || 'nenhuma'}`
+  }
+  if (isNodeSitesMode) {
+    const normalized = normalizeStaticSiteRoot(
+      uploadTargetDir,
+      normalizeFallbackFile(nodeSiteConfig.fallbackFile)
     );
-
-    const hasUserCommand = isNodeSitesMode ? false : !!persistedCommand;
-    let autoProjectLaunch = null;
-    let containerCmd = persistedCommand || template.command;
-    if (isNodeSitesMode) {
-      containerCmd = ['sh', '-c', 'npm install && npm start'];
-    } else if (isNodeService && !persistedCommand) {
-      containerCmd = resolveNodeCommand(service.volumes) || containerCmd;
-    } else if (canAutoProjectLaunch) {
-      autoProjectLaunch = projectLaunch;
-      containerCmd = projectLaunch.command;
+    if (!normalized) {
       appendServiceLog(
-        'info',
-        projectLaunch.type === 'project-entrypoint'
-          ? `Entrypoint do projeto detectado para ${service.name}: ${projectLaunch.containerPath}`
-          : `JAR detectado para ${service.name}: ${projectLaunch.containerJarPath}`
+        'warn',
+        `Upload do site ${service.name} sem arquivo fallback ${nodeSiteConfig.fallbackFile} na raiz`
       );
     }
-    if (isNodeService && !hasUserCommand) {
-      containerCmd = ensureCommandWorkdir(containerCmd, workdir);
-      const uploadCmdBefore = stringifyCommand(containerCmd);
-      containerCmd = ensureNpmDevDependencies(containerCmd);
-      const uploadAfterDev = stringifyCommand(containerCmd);
-      containerCmd = ensureNextBuildTimeout(containerCmd);
-      const uploadCmdAfter = stringifyCommand(containerCmd);
-      if (uploadAfterDev !== uploadCmdBefore) {
-        appendServiceLog('info', 'Forcando instalacao de dependencias de desenvolvimento para build');
-      }
-      if (uploadCmdAfter !== uploadAfterDev) {
-        appendServiceLog('info', 'Ajustando timeout do Next.js para build');
-      }
-    }
-    appendServiceLog('info', `Comando detectado para ${service.name}: ${stringifyCommand(containerCmd) || 'padrao'}`);
-    if (autoProjectLaunch) {
-      env = applyProjectRuntimeEnv(env, projectPath, autoProjectLaunch);
-      appendServiceLog(
-        'info',
-        `Runtime do projeto definido para ${service.name}: ${autoProjectLaunch.containerPath}`
-      );
-    }
-    if (workdir) {
-      appendServiceLog('info', `WorkingDir para ${service.name}: ${workdir}`);
-    } else {
-      appendServiceLog('warn', `WorkingDir nao resolvido para ${service.name}`);
-    }
-    if (isNodeService && !hasUserCommand) {
-      const envBeforeUpload = env;
-      env = ensureNextBuildEnv(env, containerCmd);
-      if (env !== envBeforeUpload) {
-        appendServiceLog('info', 'Variavel de ambiente de timeout do Next.js adicionada');
-      }
-    }
+  }
 
-    if (service.containerId) {
-      try {
-        appendServiceLog('info', `Parando container atual ${service.containerId} (${service.name})`);
-        await dockerManager.stopContainer(service.containerId);
-        appendServiceLog('info', `Removendo container atual ${service.containerId} (${service.name})`);
-        await dockerManager.removeContainer(service.containerId);
-      } catch (err) {
-        // ignore
-      }
-    }
+  const resolvedEnvVars = Array.isArray(options.envVars)
+    ? mergeEnvVars(options.envVars, service.envVars || [])
+    : service.envVars || [];
+  const deployment = {
+    id: deploymentId,
+    label: safeUploadFilename(file.originalname || 'project.zip', 'project.zip'),
+    filename: safeUploadFilename(file.originalname || 'project.zip', 'project.zip'),
+    projectDir,
+    envVars: resolvedEnvVars,
+    healthcheck,
+    autoRollback,
+    nodeServiceMode,
+    nodeSiteConfig,
+    status: 'pending',
+    createdAt: new Date().toISOString()
+  };
 
-    const containerConfig = {
-      name: service.name,
-      Labels: buildServiceLabels({
-        serviceId: service.id,
-        name: service.name,
-        templateId: service.templateId,
-        parentService: service.parentService,
-        hasProject: isNodeSitesMode ? true : service.hasProject
-      }),
-      HostConfig: {
-        NetworkMode: service.networkName || 'bridge',
-        PortBindings: {
-          [`${service.containerPort}/tcp`]: [
-            service.bindLocalOnly
-              ? { HostPort: String(service.hostPort), HostIp: '127.0.0.1' }
-              : { HostPort: String(service.hostPort) }
-          ]
-        },
-        Binds: service.volumes
-          .filter((m) => m.hostPath && m.containerPath)
-          .map((m) => `${m.hostPath}:${m.containerPath}`)
-      },
-      Env: env,
-      ExposedPorts: {
-        [`${service.containerPort}/tcp`]: {}
-      }
-    };
+  const updatedService = await promoteProjectDeployment({
+    service,
+    deployment,
+    envVars: resolvedEnvVars,
+    nodeServiceMode,
+    nodeSiteConfig,
+    healthcheck,
+    autoRollback
+  });
 
-    if (autoProjectLaunch) {
-      containerConfig.Entrypoint = ['sh', '-c'];
-      containerConfig.Cmd = [autoProjectLaunch.commandText];
-    } else if (containerCmd) {
-      containerConfig.Cmd = containerCmd;
-    }
-    if (workdir) {
-      containerConfig.WorkingDir = workdir;
-    }
-
-    appendServiceLog('info', `Garantindo nome livre para ${service.name}`);
-    await removeContainerByName(service.name);
-    appendServiceLog('info', `Iniciando novo container para ${service.name}`);
-    const container = await runContainerWithRetry(service.image, containerConfig, service.name);
-
-    const updatedService = {
-      ...service,
-      containerId: container.Id,
-      envVars: resolvedEnvVars,
-      command: isNodeSitesMode || autoProjectLaunch ? null : containerCmd || null,
-      autoCommandType: autoProjectLaunch ? autoProjectLaunch.type : null,
-      hasProject: true,
-      updatedAt: new Date().toISOString()
-    };
-
-    dockerManager.saveService(updatedService);
-    appendServiceLog('info', `Atualizacao de projeto concluida: ${service.name}`);
-    return updatedService;
+  appendServiceLog('info', `Atualizacao de projeto concluida: ${service.name}`);
+  return updatedService;
 };
 
 router.post('/services/:id/project-upload', upload.single('archive'), async (req, res, next) => {
   try {
     const updatedService = await publishProjectArchive(req.params.id, req.file, {
-      envVars: parseEnvVarsPayload(req.body?.envVars)
+      envVars: parseEnvVarsPayload(req.body?.envVars),
+      healthcheck: parseHealthcheckPayload(req.body?.healthcheck),
+      autoRollback: req.body?.autoRollback
     });
     res.json({ service: sanitizeServiceForClient(updatedService) });
   } catch (err) {
@@ -2978,6 +3664,8 @@ router.post('/services/:id/project-upload/init', (req, res, next) => {
       filename: safeUploadFilename(req.body?.filename, 'project.zip'),
       size: Number(req.body?.size || 0),
       envVars: parseEnvVarsPayload(req.body?.envVars),
+      healthcheck: parseHealthcheckPayload(req.body?.healthcheck),
+      autoRollback: req.body?.autoRollback,
       totalChunks,
       createdAt: new Date().toISOString()
     });
@@ -3013,13 +3701,72 @@ router.post('/services/:id/project-upload/complete', async (req, res, next) => {
       path: archivePath,
       originalname: filename
     }, {
-      envVars: metadata.envVars || null
+      envVars: metadata.envVars || null,
+      healthcheck: metadata.healthcheck || null,
+      autoRollback: metadata.autoRollback
     });
     cleanupChunkUpload(uploadId);
     res.json({ service: sanitizeServiceForClient(updatedService) });
   } catch (err) {
     if (uploadId) cleanupChunkUpload(uploadId);
     appendServiceLog('error', `Erro ao finalizar upload em partes ${req.params.id}: ${err.message}`);
+    next(err);
+  }
+});
+
+router.get('/services/:id/versions', async (req, res, next) => {
+  try {
+    const services = dockerManager.listServices();
+    let service = services.find((s) => s.id === req.params.id);
+    if (!service) {
+      return res.status(404).json({ message: 'Service not found' });
+    }
+    service = ensureActiveDeploymentRecord(service);
+    res.json({ versions: (service.deployments || []).map(sanitizeDeploymentForClient) });
+  } catch (err) {
+    next(err);
+  }
+});
+
+router.post('/services/:id/rollback', async (req, res, next) => {
+  try {
+    const services = dockerManager.listServices();
+    let service = services.find((s) => s.id === req.params.id);
+    if (!service) {
+      return res.status(404).json({ message: 'Service not found' });
+    }
+    service = ensureActiveDeploymentRecord(service);
+    const versionId = req.body?.versionId || req.body?.deploymentId;
+    const deployment = (service.deployments || []).find((entry) => entry.id === versionId);
+    if (!deployment) {
+      return res.status(404).json({ message: 'Versao nao encontrada' });
+    }
+    if (!deployment.projectDir || !fs.existsSync(deployment.projectDir)) {
+      return res.status(400).json({ message: 'Arquivos da versao nao encontrados' });
+    }
+    if (deployment.id === service.activeDeploymentId) {
+      return res.json({ service: sanitizeServiceForClient(service) });
+    }
+
+    const healthcheck = normalizeHealthcheckConfig(req.body?.healthcheck || service.healthcheck);
+    const autoRollback = parseBooleanOption(req.body?.autoRollback, service.autoRollback ?? true);
+    const updatedService = await promoteProjectDeployment({
+      service,
+      deployment: {
+        ...deployment,
+        status: 'pending',
+        rollbackFrom: service.activeDeploymentId,
+        rollbackAt: new Date().toISOString()
+      },
+      envVars: deployment.envVars || service.envVars || [],
+      nodeServiceMode: deployment.nodeServiceMode || service.nodeServiceMode || DEFAULT_NODE_SITE_MODE,
+      nodeSiteConfig: deployment.nodeSiteConfig || service.nodeSiteConfig || null,
+      healthcheck,
+      autoRollback
+    });
+    res.json({ service: sanitizeServiceForClient(updatedService) });
+  } catch (err) {
+    appendServiceLog('error', `Erro ao executar rollback ${req.params.id}: ${err.message}`);
     next(err);
   }
 });

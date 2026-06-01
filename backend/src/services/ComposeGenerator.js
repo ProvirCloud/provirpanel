@@ -9,6 +9,36 @@
  * Serve como "exportação portável" da infra criada no painel.
  */
 
+const parseBooleanOption = (value, fallback = false) => {
+  if (value === undefined || value === null || value === '') return fallback;
+  if (typeof value === 'boolean') return value;
+  const text = String(value).trim().toLowerCase();
+  if (['1', 'true', 'yes', 'sim', 'on'].includes(text)) return true;
+  if (['0', 'false', 'no', 'nao', 'não', 'off'].includes(text)) return false;
+  return fallback;
+};
+
+const clampNumber = (value, fallback, min, max) => {
+  const number = Number(value);
+  if (!Number.isFinite(number)) return fallback;
+  return Math.min(max, Math.max(min, Math.trunc(number)));
+};
+
+const normalizeHealthcheck = (healthcheck = {}) => {
+  const target = String(healthcheck.target || healthcheck.url || healthcheck.path || '').trim();
+  return {
+    enabled: parseBooleanOption(healthcheck.enabled, false),
+    target: target || '/',
+    intervalSeconds: clampNumber(healthcheck.intervalSeconds, 10, 1, 3600),
+    timeoutSeconds: clampNumber(healthcheck.timeoutSeconds, 5, 1, 300),
+    retries: clampNumber(healthcheck.retries, 6, 1, 120),
+    startPeriodSeconds: clampNumber(healthcheck.startPeriodSeconds, 5, 0, 3600),
+    containerEnabled: parseBooleanOption(healthcheck.containerEnabled, false)
+  };
+};
+
+const shellQuote = (value) => `'${String(value).replace(/'/g, "'\\''")}'`;
+
 class ComposeGenerator {
   /**
    * Gera o conteúdo do docker-compose.yml a partir de uma Stack.
@@ -81,6 +111,23 @@ class ComposeGenerator {
             const needsQuotes = val.includes(':') || val.includes('#') || val === '' || val.includes('$');
             lines.push(`      ${e.key}: ${needsQuotes ? `"${val.replace(/"/g, '\\"')}"` : val}`);
           }
+        }
+      }
+
+      const healthcheck = normalizeHealthcheck(svc.healthcheck);
+      if (healthcheck.enabled && healthcheck.containerEnabled) {
+        const containerPort = Number((svc.ports || []).find((port) => port?.container)?.container || 80);
+        const target = String(healthcheck.target || '/').trim() || '/';
+        const url = /^https?:\/\//i.test(target)
+          ? target.replace(/\{host\}/g, '127.0.0.1').replace(/\{port\}/g, String(containerPort))
+          : `http://127.0.0.1:${containerPort}${target.startsWith('/') ? target : `/${target}`}`;
+        lines.push('    healthcheck:');
+        lines.push(`      test: ["CMD-SHELL", "curl -fsS ${shellQuote(url)} >/dev/null || wget -qO- ${shellQuote(url)} >/dev/null || exit 1"]`);
+        lines.push(`      interval: ${healthcheck.intervalSeconds}s`);
+        lines.push(`      timeout: ${healthcheck.timeoutSeconds}s`);
+        lines.push(`      retries: ${healthcheck.retries}`);
+        if (healthcheck.startPeriodSeconds > 0) {
+          lines.push(`      start_period: ${healthcheck.startPeriodSeconds}s`);
         }
       }
 

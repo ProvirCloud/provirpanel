@@ -236,6 +236,24 @@ const NODE_SITE_FOLDERS = ['www', 'publish']
 const CHUNKED_UPLOAD_THRESHOLD_BYTES = 50 * 1024 * 1024
 const UPLOAD_CHUNK_SIZE_BYTES = 25 * 1024 * 1024
 
+const DEFAULT_HEALTHCHECK = {
+  enabled: false,
+  target: '/health',
+  intervalSeconds: 10,
+  timeoutSeconds: 5,
+  retries: 6,
+  startPeriodSeconds: 5,
+  containerEnabled: false
+}
+
+const normalizeHealthcheckForm = (healthcheck = {}) => ({
+  ...DEFAULT_HEALTHCHECK,
+  ...healthcheck,
+  enabled: !!healthcheck.enabled,
+  containerEnabled: healthcheck.containerEnabled ?? DEFAULT_HEALTHCHECK.containerEnabled,
+  target: healthcheck.target || healthcheck.url || healthcheck.path || DEFAULT_HEALTHCHECK.target
+})
+
 const getDefaultProjectContainerPath = (template) => {
   const volumePath = template?.volumes?.find((volume) => volume?.containerPath)?.containerPath
   if (volumePath) return volumePath
@@ -1489,15 +1507,27 @@ const DockerPanel = ({ showPageIntro = true }) => {
     if (hasEnvVars) {
       formData.append('envVars', JSON.stringify(options.envVars || []))
     }
+    if (options.healthcheck) {
+      formData.append('healthcheck', JSON.stringify(options.healthcheck))
+    }
+    if (Object.prototype.hasOwnProperty.call(options, 'autoRollback')) {
+      formData.append('autoRollback', String(!!options.autoRollback))
+    }
     try {
       setProjectUploadStatus({ status: 'uploading', progress: 0, message: 'Enviando arquivo...' })
+      let response = null
       if (file.size > CHUNKED_UPLOAD_THRESHOLD_BYTES) {
-        await uploadFileInChunks({
+        const metadata = hasEnvVars ? { envVars: options.envVars || [] } : {}
+        if (options.healthcheck) metadata.healthcheck = options.healthcheck
+        if (Object.prototype.hasOwnProperty.call(options, 'autoRollback')) {
+          metadata.autoRollback = !!options.autoRollback
+        }
+        response = await uploadFileInChunks({
           file,
           initUrl: `/docker/services/${serviceId}/project-upload/init`,
           chunkUrl: `/docker/services/${serviceId}/project-upload/chunk`,
           completeUrl: `/docker/services/${serviceId}/project-upload/complete`,
-          metadata: hasEnvVars ? { envVars: options.envVars || [] } : {},
+          metadata,
           onProgress: (progress, chunkIndex, totalChunks) => {
             setProjectUploadStatus((prev) => ({
               ...(prev || {}),
@@ -1508,7 +1538,7 @@ const DockerPanel = ({ showPageIntro = true }) => {
           }
         })
       } else {
-        await uploadApi.post(`/docker/services/${serviceId}/project-upload`, formData, {
+        response = await uploadApi.post(`/docker/services/${serviceId}/project-upload`, formData, {
           headers: { 'Content-Type': 'multipart/form-data' },
           onUploadProgress: (event) => {
             const total = event.total || 0
@@ -1518,6 +1548,23 @@ const DockerPanel = ({ showPageIntro = true }) => {
               status: total && event.loaded >= total ? 'processing' : 'uploading',
               progress
             }))
+          }
+        })
+      }
+      const updated = response?.data?.service
+      if (updated) {
+        setEditDialog((prev) => {
+          if (!prev || prev.id !== serviceId) return prev
+          return {
+            ...prev,
+            ...updated,
+            newEnvVars: (updated.envVars || []).map((env) => ({
+              ...env,
+              value: env.secret ? '******' : env.value
+            })),
+            newProjectArchive: null,
+            healthcheck: normalizeHealthcheckForm(updated.healthcheck || {}),
+            autoRollback: updated.autoRollback ?? true
           }
         })
       }
@@ -1537,6 +1584,37 @@ const DockerPanel = ({ showPageIntro = true }) => {
         progress: 0,
         message
       })
+      addToast(message, 'error')
+      return false
+    }
+  }
+
+  const rollbackServiceVersion = async (serviceId, versionId) => {
+    if (!serviceId || !versionId) return false
+    try {
+      const response = await api.post(`/docker/services/${serviceId}/rollback`, { versionId })
+      addToast('Rollback executado')
+      await Promise.all([loadServices(), loadContainers()])
+      const updated = response.data?.service
+      setEditDialog((prev) => {
+        if (!prev || prev.id !== serviceId) return prev
+        return updated
+          ? {
+              ...prev,
+              ...updated,
+              newEnvVars: (updated.envVars || []).map((env) => ({
+                ...env,
+                value: env.secret ? '******' : env.value
+              })),
+              newProjectArchive: null,
+              healthcheck: normalizeHealthcheckForm(updated.healthcheck || {}),
+              autoRollback: updated.autoRollback ?? true
+            }
+          : prev
+      })
+      return true
+    } catch (err) {
+      const message = err.response?.data?.message || err.message || 'Erro ao executar rollback'
       addToast(message, 'error')
       return false
     }
@@ -1567,6 +1645,14 @@ const DockerPanel = ({ showPageIntro = true }) => {
       newBindLocalOnly: svc.bindLocalOnly ?? false,
       commandInput: formatCommandForInput(svc.command),
       newProjectArchive: null,
+      healthcheck: normalizeHealthcheckForm(svc.healthcheck || {}),
+      autoRollback: svc.autoRollback ?? true,
+      originalNodeServiceMode: svc.nodeServiceMode || NODE_SERVICE_MODES.service,
+      originalNodeSiteConfig: {
+        siteType: svc.nodeSiteConfig?.siteType || NODE_SITE_TYPES.common,
+        siteFolder: svc.nodeSiteConfig?.siteFolder || NODE_SITE_FOLDERS[0],
+        fallbackFile: svc.nodeSiteConfig?.fallbackFile || 'index.html'
+      },
       nodeServiceMode: svc.nodeServiceMode || NODE_SERVICE_MODES.service,
       nodeSiteConfig: {
         siteType: svc.nodeSiteConfig?.siteType || NODE_SITE_TYPES.common,
@@ -3169,6 +3255,155 @@ const DockerPanel = ({ showPageIntro = true }) => {
                   </p>
                 </div>
               )}
+              <div className="rounded-xl border border-slate-700 bg-slate-800/60 p-4">
+                <div className="flex flex-wrap items-center justify-between gap-3">
+                  <div>
+                    <h4 className="text-sm font-semibold text-white">Healthcheck e rollback</h4>
+                    <p className="mt-1 text-xs text-slate-400">
+                      A nova versão é testada em porta temporária antes de substituir a atual.
+                    </p>
+                  </div>
+                  <label className="flex items-center gap-2 text-xs text-slate-300">
+                    <input
+                      type="checkbox"
+                      className="rounded border-slate-600 bg-slate-800 text-blue-400"
+                      checked={!!editDialog.healthcheck?.enabled}
+                      onChange={(e) =>
+                        setEditDialog((prev) => ({
+                          ...prev,
+                          healthcheck: {
+                            ...normalizeHealthcheckForm(prev.healthcheck || {}),
+                            enabled: e.target.checked
+                          }
+                        }))
+                      }
+                    />
+                    Ativar teste
+                  </label>
+                </div>
+                <div className="mt-4 grid gap-3 md:grid-cols-4">
+                  <div className="md:col-span-2">
+                    <label className="block text-xs text-slate-400 mb-1">Path ou URL</label>
+                    <input
+                      className="w-full rounded-xl border border-slate-700 bg-slate-900 px-3 py-2 text-sm text-white"
+                      placeholder="/health ou https://api.exemplo.com/health"
+                      value={editDialog.healthcheck?.target || ''}
+                      onChange={(e) =>
+                        setEditDialog((prev) => ({
+                          ...prev,
+                          healthcheck: {
+                            ...normalizeHealthcheckForm(prev.healthcheck || {}),
+                            target: e.target.value
+                          }
+                        }))
+                      }
+                    />
+                  </div>
+                  <div>
+                    <label className="block text-xs text-slate-400 mb-1">Intervalo (s)</label>
+                    <input
+                      type="number"
+                      min="1"
+                      className="w-full rounded-xl border border-slate-700 bg-slate-900 px-3 py-2 text-sm text-white"
+                      value={editDialog.healthcheck?.intervalSeconds ?? DEFAULT_HEALTHCHECK.intervalSeconds}
+                      onChange={(e) =>
+                        setEditDialog((prev) => ({
+                          ...prev,
+                          healthcheck: {
+                            ...normalizeHealthcheckForm(prev.healthcheck || {}),
+                            intervalSeconds: Number(e.target.value)
+                          }
+                        }))
+                      }
+                    />
+                  </div>
+                  <div>
+                    <label className="block text-xs text-slate-400 mb-1">Timeout (s)</label>
+                    <input
+                      type="number"
+                      min="1"
+                      className="w-full rounded-xl border border-slate-700 bg-slate-900 px-3 py-2 text-sm text-white"
+                      value={editDialog.healthcheck?.timeoutSeconds ?? DEFAULT_HEALTHCHECK.timeoutSeconds}
+                      onChange={(e) =>
+                        setEditDialog((prev) => ({
+                          ...prev,
+                          healthcheck: {
+                            ...normalizeHealthcheckForm(prev.healthcheck || {}),
+                            timeoutSeconds: Number(e.target.value)
+                          }
+                        }))
+                      }
+                    />
+                  </div>
+                  <div>
+                    <label className="block text-xs text-slate-400 mb-1">Tentativas</label>
+                    <input
+                      type="number"
+                      min="1"
+                      className="w-full rounded-xl border border-slate-700 bg-slate-900 px-3 py-2 text-sm text-white"
+                      value={editDialog.healthcheck?.retries ?? DEFAULT_HEALTHCHECK.retries}
+                      onChange={(e) =>
+                        setEditDialog((prev) => ({
+                          ...prev,
+                          healthcheck: {
+                            ...normalizeHealthcheckForm(prev.healthcheck || {}),
+                            retries: Number(e.target.value)
+                          }
+                        }))
+                      }
+                    />
+                  </div>
+                  <div>
+                    <label className="block text-xs text-slate-400 mb-1">Espera inicial (s)</label>
+                    <input
+                      type="number"
+                      min="0"
+                      className="w-full rounded-xl border border-slate-700 bg-slate-900 px-3 py-2 text-sm text-white"
+                      value={editDialog.healthcheck?.startPeriodSeconds ?? DEFAULT_HEALTHCHECK.startPeriodSeconds}
+                      onChange={(e) =>
+                        setEditDialog((prev) => ({
+                          ...prev,
+                          healthcheck: {
+                            ...normalizeHealthcheckForm(prev.healthcheck || {}),
+                            startPeriodSeconds: Number(e.target.value)
+                          }
+                        }))
+                      }
+                    />
+                  </div>
+                  <label className="flex items-center gap-2 text-xs text-slate-300 md:col-span-2">
+                    <input
+                      type="checkbox"
+                      className="rounded border-slate-600 bg-slate-800 text-blue-400"
+                      checked={editDialog.autoRollback ?? true}
+                      onChange={(e) =>
+                        setEditDialog((prev) => ({
+                          ...prev,
+                          autoRollback: e.target.checked
+                        }))
+                      }
+                    />
+                    Rollback automático se a versão falhar
+                  </label>
+                  <label className="flex items-center gap-2 text-xs text-slate-300 md:col-span-2">
+                    <input
+                      type="checkbox"
+                      className="rounded border-slate-600 bg-slate-800 text-blue-400"
+                      checked={editDialog.healthcheck?.containerEnabled ?? DEFAULT_HEALTHCHECK.containerEnabled}
+                      onChange={(e) =>
+                        setEditDialog((prev) => ({
+                          ...prev,
+                          healthcheck: {
+                            ...normalizeHealthcheckForm(prev.healthcheck || {}),
+                            containerEnabled: e.target.checked
+                          }
+                        }))
+                      }
+                    />
+                    Aplicar HEALTHCHECK no container
+                  </label>
+                </div>
+              </div>
               <div>
                 <label className="block text-sm text-slate-300 mb-2">Variáveis de Ambiente</label>
                 <div className="space-y-2">
@@ -3296,7 +3531,9 @@ const DockerPanel = ({ showPageIntro = true }) => {
                         }
                         onClick={async () => {
                           const ok = await uploadProjectArchive(editDialog.id, editDialog.newProjectArchive, {
-                            envVars: editDialog.newEnvVars || []
+                            envVars: editDialog.newEnvVars || [],
+                            healthcheck: editDialog.healthcheck,
+                            autoRollback: editDialog.autoRollback ?? true
                           })
                           if (ok) {
                             setEditDialog(prev => ({ ...prev, newProjectArchive: null }))
@@ -3327,8 +3564,8 @@ const DockerPanel = ({ showPageIntro = true }) => {
                     </div>
                     <p className="text-xs text-slate-400">
                       {editDialog.templateId === 'node-app' && editDialog.nodeServiceMode === NODE_SERVICE_MODES.sites
-                        ? `Os arquivos serão extraídos na pasta ${editDialog.nodeSiteConfig?.siteFolder || NODE_SITE_FOLDERS[0]} e o serviço será reiniciado.`
-                        : 'O projeto sera extraido no volume do servico e o container sera reiniciado.'}
+                        ? `Os arquivos serão extraídos na pasta ${editDialog.nodeSiteConfig?.siteFolder || NODE_SITE_FOLDERS[0]} e validados antes da troca.`
+                        : 'O projeto sera publicado como nova versao e validado antes da troca.'}
                     </p>
                     <div className="rounded-xl border border-slate-700 bg-slate-800/60 p-3 text-xs">
                       <div className="flex items-center justify-between">
@@ -3368,6 +3605,49 @@ const DockerPanel = ({ showPageIntro = true }) => {
                         </p>
                       )}
                     </div>
+                    <div className="rounded-xl border border-slate-700 bg-slate-800/60 p-3 text-xs">
+                      <div className="flex items-center justify-between gap-3">
+                        <span className="font-semibold text-slate-200">Versões publicadas</span>
+                        <span className="text-slate-500">
+                          {(editDialog.deployments || []).length} registro(s)
+                        </span>
+                      </div>
+                      {(editDialog.deployments || []).length === 0 && (
+                        <p className="mt-2 text-slate-500">Nenhuma versão salva ainda.</p>
+                      )}
+                      <div className="mt-3 space-y-2">
+                        {(editDialog.deployments || []).slice(0, 10).map((deployment) => {
+                          const isActive = deployment.id === editDialog.activeDeploymentId || deployment.status === 'active'
+                          const createdAt = deployment.promotedAt || deployment.createdAt
+                          return (
+                            <div
+                              key={deployment.id}
+                              className="flex flex-wrap items-center justify-between gap-2 rounded-lg border border-slate-700 bg-slate-900 px-3 py-2"
+                            >
+                              <div className="min-w-0">
+                                <p className="truncate text-slate-200">
+                                  {deployment.label || deployment.filename || deployment.id}
+                                </p>
+                                <p className="text-[11px] text-slate-500">
+                                  {createdAt ? new Date(createdAt).toLocaleString() : 'sem data'} · {deployment.status || 'available'}
+                                </p>
+                              </div>
+                              <button
+                                className="rounded-lg border border-slate-600 px-3 py-1.5 text-[11px] text-slate-200 hover:bg-slate-700 disabled:cursor-not-allowed disabled:opacity-50"
+                                disabled={
+                                  isActive ||
+                                  projectUploadStatus?.status === 'uploading' ||
+                                  projectUploadStatus?.status === 'processing'
+                                }
+                                onClick={() => rollbackServiceVersion(editDialog.id, deployment.id)}
+                              >
+                                {isActive ? 'Atual' : 'Rollback'}
+                              </button>
+                            </div>
+                          )
+                        })}
+                      </div>
+                    </div>
                   </div>
                 </div>
             </div>
@@ -3375,24 +3655,42 @@ const DockerPanel = ({ showPageIntro = true }) => {
               <button
                 className="flex-1 rounded-xl bg-blue-500 px-4 py-2 text-sm font-semibold text-white hover:bg-blue-600"
                 onClick={async () => {
+                  const hadProjectArchive = Boolean(editDialog.newProjectArchive)
                   if (editDialog.newProjectArchive) {
                     const ok = await uploadProjectArchive(editDialog.id, editDialog.newProjectArchive, {
-                      envVars: editDialog.newEnvVars || []
+                      envVars: editDialog.newEnvVars || [],
+                      healthcheck: editDialog.healthcheck,
+                      autoRollback: editDialog.autoRollback ?? true
                     })
                     if (!ok) {
                       return
                     }
                   }
+                  const requestedCommand =
+                    editDialog.templateId === 'node-app' &&
+                    editDialog.nodeServiceMode === NODE_SERVICE_MODES.sites
+                      ? ''
+                      : editDialog.commandInput || ''
+                  const configChanged =
+                    !hadProjectArchive ||
+                    Number(editDialog.newHostPort || editDialog.hostPort) !== Number(editDialog.hostPort) ||
+                    (editDialog.newNetworkName || editDialog.networkName || '') !== (editDialog.networkName || '') ||
+                    (editDialog.newBindLocalOnly ?? editDialog.bindLocalOnly ?? false) !== (editDialog.bindLocalOnly ?? false) ||
+                    requestedCommand !== (formatCommandForInput(editDialog.command) || '') ||
+                    (editDialog.nodeServiceMode || NODE_SERVICE_MODES.service) !== (editDialog.originalNodeServiceMode || editDialog.nodeServiceMode || NODE_SERVICE_MODES.service) ||
+                    JSON.stringify(editDialog.nodeSiteConfig || {}) !== JSON.stringify(editDialog.originalNodeSiteConfig || {})
+                  if (!configChanged) {
+                    setEditDialog(null)
+                    return
+                  }
                   const updated = await updateService(editDialog.id, {
                     hostPort: editDialog.newHostPort || editDialog.hostPort,
                     envVars: editDialog.newEnvVars || [],
                     networkName: editDialog.newNetworkName || editDialog.networkName,
-                    command:
-                      editDialog.templateId === 'node-app' &&
-                      editDialog.nodeServiceMode === NODE_SERVICE_MODES.sites
-                        ? ''
-                        : editDialog.commandInput || '',
+                    command: requestedCommand,
                     bindLocalOnly: editDialog.newBindLocalOnly ?? editDialog.bindLocalOnly ?? false,
+                    healthcheck: editDialog.healthcheck,
+                    autoRollback: editDialog.autoRollback ?? true,
                     nodeServiceMode: editDialog.nodeServiceMode || NODE_SERVICE_MODES.service,
                     nodeSiteConfig: editDialog.nodeSiteConfig
                   });
