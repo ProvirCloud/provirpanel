@@ -8,6 +8,7 @@ import {
   Globe,
   KeyRound,
   LoaderCircle,
+  Lock,
   Plus,
   RefreshCcw,
   Server,
@@ -28,6 +29,7 @@ const defaultCreateForm = {
   adminUser: 'admin',
   adminEmail: '',
   adminPassword: '',
+  ssl: true,
 }
 
 const serviceOptions = [
@@ -265,6 +267,22 @@ const SitesPanel = () => {
     }
   }
 
+  const fixSsl = async () => {
+    if (!selectedSite) return
+    setBusy('fix-ssl')
+    setMessage(null)
+    try {
+      const response = await api.post(`/sites/${selectedSite.id}/fix-ssl`)
+      setSites((current) => current.map((site) => (site.id === response.data.site.id ? response.data.site : site)))
+      const warnings = (response.data?.warnings || []).filter(Boolean).join(' ')
+      setMessage({ type: warnings ? 'warning' : 'success', text: warnings || 'HTTPS ativado — wp-config.php e banco atualizados' })
+    } catch (err) {
+      setMessage({ type: 'error', text: getErrorMessage(err, 'Erro ao ativar HTTPS') })
+    } finally {
+      setBusy('')
+    }
+  }
+
   const submitMigration = async (event) => {
     event.preventDefault()
     if (!selectedSite || !migrationFile) return
@@ -469,6 +487,18 @@ const SitesPanel = () => {
               <Field label="Senha admin">
                 <Input type="password" value={createForm.adminPassword} onChange={(event) => handleCreateChange('adminPassword', event.target.value)} placeholder="Gerar automaticamente" />
               </Field>
+              <div className="flex items-center gap-3">
+                <label className="flex cursor-pointer items-center gap-2 text-sm text-[var(--color-text-muted)]">
+                  <input
+                    type="checkbox"
+                    checked={createForm.ssl}
+                    onChange={(event) => handleCreateChange('ssl', event.target.checked)}
+                    className="h-4 w-4 rounded border-[var(--color-border)] accent-[var(--color-brand)]"
+                  />
+                  <Lock size={14} />
+                  HTTPS (proxy reverso)
+                </label>
+              </div>
               <div className="flex items-end">
                 <Button type="submit" variant="primary" className="w-full" leadingIcon={<Plus size={16} />} loading={busy === 'create'}>
                   Criar WordPress
@@ -611,6 +641,11 @@ const SitesPanel = () => {
                   <Button type="button" variant="secondary" leadingIcon={<Database size={16} />} loading={busy === 'optimize'} onClick={optimizeDatabase}>
                     Otimizar banco
                   </Button>
+                  {!selectedSite.ssl ? (
+                    <Button type="button" variant="secondary" leadingIcon={<Lock size={16} />} loading={busy === 'fix-ssl'} onClick={fixSsl}>
+                      Ativar HTTPS
+                    </Button>
+                  ) : null}
                   <Button type="button" variant="ghost" leadingIcon={<RefreshCcw size={16} />} onClick={loadSites} loading={loading}>
                     Recarregar status
                   </Button>

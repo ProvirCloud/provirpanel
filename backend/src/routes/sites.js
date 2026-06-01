@@ -366,7 +366,7 @@ const escapeSql = (value) =>
     .replace(/\\/g, '\\\\')
     .replace(/'/g, "\\'");
 
-const getSiteUrl = (site) => `http://${site.domain}`;
+const getSiteUrl = (site) => `${site.ssl ? 'https' : 'http'}://${site.domain}`;
 
 const buildNginxConfig = (site, hostPort) => `server {
     listen 80;
@@ -791,7 +791,8 @@ const createWordPressSite = async (body = {}) => {
     slug,
     domain,
     port,
-    url: getSiteUrl({ domain }),
+    ssl: Boolean(body.ssl),
+    url: getSiteUrl({ domain, ssl: Boolean(body.ssl) }),
     localUrl: `http://localhost:${port}`,
     networkName: buildSiteNetworkName(slug, shortId),
     siteDir,
@@ -870,7 +871,7 @@ const createWordPressSite = async (body = {}) => {
       'WORDPRESS_DB_USER=wordpress',
       `WORDPRESS_DB_PASSWORD=${dbPassword}`,
       'WORDPRESS_TABLE_PREFIX=wp_',
-      "WORDPRESS_CONFIG_EXTRA=define('FS_METHOD', 'direct');\ndefine('WP_MEMORY_LIMIT', '256M');\ndefine('WP_MAX_MEMORY_LIMIT', '512M');"
+      "WORDPRESS_CONFIG_EXTRA=if (isset(\$_SERVER['HTTP_X_FORWARDED_PROTO']) && \$_SERVER['HTTP_X_FORWARDED_PROTO'] === 'https') { \$_SERVER['HTTPS'] = 'on'; }\ndefine('FORCE_SSL_ADMIN', false);\ndefine('FS_METHOD', 'direct');\ndefine('WP_MEMORY_LIMIT', '256M');\ndefine('WP_MAX_MEMORY_LIMIT', '512M');"
     ],
     ExposedPorts: {
       '80/tcp': {}
@@ -1096,6 +1097,7 @@ router.post('/:id/domain', async (req, res, next) => {
     const site = getSiteOr404(req.params.id);
     const oldConfigName = site.nginxConfigName;
     site.domain = normalizeDomain(req.body?.domain);
+    if (req.body?.ssl !== undefined) site.ssl = Boolean(req.body.ssl);
     site.url = getSiteUrl(site);
     site.updatedAt = new Date().toISOString();
     const warnings = [];
@@ -1115,6 +1117,44 @@ router.post('/:id/domain', async (req, res, next) => {
     }
     saveSite(site);
     res.json({ site: await decorateSite(site), warnings });
+  } catch (err) {
+    next(err);
+  }
+});
+
+router.post('/:id/fix-ssl', async (req, res, next) => {
+  try {
+    const site = getSiteOr404(req.params.id);
+    if (!site.containers?.wordpress) {
+      return res.status(400).json({ message: 'Container WordPress não encontrado' });
+    }
+    const patchLine = 'if (isset($_SERVER["HTTP_X_FORWARDED_PROTO"]) && $_SERVER["HTTP_X_FORWARDED_PROTO"] === "https") { $_SERVER["HTTPS"] = "on"; }';
+    const script = [
+      'set -e',
+      'CONFIG=/var/www/html/wp-config.php',
+      'if [ ! -f "$CONFIG" ]; then echo "wp-config.php not found"; exit 1; fi',
+      'if grep -q "HTTP_X_FORWARDED_PROTO" "$CONFIG"; then echo "already patched"; exit 0; fi',
+      'TMPF=$(mktemp)',
+      'echo "<?php" > "$TMPF"',
+      'echo "$PROVIR_PATCH_LINE" >> "$TMPF"',
+      'tail -n +2 "$CONFIG" >> "$TMPF"',
+      'mv "$TMPF" "$CONFIG"',
+      'echo "patched"'
+    ].join('\n');
+    const result = await dockerExecRootShell(site.containers.wordpress, script, {
+      PROVIR_PATCH_LINE: patchLine
+    });
+    site.ssl = true;
+    site.url = getSiteUrl(site);
+    site.updatedAt = new Date().toISOString();
+    const warnings = [];
+    try {
+      await updateWordPressUrls(site);
+    } catch (err) {
+      warnings.push(`wp-config.php corrigido, mas o ajuste de siteurl/home falhou: ${err.message}`);
+    }
+    saveSite(site);
+    res.json({ site: await decorateSite(site), output: result.stdout?.trim(), warnings });
   } catch (err) {
     next(err);
   }
