@@ -325,6 +325,10 @@ fs.mkdirSync(path.dirname(registriesPath), { recursive: true });
 if (!fs.existsSync(registriesPath)) {
   fs.writeFileSync(registriesPath, '[]');
 }
+const serviceGroupsPath = path.join(__dirname, '..', 'data', 'docker-service-groups.json');
+if (!fs.existsSync(serviceGroupsPath)) {
+  fs.writeFileSync(serviceGroupsPath, '[]');
+}
 
 const readRegistries = () => {
   try {
@@ -451,6 +455,73 @@ const sanitizePendingConfigForClient = (pendingConfig = null) => {
     ...pendingConfig,
     envVars: maskEnvVars(pendingConfig.envVars || [])
   };
+};
+
+const normalizeServiceGroupName = (value) =>
+  String(value || '')
+    .trim()
+    .replace(/\s+/g, ' ')
+    .slice(0, 80);
+
+const sanitizeServiceGroupForClient = (group = {}) => ({
+  id: group.id,
+  name: group.name,
+  parentId: group.parentId || null,
+  sortOrder: Number.isFinite(Number(group.sortOrder)) ? Number(group.sortOrder) : 0,
+  createdAt: group.createdAt || null,
+  updatedAt: group.updatedAt || null
+});
+
+const readServiceGroups = () => {
+  try {
+    const parsed = JSON.parse(fs.readFileSync(serviceGroupsPath, 'utf8'));
+    return Array.isArray(parsed)
+      ? parsed
+          .filter((group) => group?.id && group?.name)
+          .map(sanitizeServiceGroupForClient)
+      : [];
+  } catch (err) {
+    return [];
+  }
+};
+
+const writeServiceGroups = (groups = []) => {
+  fs.writeFileSync(serviceGroupsPath, JSON.stringify(groups.map(sanitizeServiceGroupForClient), null, 2));
+};
+
+const getNextServiceSortOrder = () =>
+  dockerManager.listServices().reduce((max, service, index) => {
+    const value = Number(service.uiSortOrder);
+    return Math.max(max, Number.isFinite(value) ? value : index * 10);
+  }, 0) + 10;
+
+const getNextGroupSortOrder = (groups = [], parentId = null) =>
+  groups
+    .filter((group) => (group.parentId || null) === (parentId || null))
+    .reduce((max, group, index) => {
+      const value = Number(group.sortOrder);
+      return Math.max(max, Number.isFinite(value) ? value : index * 10);
+    }, 0) + 10;
+
+const normalizeServiceGroupId = (value, groups = []) => {
+  const groupId = String(value || '').trim();
+  if (!groupId) return null;
+  return groups.some((group) => group.id === groupId) ? groupId : null;
+};
+
+const normalizeServiceGroupParentId = (groups, groupId, parentId) => {
+  const normalizedParentId = normalizeServiceGroupId(parentId, groups);
+  if (!normalizedParentId || normalizedParentId === groupId) return null;
+
+  let cursor = groups.find((group) => group.id === normalizedParentId);
+  const visited = new Set([groupId]);
+  while (cursor) {
+    if (visited.has(cursor.id)) return null;
+    visited.add(cursor.id);
+    cursor = groups.find((group) => group.id === cursor.parentId);
+  }
+
+  return normalizedParentId;
 };
 
 const normalizeEnvVars = (envVars = []) =>
@@ -762,6 +833,8 @@ const buildServiceLabels = ({
 const sanitizeServiceForClient = (service) => ({
   ...service,
   networkName: service.networkName || 'bridge',
+  uiGroupId: service.uiGroupId || null,
+  uiSortOrder: Number.isFinite(Number(service.uiSortOrder)) ? Number(service.uiSortOrder) : null,
   envVars: maskEnvVars(service.envVars || []),
   pendingConfig: sanitizePendingConfigForClient(service.pendingConfig),
   deployments: (service.deployments || []).map(sanitizeDeploymentForClient)
@@ -789,7 +862,10 @@ const sanitizeProjectDeployJob = (job = {}) => ({
 const sendServicesResponse = async (res, next) => {
   try {
     const services = await dockerManager.listManagedServices();
-    res.json({ services: services.map(sanitizeServiceForClient) });
+    res.json({
+      services: services.map(sanitizeServiceForClient),
+      groups: readServiceGroups().map(sanitizeServiceGroupForClient)
+    });
   } catch (err) {
     next(err);
   }
@@ -2031,6 +2107,89 @@ router.get('/services', async (req, res, next) => {
   await sendServicesResponse(res, next);
 });
 
+router.post('/services/groups', async (req, res, next) => {
+  try {
+    const groups = readServiceGroups();
+    const name = normalizeServiceGroupName(req.body?.name);
+    if (!name || name.length < 2) {
+      return res.status(400).json({ message: 'Nome do grupo deve ter pelo menos 2 caracteres' });
+    }
+    const parentId = normalizeServiceGroupId(req.body?.parentId, groups);
+    const now = new Date().toISOString();
+    const group = {
+      id: crypto.randomUUID(),
+      name,
+      parentId,
+      sortOrder: getNextGroupSortOrder(groups, parentId),
+      createdAt: now,
+      updatedAt: now
+    };
+    const nextGroups = [...groups, group];
+    writeServiceGroups(nextGroups);
+    res.status(201).json({
+      group: sanitizeServiceGroupForClient(group),
+      groups: nextGroups.map(sanitizeServiceGroupForClient)
+    });
+  } catch (err) {
+    next(err);
+  }
+});
+
+router.put('/services/layout', async (req, res, next) => {
+  try {
+    const currentGroups = readServiceGroups();
+    const incomingGroups = Array.isArray(req.body?.groups) ? req.body.groups : [];
+    const incomingGroupsById = new Map(
+      incomingGroups
+        .filter((group) => group?.id)
+        .map((group) => [String(group.id), group])
+    );
+    const now = new Date().toISOString();
+    const nextGroups = currentGroups.map((group, index) => {
+      const incoming = incomingGroupsById.get(group.id);
+      if (!incoming) return group;
+      return {
+        ...group,
+        parentId: normalizeServiceGroupParentId(currentGroups, group.id, incoming.parentId),
+        sortOrder: clampNumber(incoming.sortOrder, group.sortOrder ?? index * 10, 0, 1000000),
+        updatedAt: now
+      };
+    });
+    writeServiceGroups(nextGroups);
+
+    const validGroups = new Set(nextGroups.map((group) => group.id));
+    const incomingServices = Array.isArray(req.body?.services) ? req.body.services : [];
+    const incomingServicesById = new Map(
+      incomingServices
+        .filter((service) => service?.id)
+        .map((service) => [String(service.id), service])
+    );
+    const services = dockerManager.listServices();
+    const nextServices = services.map((service, index) => {
+      const incoming = incomingServicesById.get(service.id);
+      if (!incoming) {
+        return {
+          ...service,
+          uiGroupId: validGroups.has(service.uiGroupId) ? service.uiGroupId : null,
+          uiSortOrder: Number.isFinite(Number(service.uiSortOrder)) ? Number(service.uiSortOrder) : index * 10
+        };
+      }
+      const requestedGroupId = String(incoming.groupId ?? incoming.uiGroupId ?? '').trim();
+      return {
+        ...service,
+        uiGroupId: validGroups.has(requestedGroupId) ? requestedGroupId : null,
+        uiSortOrder: clampNumber(incoming.sortOrder ?? incoming.uiSortOrder, index * 10, 0, 1000000),
+        updatedAt: now
+      };
+    });
+
+    dockerManager.writeRegistry(nextServices);
+    await sendServicesResponse(res, next);
+  } catch (err) {
+    next(err);
+  }
+});
+
 router.get('/images', async (req, res, next) => {
   try {
     const images = await dockerManager.listImages();
@@ -2543,6 +2702,7 @@ router.post('/services', async (req, res, next) => {
     progress.push(`📦 Preparando container ${imageName}...`);
     
     const serviceId = crypto.randomUUID();
+    const initialSortOrder = getNextServiceSortOrder();
     const { nodeServiceMode, nodeSiteConfig } = resolveNodeServiceConfig(
       {
         nodeServiceMode: requestedNodeServiceMode,
@@ -2799,6 +2959,8 @@ router.post('/services', async (req, res, next) => {
         externalUrl: bindLocalOnly ? null : `http://${getLocalIP()}:${resolvedPort}`,
         healthcheck: resolvedHealthcheck,
         autoRollback: resolvedAutoRollback,
+        uiGroupId: null,
+        uiSortOrder: initialSortOrder,
         createdAt: new Date().toISOString(),
         hasProject:
           isNodeSitesMode ||
@@ -2879,6 +3041,8 @@ router.post('/services', async (req, res, next) => {
           url: `http://localhost:${pgAdminPort}`,
           serverIP: getLocalIP(),
           externalUrl: bindLocalOnly ? null : `http://${getLocalIP()}:${pgAdminPort}`,
+          uiGroupId: null,
+          uiSortOrder: initialSortOrder + 10,
           createdAt: new Date().toISOString(),
           parentService: serviceId,
           credentials: {
@@ -4768,6 +4932,38 @@ router.post('/services/:id/rollback', async (req, res, next) => {
     res.json({ service: sanitizeServiceForClient(updatedService) });
   } catch (err) {
     appendServiceLog('error', `Erro ao executar rollback ${req.params.id}: ${err.message}`);
+    next(err);
+  }
+});
+
+router.delete('/services/groups/:id', async (req, res, next) => {
+  try {
+    const groups = readServiceGroups();
+    const group = groups.find((entry) => entry.id === req.params.id);
+    if (!group) {
+      return res.status(404).json({ message: 'Grupo não encontrado' });
+    }
+
+    const parentId = group.parentId || null;
+    const nextGroups = groups
+      .filter((entry) => entry.id !== group.id)
+      .map((entry) => ({
+        ...entry,
+        parentId: entry.parentId === group.id ? parentId : entry.parentId,
+        updatedAt: new Date().toISOString()
+      }));
+    writeServiceGroups(nextGroups);
+
+    const services = dockerManager.listServices();
+    const nextServices = services.map((service) =>
+      service.uiGroupId === group.id
+        ? { ...service, uiGroupId: parentId, updatedAt: new Date().toISOString() }
+        : service
+    );
+    dockerManager.writeRegistry(nextServices);
+
+    await sendServicesResponse(res, next);
+  } catch (err) {
     next(err);
   }
 });

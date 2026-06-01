@@ -5,6 +5,8 @@ import {
   AlertTriangle,
   AppWindow,
   Boxes,
+  ChevronDown,
+  ChevronRight,
   Play,
   Square,
   RefreshCw,
@@ -16,6 +18,9 @@ import {
   Database,
   Globe,
   Cpu,
+  Folder,
+  FolderPlus,
+  GripVertical,
   Wrench
 } from 'lucide-react'
 import { Area, AreaChart, ResponsiveContainer, Tooltip as RechartsTooltip } from 'recharts'
@@ -709,6 +714,142 @@ const TEMPLATE_APP_META = {
 
 const getTemplateMeta = (templateId) => TEMPLATE_APP_META[templateId] || TEMPLATE_APP_META.default
 
+const OPS_PAGE_SIZE_OPTIONS = [10, 25, 50]
+
+const normalizeOpsGroupId = (value, groups = []) => {
+  const id = String(value || '').trim()
+  if (!id) return null
+  return groups.some((group) => group.id === id) ? id : null
+}
+
+const getUiSortOrder = (item = {}, fallback = 0) => {
+  const raw = item.uiSortOrder ?? item.sortOrder
+  const value = Number(raw)
+  return Number.isFinite(value) ? value : fallback * 10
+}
+
+const compareOpsItems = (a, b) => {
+  const order = getUiSortOrder(a, a._index || 0) - getUiSortOrder(b, b._index || 0)
+  if (order !== 0) return order
+  return String(a.name || a.label || '').localeCompare(String(b.name || b.label || ''), 'pt-BR')
+}
+
+const buildServiceGroupOptions = (groups = []) => {
+  const byParent = new Map()
+  const groupIds = new Set(groups.map((group) => group.id))
+  groups.forEach((group, index) => {
+    const parentId = groupIds.has(group.parentId) ? group.parentId : null
+    const entry = { ...group, parentId, _index: index }
+    byParent.set(parentId, [...(byParent.get(parentId) || []), entry])
+  })
+
+  const options = []
+  const visit = (parentId = null, depth = 0) => {
+    ;[...(byParent.get(parentId) || [])].sort(compareOpsItems).forEach((group) => {
+      options.push({ ...group, depth })
+      visit(group.id, depth + 1)
+    })
+  }
+  visit(null, 0)
+  return options
+}
+
+const buildOperationalTreeRows = ({
+  groups = [],
+  services = [],
+  expandedGroupIds = {},
+  searchTerm = ''
+}) => {
+  const term = searchTerm.trim().toLowerCase()
+  const normalizedGroups = groups
+    .filter((group) => group?.id && group?.name)
+    .map((group, index) => ({ ...group, parentId: group.parentId || null, _index: index }))
+  const groupIds = new Set(normalizedGroups.map((group) => group.id))
+  normalizedGroups.forEach((group) => {
+    group.parentId = groupIds.has(group.parentId) ? group.parentId : null
+  })
+
+  const groupChildren = new Map()
+  normalizedGroups.forEach((group) => {
+    groupChildren.set(group.parentId, [...(groupChildren.get(group.parentId) || []), group])
+  })
+
+  const servicesByGroup = new Map()
+  services.forEach((service, index) => {
+    const groupId = normalizeOpsGroupId(service.uiGroupId, normalizedGroups)
+    const entry = { ...service, uiGroupId: groupId, _index: index }
+    servicesByGroup.set(groupId, [...(servicesByGroup.get(groupId) || []), entry])
+  })
+
+  const serviceMatches = (service) => {
+    if (!term) return true
+    return [service.name, service.image, service.networkName, service.hostPort]
+      .filter(Boolean)
+      .some((value) => String(value).toLowerCase().includes(term))
+  }
+  const groupMatches = (group) => !term || String(group.name || '').toLowerCase().includes(term)
+
+  const countDescendantServices = (groupId) => {
+    const direct = servicesByGroup.get(groupId)?.length || 0
+    return direct + (groupChildren.get(groupId) || []).reduce(
+      (total, child) => total + countDescendantServices(child.id),
+      0
+    )
+  }
+
+  const buildGroupRows = (group, depth) => {
+    const directServices = [...(servicesByGroup.get(group.id) || [])].sort(compareOpsItems)
+    const visibleServices = groupMatches(group) && term
+      ? directServices
+      : directServices.filter(serviceMatches)
+    const childRows = [...(groupChildren.get(group.id) || [])]
+      .sort(compareOpsItems)
+      .flatMap((child) => buildGroupRows(child, depth + 1))
+    const shouldShow = !term || groupMatches(group) || visibleServices.length > 0 || childRows.length > 0
+    if (!shouldShow) return []
+
+    const expanded = !!expandedGroupIds[group.id] || !!term
+    const rows = [{
+      type: 'group',
+      id: `group:${group.id}`,
+      group,
+      depth,
+      expanded,
+      serviceCount: countDescendantServices(group.id)
+    }]
+    if (expanded) {
+      rows.push(...childRows)
+      visibleServices.forEach((service) => {
+        rows.push({
+          type: 'service',
+          id: `service:${service.id}`,
+          service,
+          depth: depth + 1
+        })
+      })
+    }
+    return rows
+  }
+
+  const rows = [...(groupChildren.get(null) || [])]
+    .sort(compareOpsItems)
+    .flatMap((group) => buildGroupRows(group, 0))
+
+  ;[...(servicesByGroup.get(null) || [])]
+    .sort(compareOpsItems)
+    .filter(serviceMatches)
+    .forEach((service) => {
+      rows.push({
+        type: 'service',
+        id: `service:${service.id}`,
+        service,
+        depth: 0
+      })
+    })
+
+  return rows
+}
+
 const METRIC_TONES = {
   brand: 'border-blue-500/30 bg-blue-500/10 text-blue-100',
   success: 'border-emerald-500/30 bg-emerald-500/10 text-emerald-100',
@@ -1119,6 +1260,14 @@ const DockerPanel = ({ showPageIntro = true }) => {
   const [opsSearch, setOpsSearch] = useState('')
   const [appCategory, setAppCategory] = useState('all')
   const [expandedClusterId, setExpandedClusterId] = useState(null)
+  const [serviceGroups, setServiceGroups] = useState([])
+  const [expandedServiceGroups, setExpandedServiceGroups] = useState({})
+  const [opsPage, setOpsPage] = useState(1)
+  const [opsPageSize, setOpsPageSize] = useState(10)
+  const [newServiceGroupName, setNewServiceGroupName] = useState('')
+  const [newServiceGroupParentId, setNewServiceGroupParentId] = useState('')
+  const [draggedServiceId, setDraggedServiceId] = useState(null)
+  const [layoutWorking, setLayoutWorking] = useState(false)
   const socket = useMemo(() => createDockerLogsSocket(), [])
   const progressSocket = useMemo(() => createDockerProgressSocket(), [])
   const buildSessionRef = useRef(null)
@@ -1235,34 +1384,23 @@ const DockerPanel = ({ showPageIntro = true }) => {
 
   const operationalInstances = useMemo(() => {
     return services
-      .map((service) => {
+      .map((service, index) => {
         const container = containerLookup.get(service.containerId) || containerLookup.get(service.name)
         const runtimeState = container?.State || 'exited'
         const serviceWithRuntime = { ...service, runtimeState }
         return {
           ...serviceWithRuntime,
+          uiGroupId: normalizeOpsGroupId(service.uiGroupId, serviceGroups),
+          uiSortOrder: getUiSortOrder(service, index),
+          _index: index,
           containerName: getContainerName(container) || service.name,
           stateMeta: getContainerStatusMeta(runtimeState),
           lastActivityAt: getServiceActivityAt(service),
           healthMeta: getServiceHealthMeta(serviceWithRuntime, container)
         }
       })
-      .sort((a, b) => {
-        const priority = { running: 0, starting: 1, stopped: 2, error: 3, unknown: 4 }
-        return (priority[a.stateMeta.key] ?? 5) - (priority[b.stateMeta.key] ?? 5)
-      })
-  }, [services, containerLookup])
-
-  const filteredOperationalInstances = useMemo(() => {
-    const searchTerm = opsSearch.trim().toLowerCase()
-    if (!searchTerm) return operationalInstances
-
-    return operationalInstances.filter((service) => {
-      return [service.name, service.image, service.networkName, service.hostPort]
-        .filter(Boolean)
-        .some((value) => String(value).toLowerCase().includes(searchTerm))
-    })
-  }, [operationalInstances, opsSearch])
+      .sort(compareOpsItems)
+  }, [services, containerLookup, serviceGroups])
 
   const stackServiceKeys = useMemo(() => {
     const keys = new Set()
@@ -1281,16 +1419,26 @@ const DockerPanel = ({ showPageIntro = true }) => {
     })
   }, [operationalInstances, stackServiceKeys])
 
-  const filteredIndependentServices = useMemo(() => {
-    const searchTerm = opsSearch.trim().toLowerCase()
-    if (!searchTerm) return independentServices
+  const serviceGroupOptions = useMemo(
+    () => buildServiceGroupOptions(serviceGroups),
+    [serviceGroups]
+  )
 
-    return independentServices.filter((service) => {
-      return [service.name, service.image, service.networkName, service.hostPort]
-        .filter(Boolean)
-        .some((value) => String(value).toLowerCase().includes(searchTerm))
-    })
-  }, [independentServices, opsSearch])
+  const operationalTreeRows = useMemo(
+    () => buildOperationalTreeRows({
+      groups: serviceGroups,
+      services: independentServices,
+      expandedGroupIds: expandedServiceGroups,
+      searchTerm: opsSearch
+    }),
+    [serviceGroups, independentServices, expandedServiceGroups, opsSearch]
+  )
+
+  const opsTotalPages = Math.max(1, Math.ceil(operationalTreeRows.length / opsPageSize))
+  const paginatedOperationalRows = useMemo(() => {
+    const start = (opsPage - 1) * opsPageSize
+    return operationalTreeRows.slice(start, start + opsPageSize)
+  }, [operationalTreeRows, opsPage, opsPageSize])
 
   const totalRunningInstances = operationalInstances.filter((item) => item.stateMeta.key === 'running').length
   const totalStoppedInstances = operationalInstances.filter((item) => item.stateMeta.key === 'stopped').length
@@ -1392,21 +1540,28 @@ const DockerPanel = ({ showPageIntro = true }) => {
     }
   }
 
-  const loadServices = async (options = {}) => {
-    try {
-      const response = await api.get('/docker/services')
-      const loadedServices = Array.isArray(response.data?.services)
-        ? response.data.services
-        : Array.isArray(response.data)
-          ? response.data
-          : Array.isArray(response.data?.data)
-            ? response.data.data
-	            : []
+    const applyServiceCollectionResponse = (data = {}) => {
+      const loadedServices = Array.isArray(data?.services)
+        ? data.services
+        : Array.isArray(data)
+          ? data
+          : Array.isArray(data?.data)
+            ? data.data
+            : []
       setServices(loadedServices)
-    } catch (err) {
-      if (!options.silent) addToast('Erro ao carregar servicos', 'error')
+      if (Array.isArray(data?.groups)) {
+        setServiceGroups(data.groups)
+      }
     }
-  }
+
+    const loadServices = async (options = {}) => {
+      try {
+        const response = await api.get('/docker/services')
+        applyServiceCollectionResponse(response.data)
+      } catch (err) {
+        if (!options.silent) addToast('Erro ao carregar servicos', 'error')
+      }
+    }
 
   const loadPostgresDatabases = async () => {
     try {
@@ -1508,19 +1663,29 @@ const DockerPanel = ({ showPageIntro = true }) => {
     loadRegistries()
   }, [])
 
-  useEffect(() => {
-    const intervalId = setInterval(() => {
-      void Promise.all([
-        loadContainers({ silent: true }),
-        loadServices({ silent: true })
+    useEffect(() => {
+      const intervalId = setInterval(() => {
+        void Promise.all([
+          loadContainers({ silent: true }),
+          loadServices({ silent: true })
       ])
     }, 5000)
 
-    return () => clearInterval(intervalId)
-  }, [])
+      return () => clearInterval(intervalId)
+    }, [])
 
-  useEffect(() => {
-    if (!wizard) {
+    useEffect(() => {
+      setOpsPage(1)
+    }, [opsSearch, opsPageSize])
+
+    useEffect(() => {
+      if (opsPage > opsTotalPages) {
+        setOpsPage(opsTotalPages)
+      }
+    }, [opsPage, opsTotalPages])
+
+    useEffect(() => {
+      if (!wizard) {
       setServiceForm(null)
       setServiceProgress([])
       setServiceWorking(false)
@@ -1733,6 +1898,139 @@ const DockerPanel = ({ showPageIntro = true }) => {
       loadServices()
     } catch (err) {
       addToast('Erro na operacao', 'error')
+    }
+  }
+
+  const persistOperationalLayout = async (nextServices, nextGroups = serviceGroups) => {
+    setLayoutWorking(true)
+    try {
+      const response = await api.put('/docker/services/layout', {
+        services: nextServices.map((service, index) => ({
+          id: service.id,
+          groupId: normalizeOpsGroupId(service.uiGroupId, nextGroups),
+          sortOrder: getUiSortOrder(service, index)
+        })),
+        groups: nextGroups.map((group, index) => ({
+          id: group.id,
+          parentId: normalizeOpsGroupId(group.parentId, nextGroups),
+          sortOrder: getUiSortOrder(group, index)
+        }))
+      })
+      applyServiceCollectionResponse(response.data)
+    } catch (err) {
+      addToast(err.response?.data?.message || 'Erro ao salvar organização', 'error')
+      await loadServices({ silent: true })
+    } finally {
+      setLayoutWorking(false)
+    }
+  }
+
+  const assignServiceOrder = (serviceList, groupId, orderedIds) => {
+    const orderMap = new Map(orderedIds.map((id, index) => [id, (index + 1) * 10]))
+    return serviceList.map((service) =>
+      normalizeOpsGroupId(service.uiGroupId, serviceGroups) === groupId && orderMap.has(service.id)
+        ? { ...service, uiSortOrder: orderMap.get(service.id) }
+        : service
+    )
+  }
+
+  const moveServiceToGroup = async (serviceId, groupId = null) => {
+    const targetGroupId = normalizeOpsGroupId(groupId, serviceGroups)
+    const movedService = services.find((service) => service.id === serviceId)
+    if (!movedService) return
+
+    let nextServices = services.map((service) =>
+      service.id === serviceId
+        ? { ...service, uiGroupId: targetGroupId }
+        : service
+    )
+    const orderedIds = nextServices
+      .filter((service) => normalizeOpsGroupId(service.uiGroupId, serviceGroups) === targetGroupId)
+      .sort(compareOpsItems)
+      .filter((service) => service.id !== serviceId)
+      .map((service) => service.id)
+    orderedIds.push(serviceId)
+    nextServices = assignServiceOrder(nextServices, targetGroupId, orderedIds)
+    setServices(nextServices)
+    await persistOperationalLayout(nextServices)
+  }
+
+  const moveServiceBefore = async (serviceId, targetServiceId) => {
+    if (!serviceId || !targetServiceId || serviceId === targetServiceId) return
+    const targetService = services.find((service) => service.id === targetServiceId)
+    const movedService = services.find((service) => service.id === serviceId)
+    if (!targetService || !movedService) return
+
+    const targetGroupId = normalizeOpsGroupId(targetService.uiGroupId, serviceGroups)
+    let nextServices = services.map((service) =>
+      service.id === serviceId
+        ? { ...service, uiGroupId: targetGroupId }
+        : service
+    )
+    const groupServices = nextServices
+      .filter((service) => normalizeOpsGroupId(service.uiGroupId, serviceGroups) === targetGroupId)
+      .sort(compareOpsItems)
+      .filter((service) => service.id !== serviceId)
+    const targetIndex = Math.max(0, groupServices.findIndex((service) => service.id === targetServiceId))
+    const ordered = [
+      ...groupServices.slice(0, targetIndex),
+      { ...movedService, uiGroupId: targetGroupId },
+      ...groupServices.slice(targetIndex)
+    ]
+    nextServices = assignServiceOrder(nextServices, targetGroupId, ordered.map((service) => service.id))
+    setServices(nextServices)
+    await persistOperationalLayout(nextServices)
+  }
+
+  const createServiceGroup = async () => {
+    const name = newServiceGroupName.trim()
+    if (name.length < 2) {
+      addToast('Informe um nome de grupo com pelo menos 2 caracteres', 'error')
+      return
+    }
+    setLayoutWorking(true)
+    try {
+      const response = await api.post('/docker/services/groups', {
+        name,
+        parentId: newServiceGroupParentId || null
+      })
+      if (Array.isArray(response.data?.groups)) {
+        setServiceGroups(response.data.groups)
+      }
+      setNewServiceGroupName('')
+      setNewServiceGroupParentId('')
+      if (response.data?.group?.id) {
+        setExpandedServiceGroups((prev) => ({
+          ...prev,
+          [response.data.group.id]: true,
+          ...(response.data.group.parentId ? { [response.data.group.parentId]: true } : {})
+        }))
+      }
+    } catch (err) {
+      addToast(err.response?.data?.message || 'Erro ao criar grupo', 'error')
+    } finally {
+      setLayoutWorking(false)
+    }
+  }
+
+  const removeServiceGroup = async (groupId) => {
+    if (!groupId) return
+    if (!window.confirm('Remover este grupo? Os serviços e subgrupos serão movidos para o grupo pai.')) {
+      return
+    }
+    setLayoutWorking(true)
+    try {
+      const response = await api.delete(`/docker/services/groups/${groupId}`)
+      applyServiceCollectionResponse(response.data)
+      setExpandedServiceGroups((prev) => {
+        const next = { ...prev }
+        delete next[groupId]
+        return next
+      })
+    } catch (err) {
+      addToast(err.response?.data?.message || 'Erro ao remover grupo', 'error')
+    } finally {
+      setLayoutWorking(false)
     }
   }
 
@@ -3171,6 +3469,147 @@ const DockerPanel = ({ showPageIntro = true }) => {
   const currentProjectDeployLabel = currentProjectDeployPhase
     ? getProjectDeployPhaseLabel(currentProjectDeployPhase)
     : null
+  const opsPageStart = operationalTreeRows.length ? (opsPage - 1) * opsPageSize + 1 : 0
+  const opsPageEnd = Math.min(opsPage * opsPageSize, operationalTreeRows.length)
+
+  const renderOperationalTreeRow = (row) => {
+    if (row.type === 'group') {
+      const GroupChevron = row.expanded ? ChevronDown : ChevronRight
+      return (
+        <tr
+          key={row.id}
+          className={`border-t border-slate-800 bg-slate-950/60 ${draggedServiceId ? 'outline outline-1 outline-blue-500/20' : ''}`}
+          onDragOver={(event) => event.preventDefault()}
+          onDrop={(event) => {
+            event.preventDefault()
+            event.stopPropagation()
+            if (draggedServiceId) {
+              void moveServiceToGroup(draggedServiceId, row.group.id)
+              setDraggedServiceId(null)
+            }
+          }}
+        >
+          <td className="px-4 py-2" colSpan={7}>
+            <div className="flex flex-wrap items-center justify-between gap-3" style={{ paddingLeft: `${row.depth * 24}px` }}>
+              <div className="flex items-center gap-2">
+                <button
+                  className="rounded-md border border-slate-700 bg-slate-900 p-1 text-slate-300 hover:border-blue-500/40 hover:text-white"
+                  onClick={() =>
+                    setExpandedServiceGroups((prev) => ({
+                      ...prev,
+                      [row.group.id]: !prev[row.group.id]
+                    }))
+                  }
+                  title={row.expanded ? 'Recolher grupo' : 'Expandir grupo'}
+                >
+                  <GroupChevron className="h-3.5 w-3.5" />
+                </button>
+                <Folder className="h-4 w-4 text-blue-300" />
+                <span className="font-semibold text-white">{row.group.name}</span>
+                <span className="rounded-full border border-slate-700 bg-slate-900 px-2 py-0.5 text-[10px] text-slate-400">
+                  {row.serviceCount} serviço(s)
+                </span>
+              </div>
+              <button
+                className="rounded-lg border border-rose-800 bg-rose-950 px-2.5 py-1 text-[11px] text-rose-200 hover:bg-rose-900"
+                onClick={() => removeServiceGroup(row.group.id)}
+              >
+                Remover grupo
+              </button>
+            </div>
+          </td>
+        </tr>
+      )
+    }
+
+    const instance = row.service
+    const container = containerLookup.get(instance.containerId) || containerLookup.get(instance.name)
+    const isRunning = instance.stateMeta.key === 'running'
+    return (
+      <tr
+        key={row.id}
+        draggable
+        className="border-t border-slate-800 hover:bg-slate-900/40"
+        onClick={() => container && openLogs(container)}
+        onDragStart={(event) => {
+          event.dataTransfer.effectAllowed = 'move'
+          event.dataTransfer.setData('text/plain', instance.id)
+          setDraggedServiceId(instance.id)
+        }}
+        onDragEnd={() => setDraggedServiceId(null)}
+        onDragOver={(event) => event.preventDefault()}
+        onDrop={(event) => {
+          event.preventDefault()
+          event.stopPropagation()
+          const serviceId = draggedServiceId || event.dataTransfer.getData('text/plain')
+          if (serviceId) {
+            void moveServiceBefore(serviceId, instance.id)
+            setDraggedServiceId(null)
+          }
+        }}
+      >
+        <td className="px-4 py-3">
+          <div className="flex items-center gap-2" style={{ paddingLeft: `${row.depth * 24}px` }}>
+            <GripVertical className="h-4 w-4 shrink-0 text-slate-600" />
+            <div>
+              <p className="font-semibold text-white">{instance.name}</p>
+              <p className="text-xs text-slate-400">{instance.image || 'custom-image'}</p>
+            </div>
+          </div>
+        </td>
+        <td className="px-4 py-3">
+          <DockerStatusBadge state={instance.runtimeState} />
+        </td>
+        <td className="px-4 py-3">
+          <span className={`rounded-full border px-2.5 py-1 text-[11px] font-medium ${instance.healthMeta?.className || 'border-slate-800 bg-slate-950/70 text-slate-500'}`}>
+            {instance.healthMeta?.label || '—'}
+          </span>
+        </td>
+        <td className="px-4 py-3 text-slate-300">{instance.hostPort || 'auto'} → {instance.containerPort || '—'}</td>
+        <td className="px-4 py-3 text-slate-300">{instance.networkName || 'bridge'}</td>
+        <td className="px-4 py-3 text-slate-300" title={instance.lastActivityAt ? new Date(instance.lastActivityAt).toLocaleString('pt-BR') : ''}>
+          {formatShortDateTime(instance.lastActivityAt)}
+        </td>
+        <td className="px-4 py-3">
+          <div className="flex flex-wrap gap-2">
+            <button
+              className={`rounded-lg border px-3 py-1.5 text-xs font-medium ${
+                isRunning
+                  ? 'border-amber-500/30 bg-amber-500/10 text-amber-200 hover:bg-amber-500/20'
+                  : 'border-emerald-500/30 bg-emerald-500/10 text-emerald-200 hover:bg-emerald-500/20'
+              }`}
+              onClick={(event) => {
+                event.stopPropagation()
+                if (instance.containerId) {
+                  handleAction(isRunning ? 'stop' : 'start', instance.containerId)
+                }
+              }}
+            >
+              {isRunning ? 'Stop' : 'Start'}
+            </button>
+            <button
+              className="rounded-lg border border-blue-800 bg-blue-950 px-3 py-1.5 text-xs text-blue-200 hover:bg-blue-900"
+              onClick={(event) => {
+                event.stopPropagation()
+                openEditServiceDialog(instance)
+              }}
+            >
+              Edit
+            </button>
+            <button
+              className="rounded-lg border border-rose-800 bg-rose-950 px-3 py-1.5 text-xs text-rose-200 hover:bg-rose-900"
+              onClick={(event) => {
+                event.stopPropagation()
+                setRemoveDialog(instance)
+              }}
+            >
+              Remove
+            </button>
+          </div>
+        </td>
+      </tr>
+    )
+  }
 
   return (
     <div className="zeus-docker-page space-y-6">
@@ -3396,18 +3835,103 @@ const DockerPanel = ({ showPageIntro = true }) => {
           )}
 
           <div className="rounded-2xl border border-slate-800 bg-slate-900/60">
-            <div className="flex flex-wrap items-center justify-between gap-3 border-b border-slate-800 px-4 py-4">
-              <div>
-                <p className="text-xs uppercase tracking-[0.3em] text-slate-400">Independent services</p>
-                <h3 className="mt-1 text-xl font-semibold text-white">Operational console</h3>
+            <div className="space-y-4 border-b border-slate-800 px-4 py-4">
+              <div className="flex flex-wrap items-center justify-between gap-3">
+                <div>
+                  <p className="text-xs uppercase tracking-[0.3em] text-slate-400">Independent services</p>
+                  <h3 className="mt-1 text-xl font-semibold text-white">Operational console</h3>
+                </div>
+                <div className="min-w-[240px] flex-1 max-w-md">
+                  <input
+                    className="w-full rounded-xl border border-slate-700 bg-slate-950/70 px-3 py-2.5 text-sm text-white placeholder:text-slate-500"
+                    placeholder="Buscar instância, imagem, rede ou porta"
+                    value={opsSearch}
+                    onChange={(event) => setOpsSearch(event.target.value)}
+                  />
+                </div>
               </div>
-              <div className="min-w-[240px] flex-1 max-w-md">
-                <input
-                  className="w-full rounded-xl border border-slate-700 bg-slate-950/70 px-3 py-2.5 text-sm text-white placeholder:text-slate-500"
-                  placeholder="Buscar instância, imagem, rede ou porta"
-                  value={opsSearch}
-                  onChange={(event) => setOpsSearch(event.target.value)}
-                />
+
+              <div className="grid gap-3 xl:grid-cols-[1fr_auto]">
+                <div className="flex flex-wrap items-center gap-2">
+                  <input
+                    className="min-w-[180px] rounded-xl border border-slate-700 bg-slate-950/70 px-3 py-2 text-sm text-white placeholder:text-slate-500"
+                    placeholder="Novo grupo"
+                    value={newServiceGroupName}
+                    onChange={(event) => setNewServiceGroupName(event.target.value)}
+                  />
+                  <select
+                    className="rounded-xl border border-slate-700 bg-slate-950/70 px-3 py-2 text-sm text-white"
+                    value={newServiceGroupParentId}
+                    onChange={(event) => setNewServiceGroupParentId(event.target.value)}
+                  >
+                    <option value="">Sem grupo pai</option>
+                    {serviceGroupOptions.map((group) => (
+                      <option key={group.id} value={group.id}>
+                        {`${'— '.repeat(group.depth)}${group.name}`}
+                      </option>
+                    ))}
+                  </select>
+                  <button
+                    className="inline-flex items-center gap-2 rounded-xl bg-blue-500 px-3 py-2 text-xs font-semibold text-slate-950 transition hover:bg-blue-400 disabled:cursor-not-allowed disabled:bg-slate-700 disabled:text-slate-400"
+                    onClick={createServiceGroup}
+                    disabled={layoutWorking}
+                  >
+                    <FolderPlus className="h-4 w-4" />
+                    Criar grupo
+                  </button>
+                  <button
+                    className={`inline-flex items-center gap-2 rounded-xl border px-3 py-2 text-xs transition ${
+                      draggedServiceId
+                        ? 'border-blue-500/60 bg-blue-500/10 text-blue-100'
+                        : 'border-slate-700 bg-slate-950/70 text-slate-300'
+                    }`}
+                    onDragOver={(event) => event.preventDefault()}
+                    onDrop={(event) => {
+                      event.preventDefault()
+                      const serviceId = draggedServiceId || event.dataTransfer.getData('text/plain')
+                      if (serviceId) {
+                        void moveServiceToGroup(serviceId, null)
+                        setDraggedServiceId(null)
+                      }
+                    }}
+                  >
+                    <Folder className="h-4 w-4" />
+                    Sem grupo
+                  </button>
+                  {layoutWorking && (
+                    <span className="text-xs text-slate-400">Salvando organização...</span>
+                  )}
+                </div>
+
+                <div className="flex flex-wrap items-center justify-end gap-2 text-xs text-slate-300">
+                  <span>{opsPageStart}-{opsPageEnd} de {operationalTreeRows.length}</span>
+                  <select
+                    className="rounded-lg border border-slate-700 bg-slate-950 px-2 py-1.5 text-xs text-white"
+                    value={opsPageSize}
+                    onChange={(event) => setOpsPageSize(Math.min(50, Number(event.target.value) || 10))}
+                  >
+                    {OPS_PAGE_SIZE_OPTIONS.map((option) => (
+                      <option key={option} value={option}>
+                        {option} por página
+                      </option>
+                    ))}
+                  </select>
+                  <button
+                    className="rounded-lg border border-slate-700 bg-slate-950 px-2.5 py-1.5 text-xs text-slate-200 disabled:cursor-not-allowed disabled:text-slate-600"
+                    onClick={() => setOpsPage((page) => Math.max(1, page - 1))}
+                    disabled={opsPage <= 1}
+                  >
+                    Anterior
+                  </button>
+                  <span className="font-mono text-slate-400">{opsPage}/{opsTotalPages}</span>
+                  <button
+                    className="rounded-lg border border-slate-700 bg-slate-950 px-2.5 py-1.5 text-xs text-slate-200 disabled:cursor-not-allowed disabled:text-slate-600"
+                    onClick={() => setOpsPage((page) => Math.min(opsTotalPages, page + 1))}
+                    disabled={opsPage >= opsTotalPages}
+                  >
+                    Próxima
+                  </button>
+                </div>
               </div>
             </div>
 
@@ -3425,75 +3949,8 @@ const DockerPanel = ({ showPageIntro = true }) => {
                   </tr>
                 </thead>
                 <tbody>
-                  {filteredIndependentServices.map((instance) => {
-                    const container = containerLookup.get(instance.containerId) || containerLookup.get(instance.name)
-                    const isRunning = instance.stateMeta.key === 'running'
-                    return (
-                      <tr
-                        key={instance.id}
-                        className="border-t border-slate-800 hover:bg-slate-900/40"
-                        onClick={() => container && openLogs(container)}
-                      >
-                        <td className="px-4 py-3">
-                          <div>
-                            <p className="font-semibold text-white">{instance.name}</p>
-                            <p className="text-xs text-slate-400">{instance.image || 'custom-image'}</p>
-                          </div>
-                        </td>
-                        <td className="px-4 py-3">
-                          <DockerStatusBadge state={instance.runtimeState} />
-                        </td>
-                        <td className="px-4 py-3">
-                          <span className={`rounded-full border px-2.5 py-1 text-[11px] font-medium ${instance.healthMeta?.className || 'border-slate-800 bg-slate-950/70 text-slate-500'}`}>
-                            {instance.healthMeta?.label || '—'}
-                          </span>
-                        </td>
-                        <td className="px-4 py-3 text-slate-300">{instance.hostPort || 'auto'} → {instance.containerPort || '—'}</td>
-                        <td className="px-4 py-3 text-slate-300">{instance.networkName || 'bridge'}</td>
-                        <td className="px-4 py-3 text-slate-300" title={instance.lastActivityAt ? new Date(instance.lastActivityAt).toLocaleString('pt-BR') : ''}>
-                          {formatShortDateTime(instance.lastActivityAt)}
-                        </td>
-                        <td className="px-4 py-3">
-                          <div className="flex flex-wrap gap-2">
-                            <button
-                              className={`rounded-lg border px-3 py-1.5 text-xs font-medium ${
-                                isRunning
-                                  ? 'border-amber-500/30 bg-amber-500/10 text-amber-200 hover:bg-amber-500/20'
-                                  : 'border-emerald-500/30 bg-emerald-500/10 text-emerald-200 hover:bg-emerald-500/20'
-                              }`}
-                              onClick={(event) => {
-                                event.stopPropagation()
-                                if (instance.containerId) {
-                                  handleAction(isRunning ? 'stop' : 'start', instance.containerId)
-                                }
-                              }}
-                            >
-                              {isRunning ? 'Stop' : 'Start'}
-                            </button>
-                            <button
-                              className="rounded-lg border border-blue-800 bg-blue-950 px-3 py-1.5 text-xs text-blue-200 hover:bg-blue-900"
-                              onClick={(event) => {
-                                event.stopPropagation()
-                                openEditServiceDialog(instance)
-                              }}
-                            >
-                              Edit
-                            </button>
-                            <button
-                              className="rounded-lg border border-rose-800 bg-rose-950 px-3 py-1.5 text-xs text-rose-200 hover:bg-rose-900"
-                              onClick={(event) => {
-                                event.stopPropagation()
-                                setRemoveDialog(instance)
-                              }}
-                            >
-                              Remove
-                            </button>
-                          </div>
-                        </td>
-                      </tr>
-                    )
-                  })}
-                  {filteredIndependentServices.length === 0 && (
+                  {paginatedOperationalRows.map(renderOperationalTreeRow)}
+                  {operationalTreeRows.length === 0 && (
                     <tr>
                       <td className="px-4 py-8 text-slate-500" colSpan={7}>
                         {loading ? 'Carregando serviços...' : 'Nenhum serviço independente encontrado'}
