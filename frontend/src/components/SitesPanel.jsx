@@ -283,6 +283,20 @@ const SitesPanel = () => {
     }
   }
 
+  const fixPermissions = async () => {
+    if (!selectedSite) return
+    setBusy('fix-permissions')
+    setMessage(null)
+    try {
+      await api.post(`/sites/${selectedSite.id}/fix-permissions`)
+      setMessage({ type: 'success', text: 'Permissões do WordPress corrigidas' })
+    } catch (err) {
+      setMessage({ type: 'error', text: getErrorMessage(err, 'Erro ao corrigir permissões') })
+    } finally {
+      setBusy('')
+    }
+  }
+
   const submitMigration = async (event) => {
     event.preventDefault()
     if (!selectedSite || !migrationFile) return
@@ -640,6 +654,9 @@ const SitesPanel = () => {
                 <div className="flex flex-wrap gap-2">
                   <Button type="button" variant="secondary" leadingIcon={<Database size={16} />} loading={busy === 'optimize'} onClick={optimizeDatabase}>
                     Otimizar banco
+                  </Button>
+                  <Button type="button" variant="secondary" leadingIcon={<Shield size={16} />} loading={busy === 'fix-permissions'} onClick={fixPermissions}>
+                    Corrigir permissões
                   </Button>
                   {!selectedSite.ssl ? (
                     <Button type="button" variant="secondary" leadingIcon={<Lock size={16} />} loading={busy === 'fix-ssl'} onClick={fixSsl}>

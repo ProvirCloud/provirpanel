@@ -636,18 +636,15 @@ const repairWordPressFilesystemPermissions = async (site) => {
     '  [ -e /var/www/html/wp-config.php ] && break',
     '  sleep 1',
     'done',
+    'chown -R www-data:www-data /var/www/html',
+    'find /var/www/html -type d -exec chmod 755 {} +',
+    'find /var/www/html -type f -exec chmod 644 {} +',
     'if [ -d /var/www/html/wp-content ]; then',
-    '  chown -R www-data:www-data /var/www/html/wp-content',
     '  find /var/www/html/wp-content -type d -exec chmod 775 {} +',
     '  find /var/www/html/wp-content -type f -exec chmod 664 {} +',
     'fi',
     'if [ -f /var/www/html/wp-config.php ]; then',
-    '  chown www-data:www-data /var/www/html/wp-config.php',
-    '  chmod 664 /var/www/html/wp-config.php',
-    'fi',
-    'if [ -f /var/www/html/.htaccess ]; then',
-    '  chown www-data:www-data /var/www/html/.htaccess',
-    '  chmod 664 /var/www/html/.htaccess',
+    '  chmod 660 /var/www/html/wp-config.php',
     'fi'
   ].join('\n');
   await dockerExecRootShell(site.containers.wordpress, script);
@@ -1071,9 +1068,23 @@ const processMigrationArchive = async (siteId, file) => {
   }
 };
 
+const permissionsFixedCache = new Set();
+
+const autoFixPermissionsIfNeeded = async (site) => {
+  if (!site.containers?.wordpress) return;
+  if (permissionsFixedCache.has(site.id)) return;
+  const status = await inspectContainerStatus(site.containers.wordpress);
+  if (status !== 'running') return;
+  permissionsFixedCache.add(site.id);
+  repairWordPressFilesystemPermissions(site).catch(() => {});
+};
+
 router.get('/', async (_req, res, next) => {
   try {
-    const sites = await Promise.all(readSites().map(decorateSite));
+    const rawSites = readSites();
+    const sites = await Promise.all(rawSites.map(decorateSite));
+    // Auto-fix permissions in background for running sites
+    rawSites.forEach((site) => autoFixPermissionsIfNeeded(site));
     res.json({ sites, baseDir: sitesBaseDir });
   } catch (err) {
     next(err);
@@ -1117,6 +1128,21 @@ router.post('/:id/domain', async (req, res, next) => {
     }
     saveSite(site);
     res.json({ site: await decorateSite(site), warnings });
+  } catch (err) {
+    next(err);
+  }
+});
+
+router.post('/:id/fix-permissions', async (req, res, next) => {
+  try {
+    const site = getSiteOr404(req.params.id);
+    if (!site.containers?.wordpress) {
+      return res.status(400).json({ message: 'Container WordPress não encontrado' });
+    }
+    await repairWordPressFilesystemPermissions(site);
+    site.updatedAt = new Date().toISOString();
+    saveSite(site);
+    res.json({ site: await decorateSite(site), message: 'Permissões corrigidas' });
   } catch (err) {
     next(err);
   }
