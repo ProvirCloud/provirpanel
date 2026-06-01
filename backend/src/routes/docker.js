@@ -298,6 +298,14 @@ const sanitizeDeploymentForClient = (deployment = {}) => ({
   envVars: maskEnvVars(deployment.envVars || [])
 });
 
+const sanitizePendingConfigForClient = (pendingConfig = null) => {
+  if (!pendingConfig) return null;
+  return {
+    ...pendingConfig,
+    envVars: maskEnvVars(pendingConfig.envVars || [])
+  };
+};
+
 const normalizeEnvVars = (envVars = []) =>
   envVars
     .filter((env) => env && env.key)
@@ -491,6 +499,7 @@ const sanitizeServiceForClient = (service) => ({
   ...service,
   networkName: service.networkName || 'bridge',
   envVars: maskEnvVars(service.envVars || []),
+  pendingConfig: sanitizePendingConfigForClient(service.pendingConfig),
   deployments: (service.deployments || []).map(sanitizeDeploymentForClient)
 });
 
@@ -2564,6 +2573,34 @@ router.delete('/containers/:id', async (req, res, next) => {
 // Update service
 router.put('/services/:id', async (req, res, next) => {
   try {
+    const requestBody = req.body || {};
+    const services = dockerManager.listServices();
+    let service = services.find((s) => s.id === req.params.id);
+    if (!service) {
+      return res.status(404).json({ message: 'Service not found' });
+    }
+    const applyConfig = parseBooleanOption(requestBody.apply, true);
+    const configKeys = [
+      'hostPort',
+      'envVars',
+      'networkName',
+      'command',
+      'bindLocalOnly',
+      'healthcheck',
+      'autoRollback',
+      'nodeServiceMode',
+      'nodeSiteConfig'
+    ];
+    const hasConfigPayload = configKeys.some((key) =>
+      Object.prototype.hasOwnProperty.call(requestBody, key)
+    );
+    const pendingConfig =
+      service.pendingConfig && typeof service.pendingConfig === 'object'
+        ? service.pendingConfig
+        : null;
+    const configSource = applyConfig && !hasConfigPayload && pendingConfig
+      ? pendingConfig
+      : requestBody;
     const {
       hostPort,
       envVars = [],
@@ -2574,12 +2611,7 @@ router.put('/services/:id', async (req, res, next) => {
       autoRollback: requestedAutoRollback,
       nodeServiceMode: requestedNodeServiceMode,
       nodeSiteConfig: requestedNodeSiteConfig
-    } = req.body || {};
-    const services = dockerManager.listServices();
-    let service = services.find((s) => s.id === req.params.id);
-    if (!service) {
-      return res.status(404).json({ message: 'Service not found' });
-    }
+    } = configSource || {};
     const { nodeServiceMode, nodeSiteConfig } = resolveNodeServiceConfig(
       {
         nodeServiceMode: requestedNodeServiceMode,
@@ -2590,6 +2622,36 @@ router.put('/services/:id', async (req, res, next) => {
     const isNodeSitesMode = service.templateId === 'node-app' && nodeServiceMode === 'sites';
     const resolvedHealthcheck = normalizeHealthcheckConfig(requestedHealthcheck || service.healthcheck);
     const resolvedAutoRollback = parseBooleanOption(requestedAutoRollback, service.autoRollback ?? true);
+    const savedEnvVars = mergeEnvVars(
+      Array.isArray(envVars) ? envVars : [],
+      pendingConfig?.envVars || service.envVars || []
+    );
+    const savedPort = Number(hostPort) || service.hostPort;
+    const savedBindLocal = bindLocalOnly ?? service.bindLocalOnly ?? false;
+    const savedNetwork = networkName || service.networkName || 'provirpanel';
+    const savedCommand = isNodeSitesMode ? '' : command ?? pendingConfig?.command ?? stringifyCommand(service.command);
+
+    if (!applyConfig) {
+      const savedService = {
+        ...service,
+        pendingConfig: {
+          hostPort: savedPort,
+          envVars: savedEnvVars,
+          networkName: savedNetwork,
+          command: savedCommand,
+          bindLocalOnly: savedBindLocal,
+          healthcheck: resolvedHealthcheck,
+          autoRollback: resolvedAutoRollback,
+          nodeServiceMode,
+          nodeSiteConfig,
+          savedAt: new Date().toISOString()
+        },
+        updatedAt: new Date().toISOString()
+      };
+      dockerManager.saveService(savedService);
+      appendServiceLog('info', `Configuracao salva sem aplicar para ${service.name}`);
+      return res.json({ service: sanitizeServiceForClient(savedService) });
+    }
 
     // Verificar se a nova porta está disponível (se foi alterada)
     const newPort = Number(hostPort);
@@ -2673,7 +2735,7 @@ router.put('/services/:id', async (req, res, next) => {
       await dockerManager.ensureNetwork(targetNetwork);
     }
     
-    const resolvedEnvVars = mergeEnvVars(envVars, service.envVars || []);
+    const resolvedEnvVars = savedEnvVars;
     const envProjectPath = getEnvProjectPath(service.volumes, projectPath);
     if (envProjectPath?.hostPath) {
       writeEnvFile(envProjectPath, resolvedEnvVars, template.env);
@@ -2833,6 +2895,7 @@ router.put('/services/:id', async (req, res, next) => {
       autoCommandType: autoProjectLaunch ? autoProjectLaunch.type : null,
       networkName: targetNetwork,
       bindLocalOnly: resolvedBindLocal,
+      pendingConfig: null,
       healthcheck: resolvedHealthcheck,
       autoRollback: resolvedAutoRollback,
       nodeServiceMode,

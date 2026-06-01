@@ -1485,15 +1485,21 @@ const DockerPanel = ({ showPageIntro = true }) => {
     }
   }
 
-  const updateService = async (serviceId, config) => {
+  const updateService = async (serviceId, config, options = {}) => {
+    const apply = options.apply ?? true
     try {
-      await api.put(`/docker/services/${serviceId}`, config)
-      addToast('Serviço atualizado')
-      loadServices()
-      loadContainers()
-      return true
+      const response = await api.put(`/docker/services/${serviceId}`, {
+        ...config,
+        apply
+      })
+      addToast(apply ? 'Configuração aplicada' : 'Configuração salva')
+      await Promise.all([loadServices(), loadContainers()])
+      return response.data?.service || true
     } catch (err) {
-      const message = err.response?.data?.message || err.message || 'Erro ao atualizar serviço'
+      const message =
+        err.response?.data?.message ||
+        err.message ||
+        (apply ? 'Erro ao aplicar serviço' : 'Erro ao salvar configuração')
       addToast(message, 'error')
       return false
     }
@@ -1620,6 +1626,25 @@ const DockerPanel = ({ showPageIntro = true }) => {
     }
   }
 
+  const buildEditServicePayload = (dialog) => {
+    const requestedCommand =
+      dialog.templateId === 'node-app' &&
+      dialog.nodeServiceMode === NODE_SERVICE_MODES.sites
+        ? ''
+        : dialog.commandInput || ''
+    return {
+      hostPort: dialog.newHostPort || dialog.hostPort,
+      envVars: dialog.newEnvVars || [],
+      networkName: dialog.newNetworkName || dialog.networkName,
+      command: requestedCommand,
+      bindLocalOnly: dialog.newBindLocalOnly ?? dialog.bindLocalOnly ?? false,
+      healthcheck: dialog.healthcheck,
+      autoRollback: dialog.autoRollback ?? true,
+      nodeServiceMode: dialog.nodeServiceMode || NODE_SERVICE_MODES.service,
+      nodeSiteConfig: dialog.nodeSiteConfig
+    }
+  }
+
   const removeService = async (serviceId, removeFolder = false) => {
     try {
       await api.delete(`/docker/services/${serviceId}`, {
@@ -1636,29 +1661,33 @@ const DockerPanel = ({ showPageIntro = true }) => {
   const openEditServiceDialog = (svc) => {
     setProjectUploadStatus(null)
     setEnvImportStatus(null)
+    const pending = svc.pendingConfig || null
+    const effectiveNodeSiteConfig = {
+      siteType: pending?.nodeSiteConfig?.siteType || svc.nodeSiteConfig?.siteType || NODE_SITE_TYPES.common,
+      siteFolder: pending?.nodeSiteConfig?.siteFolder || svc.nodeSiteConfig?.siteFolder || NODE_SITE_FOLDERS[0],
+      fallbackFile: pending?.nodeSiteConfig?.fallbackFile || svc.nodeSiteConfig?.fallbackFile || 'index.html'
+    }
     setEditDialog({
       ...svc,
-      newEnvVars: (svc.envVars || []).map((env) => ({
+      newEnvVars: (pending?.envVars || svc.envVars || []).map((env) => ({
         ...env,
         value: env.secret ? '******' : env.value
       })),
-      newBindLocalOnly: svc.bindLocalOnly ?? false,
-      commandInput: formatCommandForInput(svc.command),
+      newHostPort: pending?.hostPort ?? svc.hostPort,
+      newNetworkName: pending?.networkName || svc.networkName || 'provirpanel',
+      newBindLocalOnly: pending?.bindLocalOnly ?? svc.bindLocalOnly ?? false,
+      commandInput: formatCommandForInput(pending?.command ?? svc.command),
       newProjectArchive: null,
-      healthcheck: normalizeHealthcheckForm(svc.healthcheck || {}),
-      autoRollback: svc.autoRollback ?? true,
+      healthcheck: normalizeHealthcheckForm(pending?.healthcheck || svc.healthcheck || {}),
+      autoRollback: pending?.autoRollback ?? svc.autoRollback ?? true,
       originalNodeServiceMode: svc.nodeServiceMode || NODE_SERVICE_MODES.service,
       originalNodeSiteConfig: {
         siteType: svc.nodeSiteConfig?.siteType || NODE_SITE_TYPES.common,
         siteFolder: svc.nodeSiteConfig?.siteFolder || NODE_SITE_FOLDERS[0],
         fallbackFile: svc.nodeSiteConfig?.fallbackFile || 'index.html'
       },
-      nodeServiceMode: svc.nodeServiceMode || NODE_SERVICE_MODES.service,
-      nodeSiteConfig: {
-        siteType: svc.nodeSiteConfig?.siteType || NODE_SITE_TYPES.common,
-        siteFolder: svc.nodeSiteConfig?.siteFolder || NODE_SITE_FOLDERS[0],
-        fallbackFile: svc.nodeSiteConfig?.fallbackFile || 'index.html'
-      }
+      nodeServiceMode: pending?.nodeServiceMode || svc.nodeServiceMode || NODE_SERVICE_MODES.service,
+      nodeSiteConfig: effectiveNodeSiteConfig
     })
   }
 
@@ -3083,7 +3112,7 @@ const DockerPanel = ({ showPageIntro = true }) => {
                 <input
                   type="number"
                   className="w-full rounded-xl border border-slate-700 bg-slate-800 px-3 py-2 text-sm text-white"
-                  defaultValue={editDialog.hostPort}
+                  value={editDialog.newHostPort ?? editDialog.hostPort ?? ''}
                   onChange={(e) => setEditDialog(prev => ({ ...prev, newHostPort: e.target.value }))}
                 />
               </div>
@@ -3091,7 +3120,7 @@ const DockerPanel = ({ showPageIntro = true }) => {
                 <label className="block text-sm text-slate-300 mb-2">Rede Docker</label>
                 <select
                   className="w-full rounded-xl border border-slate-700 bg-slate-800 px-3 py-2 text-sm text-white"
-                  defaultValue={editDialog.networkName || 'provirpanel'}
+                  value={editDialog.newNetworkName || editDialog.networkName || 'provirpanel'}
                   onChange={(e) => setEditDialog(prev => ({ ...prev, newNetworkName: e.target.value }))}
                 >
                   <option value="bridge">bridge (padrão - isolado)</option>
@@ -3651,11 +3680,28 @@ const DockerPanel = ({ showPageIntro = true }) => {
                   </div>
                 </div>
             </div>
-            <div className="flex gap-2 mt-6">
+            <div className="flex flex-wrap gap-2 mt-6">
+              <button
+                className="rounded-xl border border-slate-600 bg-slate-800 px-4 py-2 text-sm font-semibold text-slate-100 hover:bg-slate-700"
+                onClick={async () => {
+                  const updated = await updateService(
+                    editDialog.id,
+                    buildEditServicePayload(editDialog),
+                    { apply: false }
+                  )
+                  if (updated) {
+                    setEditDialog((prev) => prev ? {
+                      ...prev,
+                      pendingConfig: updated.pendingConfig || prev.pendingConfig
+                    } : prev)
+                  }
+                }}
+              >
+                Salvar
+              </button>
               <button
                 className="flex-1 rounded-xl bg-blue-500 px-4 py-2 text-sm font-semibold text-white hover:bg-blue-600"
                 onClick={async () => {
-                  const hadProjectArchive = Boolean(editDialog.newProjectArchive)
                   if (editDialog.newProjectArchive) {
                     const ok = await uploadProjectArchive(editDialog.id, editDialog.newProjectArchive, {
                       envVars: editDialog.newEnvVars || [],
@@ -3666,40 +3712,17 @@ const DockerPanel = ({ showPageIntro = true }) => {
                       return
                     }
                   }
-                  const requestedCommand =
-                    editDialog.templateId === 'node-app' &&
-                    editDialog.nodeServiceMode === NODE_SERVICE_MODES.sites
-                      ? ''
-                      : editDialog.commandInput || ''
-                  const configChanged =
-                    !hadProjectArchive ||
-                    Number(editDialog.newHostPort || editDialog.hostPort) !== Number(editDialog.hostPort) ||
-                    (editDialog.newNetworkName || editDialog.networkName || '') !== (editDialog.networkName || '') ||
-                    (editDialog.newBindLocalOnly ?? editDialog.bindLocalOnly ?? false) !== (editDialog.bindLocalOnly ?? false) ||
-                    requestedCommand !== (formatCommandForInput(editDialog.command) || '') ||
-                    (editDialog.nodeServiceMode || NODE_SERVICE_MODES.service) !== (editDialog.originalNodeServiceMode || editDialog.nodeServiceMode || NODE_SERVICE_MODES.service) ||
-                    JSON.stringify(editDialog.nodeSiteConfig || {}) !== JSON.stringify(editDialog.originalNodeSiteConfig || {})
-                  if (!configChanged) {
-                    setEditDialog(null)
-                    return
-                  }
-                  const updated = await updateService(editDialog.id, {
-                    hostPort: editDialog.newHostPort || editDialog.hostPort,
-                    envVars: editDialog.newEnvVars || [],
-                    networkName: editDialog.newNetworkName || editDialog.networkName,
-                    command: requestedCommand,
-                    bindLocalOnly: editDialog.newBindLocalOnly ?? editDialog.bindLocalOnly ?? false,
-                    healthcheck: editDialog.healthcheck,
-                    autoRollback: editDialog.autoRollback ?? true,
-                    nodeServiceMode: editDialog.nodeServiceMode || NODE_SERVICE_MODES.service,
-                    nodeSiteConfig: editDialog.nodeSiteConfig
-                  });
+                  const updated = await updateService(
+                    editDialog.id,
+                    buildEditServicePayload(editDialog),
+                    { apply: true }
+                  );
                   if (updated) {
                     setEditDialog(null);
                   }
                 }}
               >
-                Salvar Alterações
+                Aplicar
               </button>
               <button
                 className="rounded-xl border border-slate-700 bg-slate-800 px-4 py-2 text-sm text-slate-300 hover:bg-slate-700"
