@@ -254,6 +254,185 @@ const normalizeHealthcheckForm = (healthcheck = {}) => ({
   target: healthcheck.target || healthcheck.url || healthcheck.path || DEFAULT_HEALTHCHECK.target
 })
 
+const VERSION_CHANGE_OPTIONS = [
+  { value: 'fix', label: 'Correção' },
+  { value: 'content', label: 'Conteúdo' },
+  { value: 'feature', label: 'Funcionalidade' },
+  { value: 'security', label: 'Segurança' },
+  { value: 'maintenance', label: 'Manutenção' },
+  { value: 'other', label: 'Outro' }
+]
+
+const VERSION_CHANGE_LABELS = VERSION_CHANGE_OPTIONS.reduce((acc, option) => {
+  acc[option.value] = option.label
+  return acc
+}, {})
+
+const normalizeVersionValue = (value, maxLength = 40) =>
+  String(value || '')
+    .trim()
+    .replace(/^v/i, '')
+    .replace(/[^\w.+-]/g, '-')
+    .slice(0, maxLength)
+
+const getDeploymentAppVersion = (deployment = {}) =>
+  normalizeVersionValue(
+    deployment.appVersion ||
+      deployment.version ||
+      deployment.versionMetadata?.appVersion ||
+      ''
+  )
+
+const getDeploymentBuildNumber = (deployment = {}) => {
+  const raw =
+    deployment.buildNumber ||
+    deployment.build ||
+    deployment.versionMetadata?.buildNumber ||
+    ''
+  const parsed = Number(String(raw).replace(/[^\d]/g, ''))
+  return Number.isFinite(parsed) ? parsed : 0
+}
+
+const getLatestVersionDeployment = (deployments = []) =>
+  [...(Array.isArray(deployments) ? deployments : [])]
+    .filter((deployment) => deployment?.id)
+    .sort((a, b) =>
+      String(b.promotedAt || b.createdAt || '').localeCompare(String(a.promotedAt || a.createdAt || ''))
+    )
+    .find((deployment) => getDeploymentAppVersion(deployment) || getDeploymentBuildNumber(deployment))
+
+const getHighestBuildNumber = (deployments = []) =>
+  (Array.isArray(deployments) ? deployments : []).reduce(
+    (max, deployment) => Math.max(max, getDeploymentBuildNumber(deployment)),
+    0
+  )
+
+const incrementSemanticVersion = (currentVersion, changeType) => {
+  const clean = normalizeVersionValue(currentVersion)
+  const match = clean.match(/^(\d+)(?:\.(\d+))?(?:\.(\d+))?/)
+  if (!match) return '1.0.0'
+  const major = Number(match[1] || 1)
+  const minor = Number(match[2] || 0)
+  const patch = Number(match[3] || 0)
+  if (changeType === 'feature') {
+    return `${major}.${minor + 1}.0`
+  }
+  return `${major}.${minor}.${patch + 1}`
+}
+
+const buildVersionPreview = (dialog = {}) => {
+  const deployments = Array.isArray(dialog.deployments) ? dialog.deployments : []
+  const mode = dialog.versionMode === 'manual' ? 'manual' : 'auto'
+  const changeType = dialog.versionChangeType || 'fix'
+  const latestDeployment = getLatestVersionDeployment(deployments)
+  const requestedVersion = normalizeVersionValue(dialog.versionAppVersion)
+  const requestedBuild = normalizeVersionValue(dialog.versionBuildNumber, 30)
+  const appVersion =
+    mode === 'manual' && requestedVersion
+      ? requestedVersion
+      : incrementSemanticVersion(getDeploymentAppVersion(latestDeployment), changeType)
+  const buildNumber =
+    mode === 'manual' && requestedBuild
+      ? requestedBuild
+      : String(getHighestBuildNumber(deployments) + 1)
+
+  return {
+    mode,
+    appVersion,
+    buildNumber,
+    changeType,
+    changeTypeLabel: VERSION_CHANGE_LABELS[changeType] || VERSION_CHANGE_LABELS.fix,
+    label: `v${appVersion} build ${buildNumber} - ${VERSION_CHANGE_LABELS[changeType] || VERSION_CHANGE_LABELS.fix}`
+  }
+}
+
+const buildVersionPayload = (dialog = {}) => {
+  const preview = buildVersionPreview(dialog)
+  if (preview.mode === 'manual') {
+    return {
+      mode: 'manual',
+      appVersion: preview.appVersion,
+      buildNumber: preview.buildNumber,
+      changeType: preview.changeType
+    }
+  }
+  return {
+    mode: 'auto',
+    changeType: preview.changeType
+  }
+}
+
+const formatShortDateTime = (value) => {
+  if (!value) return '—'
+  const date = new Date(value)
+  if (Number.isNaN(date.getTime())) return '—'
+  const datePart = date.toLocaleDateString('pt-BR', {
+    day: '2-digit',
+    month: '2-digit'
+  })
+  const timePart = date.toLocaleTimeString('pt-BR', {
+    hour: '2-digit',
+    minute: '2-digit',
+    hour12: false
+  })
+  return `${datePart} ${timePart}`
+}
+
+const getServiceActivityAt = (service = {}) => {
+  const deployments = Array.isArray(service.deployments) ? service.deployments : []
+  const activeDeployment =
+    deployments.find((deployment) => deployment.id === service.activeDeploymentId) ||
+    deployments.find((deployment) => deployment.status === 'active') ||
+    deployments[0]
+  return activeDeployment?.promotedAt || service.updatedAt || activeDeployment?.createdAt || service.createdAt
+}
+
+const getServiceHealthMeta = (service = {}, container = null) => {
+  const configured = !!service.healthcheck?.enabled || !!service.healthcheck?.containerEnabled
+  if (!configured) {
+    return {
+      configured: false,
+      label: '—',
+      className: 'border-slate-800 bg-slate-950/70 text-slate-500'
+    }
+  }
+
+  const healthText = String(
+    service.healthStatus ||
+      container?.Health?.Status ||
+      container?.State?.Health?.Status ||
+      container?.Status ||
+      ''
+  ).toLowerCase()
+
+  if (healthText.includes('unhealthy')) {
+    return {
+      configured: true,
+      label: 'Unhealthy',
+      className: 'border-rose-500/30 bg-rose-500/10 text-rose-200'
+    }
+  }
+  if (healthText.includes('healthy')) {
+    return {
+      configured: true,
+      label: 'Healthy',
+      className: 'border-emerald-500/30 bg-emerald-500/10 text-emerald-200'
+    }
+  }
+  if (healthText.includes('starting')) {
+    return {
+      configured: true,
+      label: 'Starting',
+      className: 'border-amber-500/30 bg-amber-500/10 text-amber-200'
+    }
+  }
+  return {
+    configured: true,
+    label: service.runtimeState === 'running' ? 'Configured' : 'Pending',
+    className: 'border-blue-500/30 bg-blue-500/10 text-blue-200'
+  }
+}
+
 const getDefaultProjectContainerPath = (template) => {
   const volumePath = template?.volumes?.find((volume) => volume?.containerPath)?.containerPath
   if (volumePath) return volumePath
@@ -915,11 +1094,13 @@ const DockerPanel = ({ showPageIntro = true }) => {
       .map((service) => {
         const container = containerLookup.get(service.containerId) || containerLookup.get(service.name)
         const runtimeState = container?.State || 'exited'
+        const serviceWithRuntime = { ...service, runtimeState }
         return {
-          ...service,
+          ...serviceWithRuntime,
           containerName: getContainerName(container) || service.name,
-          runtimeState,
-          stateMeta: getContainerStatusMeta(runtimeState)
+          stateMeta: getContainerStatusMeta(runtimeState),
+          lastActivityAt: getServiceActivityAt(service),
+          healthMeta: getServiceHealthMeta(serviceWithRuntime, container)
         }
       })
       .sort((a, b) => {
@@ -1557,6 +1738,9 @@ const DockerPanel = ({ showPageIntro = true }) => {
     if (Object.prototype.hasOwnProperty.call(options, 'autoRollback')) {
       formData.append('autoRollback', String(!!options.autoRollback))
     }
+    if (options.versionMetadata) {
+      formData.append('versionMetadata', JSON.stringify(options.versionMetadata))
+    }
     try {
       setProjectUploadStatus({ status: 'uploading', progress: 0, message: 'Enviando arquivo...' })
       let response = null
@@ -1565,6 +1749,9 @@ const DockerPanel = ({ showPageIntro = true }) => {
         if (options.healthcheck) metadata.healthcheck = options.healthcheck
         if (Object.prototype.hasOwnProperty.call(options, 'autoRollback')) {
           metadata.autoRollback = !!options.autoRollback
+        }
+        if (options.versionMetadata) {
+          metadata.versionMetadata = options.versionMetadata
         }
         response = await uploadFileInChunks({
           file,
@@ -1608,7 +1795,11 @@ const DockerPanel = ({ showPageIntro = true }) => {
             })),
             newProjectArchive: null,
             healthcheck: normalizeHealthcheckForm(updated.healthcheck || {}),
-            autoRollback: updated.autoRollback ?? true
+            autoRollback: updated.autoRollback ?? true,
+            versionMode: 'auto',
+            versionAppVersion: '',
+            versionBuildNumber: '',
+            versionChangeType: 'fix'
           }
         })
       }
@@ -1652,7 +1843,11 @@ const DockerPanel = ({ showPageIntro = true }) => {
               })),
               newProjectArchive: null,
               healthcheck: normalizeHealthcheckForm(updated.healthcheck || {}),
-              autoRollback: updated.autoRollback ?? true
+              autoRollback: updated.autoRollback ?? true,
+              versionMode: 'auto',
+              versionAppVersion: '',
+              versionBuildNumber: '',
+              versionChangeType: 'fix'
             }
           : prev
       })
@@ -1719,6 +1914,10 @@ const DockerPanel = ({ showPageIntro = true }) => {
       newProjectArchive: null,
       healthcheck: normalizeHealthcheckForm(pending?.healthcheck || svc.healthcheck || {}),
       autoRollback: pending?.autoRollback ?? svc.autoRollback ?? true,
+      versionMode: 'auto',
+      versionAppVersion: '',
+      versionBuildNumber: '',
+      versionChangeType: 'fix',
       originalNodeServiceMode: svc.nodeServiceMode || NODE_SERVICE_MODES.service,
       originalNodeSiteConfig: {
         siteType: svc.nodeSiteConfig?.siteType || NODE_SITE_TYPES.common,
@@ -2492,6 +2691,7 @@ const DockerPanel = ({ showPageIntro = true }) => {
   const serviceUpdateInProgress = ['saving', 'applying'].includes(serviceUpdateStatus?.status)
   const projectUploadInProgress = ['uploading', 'processing'].includes(projectUploadStatus?.status)
   const editOperationInProgress = serviceUpdateInProgress || projectUploadInProgress
+  const editVersionPreview = editDialog ? buildVersionPreview(editDialog) : null
 
   return (
     <div className="zeus-docker-page space-y-6">
@@ -2738,9 +2938,10 @@ const DockerPanel = ({ showPageIntro = true }) => {
                   <tr>
                     <th className="px-4 py-3">Name</th>
                     <th className="px-4 py-3">Status</th>
+                    <th className="px-4 py-3">Health</th>
                     <th className="px-4 py-3">Port mapping</th>
                     <th className="px-4 py-3">Network</th>
-                    <th className="px-4 py-3">Scope</th>
+                    <th className="px-4 py-3">Atualizado</th>
                     <th className="px-4 py-3">Actions</th>
                   </tr>
                 </thead>
@@ -2763,12 +2964,15 @@ const DockerPanel = ({ showPageIntro = true }) => {
                         <td className="px-4 py-3">
                           <DockerStatusBadge state={instance.runtimeState} />
                         </td>
+                        <td className="px-4 py-3">
+                          <span className={`rounded-full border px-2.5 py-1 text-[11px] font-medium ${instance.healthMeta?.className || 'border-slate-800 bg-slate-950/70 text-slate-500'}`}>
+                            {instance.healthMeta?.label || '—'}
+                          </span>
+                        </td>
                         <td className="px-4 py-3 text-slate-300">{instance.hostPort || 'auto'} → {instance.containerPort || '—'}</td>
                         <td className="px-4 py-3 text-slate-300">{instance.networkName || 'bridge'}</td>
-                        <td className="px-4 py-3">
-                          <span className="rounded-full border border-slate-700 bg-slate-950/70 px-2.5 py-1 text-[11px] text-slate-300">
-                            Independent
-                          </span>
+                        <td className="px-4 py-3 text-slate-300" title={instance.lastActivityAt ? new Date(instance.lastActivityAt).toLocaleString('pt-BR') : ''}>
+                          {formatShortDateTime(instance.lastActivityAt)}
                         </td>
                         <td className="px-4 py-3">
                           <div className="flex flex-wrap gap-2">
@@ -2812,7 +3016,7 @@ const DockerPanel = ({ showPageIntro = true }) => {
                   })}
                   {filteredIndependentServices.length === 0 && (
                     <tr>
-                      <td className="px-4 py-8 text-slate-500" colSpan={6}>
+                      <td className="px-4 py-8 text-slate-500" colSpan={7}>
                         {loading ? 'Carregando serviços...' : 'Nenhum serviço independente encontrado'}
                       </td>
                     </tr>
@@ -3593,6 +3797,89 @@ const DockerPanel = ({ showPageIntro = true }) => {
                         setEditDialog(prev => ({ ...prev, newProjectArchive: file }))
                       }}
                     />
+                    <div className="rounded-xl border border-slate-700 bg-slate-900/70 p-3">
+                      <div className="grid gap-3 md:grid-cols-4">
+                        <div>
+                          <label className="block text-xs text-slate-400 mb-1">Versão</label>
+                          <select
+                            className="w-full rounded-xl border border-slate-700 bg-slate-950 px-3 py-2 text-sm text-white"
+                            value={editDialog.versionMode || 'auto'}
+                            onChange={(e) =>
+                              setEditDialog((prev) => ({
+                                ...prev,
+                                versionMode: e.target.value
+                              }))
+                            }
+                          >
+                            <option value="auto">Automática</option>
+                            <option value="manual">Manual</option>
+                          </select>
+                        </div>
+                        <div>
+                          <label className="block text-xs text-slate-400 mb-1">Número</label>
+                          <input
+                            className="w-full rounded-xl border border-slate-700 bg-slate-950 px-3 py-2 text-sm text-white disabled:text-slate-400"
+                            placeholder="1.0.0"
+                            disabled={(editDialog.versionMode || 'auto') !== 'manual'}
+                            value={
+                              (editDialog.versionMode || 'auto') === 'manual'
+                                ? editDialog.versionAppVersion || ''
+                                : editVersionPreview?.appVersion || ''
+                            }
+                            onChange={(e) =>
+                              setEditDialog((prev) => ({
+                                ...prev,
+                                versionAppVersion: e.target.value
+                              }))
+                            }
+                          />
+                        </div>
+                        <div>
+                          <label className="block text-xs text-slate-400 mb-1">Build</label>
+                          <input
+                            className="w-full rounded-xl border border-slate-700 bg-slate-950 px-3 py-2 text-sm text-white disabled:text-slate-400"
+                            placeholder="1"
+                            disabled={(editDialog.versionMode || 'auto') !== 'manual'}
+                            value={
+                              (editDialog.versionMode || 'auto') === 'manual'
+                                ? editDialog.versionBuildNumber || ''
+                                : editVersionPreview?.buildNumber || ''
+                            }
+                            onChange={(e) =>
+                              setEditDialog((prev) => ({
+                                ...prev,
+                                versionBuildNumber: e.target.value
+                              }))
+                            }
+                          />
+                        </div>
+                        <div>
+                          <label className="block text-xs text-slate-400 mb-1">Tipo</label>
+                          <select
+                            className="w-full rounded-xl border border-slate-700 bg-slate-950 px-3 py-2 text-sm text-white"
+                            value={editDialog.versionChangeType || 'fix'}
+                            onChange={(e) =>
+                              setEditDialog((prev) => ({
+                                ...prev,
+                                versionChangeType: e.target.value
+                              }))
+                            }
+                          >
+                            {VERSION_CHANGE_OPTIONS.map((option) => (
+                              <option key={option.value} value={option.value}>
+                                {option.label}
+                              </option>
+                            ))}
+                          </select>
+                        </div>
+                      </div>
+                      <div className="mt-3 flex flex-wrap items-center gap-2 text-xs">
+                        <span className="text-slate-400">Registro:</span>
+                        <span className="rounded-full border border-blue-500/30 bg-blue-500/10 px-2.5 py-1 font-medium text-blue-200">
+                          {editVersionPreview?.label || 'v1.0.0 build 1 - Correção'}
+                        </span>
+                      </div>
+                    </div>
                     <div className="flex flex-wrap gap-2">
                       <button
                         className="rounded-xl border border-blue-800 bg-blue-950 px-3 py-2 text-xs text-blue-200 hover:bg-blue-900 disabled:cursor-not-allowed disabled:opacity-60"
@@ -3605,7 +3892,8 @@ const DockerPanel = ({ showPageIntro = true }) => {
                           const ok = await uploadProjectArchive(editDialog.id, editDialog.newProjectArchive, {
                             envVars: editDialog.newEnvVars || [],
                             healthcheck: editDialog.healthcheck,
-                            autoRollback: editDialog.autoRollback ?? true
+                            autoRollback: editDialog.autoRollback ?? true,
+                            versionMetadata: buildVersionPayload(editDialog)
                           })
                           if (ok) {
                             setEditDialog(prev => ({ ...prev, newProjectArchive: null }))
@@ -3691,6 +3979,13 @@ const DockerPanel = ({ showPageIntro = true }) => {
                         {(editDialog.deployments || []).slice(0, 10).map((deployment) => {
                           const isActive = deployment.id === editDialog.activeDeploymentId || deployment.status === 'active'
                           const createdAt = deployment.promotedAt || deployment.createdAt
+                          const versionSummary = [
+                            getDeploymentAppVersion(deployment) ? `v${getDeploymentAppVersion(deployment)}` : '',
+                            getDeploymentBuildNumber(deployment) ? `build ${getDeploymentBuildNumber(deployment)}` : '',
+                            deployment.versionMetadata?.changeTypeLabel ||
+                              VERSION_CHANGE_LABELS[deployment.changeType] ||
+                              ''
+                          ].filter(Boolean)
                           return (
                             <div
                               key={deployment.id}
@@ -3698,9 +3993,10 @@ const DockerPanel = ({ showPageIntro = true }) => {
                             >
                               <div className="min-w-0">
                                 <p className="truncate text-slate-200">
-                                  {deployment.label || deployment.filename || deployment.id}
+                                  {deployment.versionLabel || deployment.label || deployment.filename || deployment.id}
                                 </p>
                                 <p className="text-[11px] text-slate-500">
+                                  {versionSummary.length ? `${versionSummary.join(' · ')} · ` : ''}
                                   {createdAt ? new Date(createdAt).toLocaleString() : 'sem data'} · {deployment.status || 'available'}
                                 </p>
                               </div>
@@ -3788,7 +4084,8 @@ const DockerPanel = ({ showPageIntro = true }) => {
                     const ok = await uploadProjectArchive(editDialog.id, editDialog.newProjectArchive, {
                       envVars: editDialog.newEnvVars || [],
                       healthcheck: editDialog.healthcheck,
-                      autoRollback: editDialog.autoRollback ?? true
+                      autoRollback: editDialog.autoRollback ?? true,
+                      versionMetadata: buildVersionPayload(editDialog)
                     })
                     if (!ok) {
                       return

@@ -399,6 +399,123 @@ const parseHealthcheckPayload = (value) => {
   return parsed ? normalizeHealthcheckConfig(parsed) : null;
 };
 
+const VERSION_CHANGE_TYPE_LABELS = {
+  fix: 'Correção',
+  content: 'Conteúdo',
+  feature: 'Funcionalidade',
+  security: 'Segurança',
+  maintenance: 'Manutenção',
+  other: 'Outro'
+};
+
+const normalizeVersionChangeType = (value) => {
+  const type = String(value || 'fix').trim().toLowerCase();
+  const aliases = {
+    bugfix: 'fix',
+    correcao: 'fix',
+    correção: 'fix',
+    conteudo: 'content',
+    conteúdo: 'content',
+    funcionalidade: 'feature',
+    seguranca: 'security',
+    segurança: 'security',
+    manutencao: 'maintenance',
+    manutenção: 'maintenance'
+  };
+  const normalized = aliases[type] || type;
+  return VERSION_CHANGE_TYPE_LABELS[normalized] ? normalized : 'fix';
+};
+
+const normalizeVersionText = (value, maxLength = 40) =>
+  String(value || '')
+    .trim()
+    .replace(/^v/i, '')
+    .replace(/[^\w.+-]/g, '-')
+    .slice(0, maxLength);
+
+const parseVersionMetadataPayload = (value) => {
+  const parsed = parseJsonObjectPayload(value, 'versionMetadata');
+  if (!parsed) return null;
+  return {
+    mode: parsed.mode === 'manual' ? 'manual' : 'auto',
+    appVersion: normalizeVersionText(parsed.appVersion || parsed.version || ''),
+    buildNumber: normalizeVersionText(parsed.buildNumber || parsed.build || '', 30),
+    changeType: normalizeVersionChangeType(parsed.changeType || parsed.type)
+  };
+};
+
+const getDeploymentAppVersion = (deployment = {}) =>
+  normalizeVersionText(
+    deployment.appVersion ||
+      deployment.version ||
+      deployment.versionMetadata?.appVersion ||
+      ''
+  );
+
+const getDeploymentBuildNumber = (deployment = {}) => {
+  const value =
+    deployment.buildNumber ||
+    deployment.build ||
+    deployment.versionMetadata?.buildNumber ||
+    '';
+  const parsed = Number(String(value).replace(/[^\d]/g, ''));
+  return Number.isFinite(parsed) ? parsed : 0;
+};
+
+const getLatestDeploymentWithVersion = (deployments = []) =>
+  [...(Array.isArray(deployments) ? deployments : [])]
+    .filter((deployment) => deployment?.id)
+    .sort((a, b) =>
+      String(b.promotedAt || b.createdAt || '').localeCompare(String(a.promotedAt || a.createdAt || ''))
+    )
+    .find((deployment) => getDeploymentAppVersion(deployment) || getDeploymentBuildNumber(deployment));
+
+const incrementAppVersion = (currentVersion, changeType) => {
+  const clean = normalizeVersionText(currentVersion);
+  const match = clean.match(/^(\d+)(?:\.(\d+))?(?:\.(\d+))?/);
+  if (!match) return '1.0.0';
+  const major = Number(match[1] || 1);
+  const minor = Number(match[2] || 0);
+  const patch = Number(match[3] || 0);
+  if (changeType === 'feature') {
+    return `${major}.${minor + 1}.0`;
+  }
+  return `${major}.${minor}.${patch + 1}`;
+};
+
+const buildDeploymentVersionMetadata = (incoming = null, deployments = []) => {
+  const source = incoming && typeof incoming === 'object' ? incoming : {};
+  const mode = source.mode === 'manual' ? 'manual' : 'auto';
+  const changeType = normalizeVersionChangeType(source.changeType || source.type);
+  const latestWithVersion = getLatestDeploymentWithVersion(deployments);
+  const highestBuild = (Array.isArray(deployments) ? deployments : []).reduce(
+    (max, deployment) => Math.max(max, getDeploymentBuildNumber(deployment)),
+    0
+  );
+  const requestedVersion = normalizeVersionText(source.appVersion || source.version || '');
+  const requestedBuild = normalizeVersionText(source.buildNumber || source.build || '', 30);
+  const appVersion =
+    mode === 'manual' && requestedVersion
+      ? requestedVersion
+      : incrementAppVersion(getDeploymentAppVersion(latestWithVersion), changeType);
+  const buildNumber =
+    mode === 'manual' && requestedBuild
+      ? requestedBuild
+      : String(highestBuild + 1);
+  const changeTypeLabel = VERSION_CHANGE_TYPE_LABELS[changeType] || VERSION_CHANGE_TYPE_LABELS.fix;
+  const label = `v${appVersion} build ${buildNumber} - ${changeTypeLabel}`;
+
+  return {
+    mode,
+    appVersion,
+    buildNumber,
+    changeType,
+    changeTypeLabel,
+    label,
+    generated: mode !== 'manual' || !requestedVersion || !requestedBuild
+  };
+};
+
 const ENV_REFERENCE_PATTERN = /\$\{([A-Za-z_][A-Za-z0-9_]*)\}|\$([A-Za-z_][A-Za-z0-9_]*)/g;
 
 const parseEnvEntries = (content = '') =>
@@ -3665,10 +3782,20 @@ const publishProjectArchive = async (serviceId, file, options = {}) => {
   const resolvedEnvVars = Array.isArray(options.envVars)
     ? mergeEnvVars(options.envVars, service.envVars || [])
     : service.envVars || [];
+  const versionMetadata = buildDeploymentVersionMetadata(
+    options.versionMetadata,
+    service.deployments || []
+  );
   const deployment = {
     id: deploymentId,
-    label: safeUploadFilename(file.originalname || 'project.zip', 'project.zip'),
+    label: versionMetadata.label,
     filename: safeUploadFilename(file.originalname || 'project.zip', 'project.zip'),
+    appVersion: versionMetadata.appVersion,
+    buildNumber: versionMetadata.buildNumber,
+    changeType: versionMetadata.changeType,
+    versionMode: versionMetadata.mode,
+    versionLabel: versionMetadata.label,
+    versionMetadata,
     projectDir,
     envVars: resolvedEnvVars,
     healthcheck,
@@ -3698,7 +3825,8 @@ router.post('/services/:id/project-upload', upload.single('archive'), async (req
     const updatedService = await publishProjectArchive(req.params.id, req.file, {
       envVars: parseEnvVarsPayload(req.body?.envVars),
       healthcheck: parseHealthcheckPayload(req.body?.healthcheck),
-      autoRollback: req.body?.autoRollback
+      autoRollback: req.body?.autoRollback,
+      versionMetadata: parseVersionMetadataPayload(req.body?.versionMetadata)
     });
     res.json({ service: sanitizeServiceForClient(updatedService) });
   } catch (err) {
@@ -3729,6 +3857,7 @@ router.post('/services/:id/project-upload/init', (req, res, next) => {
       envVars: parseEnvVarsPayload(req.body?.envVars),
       healthcheck: parseHealthcheckPayload(req.body?.healthcheck),
       autoRollback: req.body?.autoRollback,
+      versionMetadata: parseVersionMetadataPayload(req.body?.versionMetadata),
       totalChunks,
       createdAt: new Date().toISOString()
     });
@@ -3766,7 +3895,8 @@ router.post('/services/:id/project-upload/complete', async (req, res, next) => {
     }, {
       envVars: metadata.envVars || null,
       healthcheck: metadata.healthcheck || null,
-      autoRollback: metadata.autoRollback
+      autoRollback: metadata.autoRollback,
+      versionMetadata: metadata.versionMetadata || null
     });
     cleanupChunkUpload(uploadId);
     res.json({ service: sanitizeServiceForClient(updatedService) });

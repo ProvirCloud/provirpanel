@@ -17,6 +17,18 @@ const ALLOWED_PULL_IMAGES = new Set([
   'dpage/pgadmin4'
 ]);
 
+const extractContainerHealthStatus = (container = {}) => {
+  const explicitStatus = container.State?.Health?.Status || container.Health?.Status;
+  if (explicitStatus) return explicitStatus;
+  const statusText = String(container.Status || '').toLowerCase();
+  if (statusText.includes('unhealthy')) return 'unhealthy';
+  if (statusText.includes('healthy')) return 'healthy';
+  if (statusText.includes('health: starting') || statusText.includes('(health: starting)')) {
+    return 'starting';
+  }
+  return null;
+};
+
 class DockerManager {
   constructor(options = {}) {
     this.docker = options.docker || new Docker();
@@ -285,6 +297,8 @@ class DockerManager {
       url: hostPort ? `http://localhost:${hostPort}` : null,
       externalUrl: hostPort && !bindLocalOnly ? `http://localhost:${hostPort}` : null,
       createdAt: containerInfo.Created || new Date().toISOString(),
+      containerStatus: containerInfo.State?.Status || null,
+      healthStatus: extractContainerHealthStatus(containerInfo),
       hasProject: Boolean(labels['provirpanel.has_project'] === 'true'),
       parentService: labels['provirpanel.parent.id'] || null,
       envVars: []
@@ -333,7 +347,9 @@ class DockerManager {
           networkName,
           bindLocalOnly,
           url: hostPort ? `http://localhost:${hostPort}` : service.url,
-          externalUrl: hostPort && !bindLocalOnly ? `http://localhost:${hostPort}` : service.externalUrl
+          externalUrl: hostPort && !bindLocalOnly ? `http://localhost:${hostPort}` : service.externalUrl,
+          containerStatus: matchedContainer.Status || matchedContainer.State || null,
+          healthStatus: extractContainerHealthStatus(matchedContainer)
         });
       } else if (service.containerId) {
         // Container gone — mark for removal from registry
