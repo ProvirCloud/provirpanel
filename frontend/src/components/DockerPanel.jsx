@@ -780,6 +780,7 @@ const DockerPanel = ({ showPageIntro = true }) => {
   const [envImportDialog, setEnvImportDialog] = useState(null)
   const [envImportStatus, setEnvImportStatus] = useState(null)
   const [projectUploadStatus, setProjectUploadStatus] = useState(null)
+  const [serviceUpdateStatus, setServiceUpdateStatus] = useState(null)
   const [removeDialog, setRemoveDialog] = useState(null)
   const [postgresDatabases, setPostgresDatabases] = useState([])
   const [logsExpanded, setLogsExpanded] = useState(false)
@@ -1487,19 +1488,56 @@ const DockerPanel = ({ showPageIntro = true }) => {
 
   const updateService = async (serviceId, config, options = {}) => {
     const apply = options.apply ?? true
+    let timer = null
+    setServiceUpdateStatus({
+      status: apply ? 'applying' : 'saving',
+      progress: apply ? 8 : 30,
+      message: apply
+        ? 'Preparando atualização do serviço...'
+        : 'Salvando configuração pendente...'
+    })
     try {
+      timer = setInterval(() => {
+        setServiceUpdateStatus((prev) => {
+          if (!prev || !['saving', 'applying'].includes(prev.status)) return prev
+          const nextProgress = Math.min(92, (prev.progress || 0) + (apply ? 6 : 14))
+          return {
+            ...prev,
+            progress: nextProgress,
+            message: apply
+              ? nextProgress < 45
+                ? 'Validando configuração...'
+                : nextProgress < 75
+                  ? 'Recriando container e atualizando ambiente...'
+                  : 'Aguardando resposta do serviço...'
+              : 'Persistindo configuração no painel...'
+          }
+        })
+      }, 900)
       const response = await api.put(`/docker/services/${serviceId}`, {
         ...config,
         apply
+      })
+      if (timer) clearInterval(timer)
+      setServiceUpdateStatus({
+        status: 'success',
+        progress: 100,
+        message: apply ? 'Configuração aplicada com sucesso.' : 'Configuração salva. Use Aplicar para executar.'
       })
       addToast(apply ? 'Configuração aplicada' : 'Configuração salva')
       await Promise.all([loadServices(), loadContainers()])
       return response.data?.service || true
     } catch (err) {
+      if (timer) clearInterval(timer)
       const message =
         err.response?.data?.message ||
         err.message ||
         (apply ? 'Erro ao aplicar serviço' : 'Erro ao salvar configuração')
+      setServiceUpdateStatus({
+        status: 'error',
+        progress: 0,
+        message
+      })
       addToast(message, 'error')
       return false
     }
@@ -1660,6 +1698,7 @@ const DockerPanel = ({ showPageIntro = true }) => {
 
   const openEditServiceDialog = (svc) => {
     setProjectUploadStatus(null)
+    setServiceUpdateStatus(null)
     setEnvImportStatus(null)
     const pending = svc.pendingConfig || null
     const effectiveNodeSiteConfig = {
@@ -2449,6 +2488,10 @@ const DockerPanel = ({ showPageIntro = true }) => {
       </div>
     )
   }
+
+  const serviceUpdateInProgress = ['saving', 'applying'].includes(serviceUpdateStatus?.status)
+  const projectUploadInProgress = ['uploading', 'processing'].includes(projectUploadStatus?.status)
+  const editOperationInProgress = serviceUpdateInProgress || projectUploadInProgress
 
   return (
     <div className="zeus-docker-page space-y-6">
@@ -3555,8 +3598,8 @@ const DockerPanel = ({ showPageIntro = true }) => {
                         className="rounded-xl border border-blue-800 bg-blue-950 px-3 py-2 text-xs text-blue-200 hover:bg-blue-900 disabled:cursor-not-allowed disabled:opacity-60"
                         disabled={
                           !editDialog.newProjectArchive ||
-                          projectUploadStatus?.status === 'uploading' ||
-                          projectUploadStatus?.status === 'processing'
+                          projectUploadInProgress ||
+                          serviceUpdateInProgress
                         }
                         onClick={async () => {
                           const ok = await uploadProjectArchive(editDialog.id, editDialog.newProjectArchive, {
@@ -3680,9 +3723,47 @@ const DockerPanel = ({ showPageIntro = true }) => {
                   </div>
                 </div>
             </div>
+            {serviceUpdateStatus && (
+              <div
+                className={`mt-4 rounded-xl border p-3 text-xs ${
+                  serviceUpdateStatus.status === 'error'
+                    ? 'border-rose-700 bg-rose-950/60 text-rose-100'
+                    : serviceUpdateStatus.status === 'success'
+                      ? 'border-emerald-700 bg-emerald-950/50 text-emerald-100'
+                      : 'border-blue-800 bg-blue-950/50 text-blue-100'
+                }`}
+              >
+                <div className="flex items-center justify-between gap-3">
+                  <div className="flex items-center gap-2">
+                    {serviceUpdateInProgress && (
+                      <span className="inline-flex h-4 w-4 animate-spin rounded-full border-2 border-slate-500 border-t-blue-300" />
+                    )}
+                    <span className="font-semibold">
+                      {serviceUpdateStatus.status === 'saving' && 'Salvando configuração'}
+                      {serviceUpdateStatus.status === 'applying' && 'Aplicando atualização'}
+                      {serviceUpdateStatus.status === 'success' && 'Operação concluída'}
+                      {serviceUpdateStatus.status === 'error' && 'Erro na atualização'}
+                    </span>
+                  </div>
+                  <span className="font-mono">{serviceUpdateStatus.progress || 0}%</span>
+                </div>
+                {serviceUpdateInProgress && (
+                  <div className="mt-2 h-2 w-full rounded-full bg-slate-800">
+                    <div
+                      className="h-2 rounded-full bg-blue-400 transition-all"
+                      style={{ width: `${serviceUpdateStatus.progress || 0}%` }}
+                    />
+                  </div>
+                )}
+                {serviceUpdateStatus.message && (
+                  <p className="mt-2 break-all">{serviceUpdateStatus.message}</p>
+                )}
+              </div>
+            )}
             <div className="flex flex-wrap gap-2 mt-6">
               <button
-                className="rounded-xl border border-slate-600 bg-slate-800 px-4 py-2 text-sm font-semibold text-slate-100 hover:bg-slate-700"
+                className="rounded-xl border border-slate-600 bg-slate-800 px-4 py-2 text-sm font-semibold text-slate-100 hover:bg-slate-700 disabled:cursor-not-allowed disabled:opacity-60"
+                disabled={editOperationInProgress}
                 onClick={async () => {
                   const updated = await updateService(
                     editDialog.id,
@@ -3700,7 +3781,8 @@ const DockerPanel = ({ showPageIntro = true }) => {
                 Salvar
               </button>
               <button
-                className="flex-1 rounded-xl bg-blue-500 px-4 py-2 text-sm font-semibold text-white hover:bg-blue-600"
+                className="flex-1 rounded-xl bg-blue-500 px-4 py-2 text-sm font-semibold text-white hover:bg-blue-600 disabled:cursor-not-allowed disabled:opacity-60"
+                disabled={editOperationInProgress}
                 onClick={async () => {
                   if (editDialog.newProjectArchive) {
                     const ok = await uploadProjectArchive(editDialog.id, editDialog.newProjectArchive, {
@@ -3725,8 +3807,12 @@ const DockerPanel = ({ showPageIntro = true }) => {
                 Aplicar
               </button>
               <button
-                className="rounded-xl border border-slate-700 bg-slate-800 px-4 py-2 text-sm text-slate-300 hover:bg-slate-700"
-                onClick={() => setEditDialog(null)}
+                className="rounded-xl border border-slate-700 bg-slate-800 px-4 py-2 text-sm text-slate-300 hover:bg-slate-700 disabled:cursor-not-allowed disabled:opacity-60"
+                disabled={editOperationInProgress}
+                onClick={() => {
+                  setServiceUpdateStatus(null)
+                  setEditDialog(null)
+                }}
               >
                 Cancelar
               </button>
