@@ -9,6 +9,7 @@ import {
   Square,
   RefreshCw,
   Trash2,
+  Download,
   Plus,
   TerminalSquare,
   Layers,
@@ -360,6 +361,19 @@ const buildVersionPayload = (dialog = {}) => {
     mode: 'auto',
     changeType: preview.changeType
   }
+}
+
+const getDeploymentDisplayLabel = (deployment = {}) =>
+  deployment.versionLabel || deployment.label || deployment.filename || deployment.id || 'versao'
+
+const getFilenameFromDisposition = (disposition, fallback) => {
+  const header = String(disposition || '')
+  const utfMatch = header.match(/filename\*=UTF-8''([^;]+)/i)
+  if (utfMatch?.[1]) {
+    return decodeURIComponent(utfMatch[1])
+  }
+  const asciiMatch = header.match(/filename="?([^";]+)"?/i)
+  return asciiMatch?.[1] || fallback
 }
 
 const formatShortDateTime = (value) => {
@@ -1854,6 +1868,72 @@ const DockerPanel = ({ showPageIntro = true }) => {
       return true
     } catch (err) {
       const message = err.response?.data?.message || err.message || 'Erro ao executar rollback'
+      addToast(message, 'error')
+      return false
+    }
+  }
+
+  const downloadServiceVersion = async (serviceId, deployment) => {
+    if (!serviceId || !deployment?.id) return false
+    try {
+      const response = await api.get(`/docker/services/${serviceId}/versions/${deployment.id}/download`, {
+        responseType: 'blob'
+      })
+      const fallbackFilename = `${getDeploymentDisplayLabel(deployment).replace(/[^\w.-]+/g, '-')}.tar.gz`
+      const filename = getFilenameFromDisposition(
+        response.headers?.['content-disposition'],
+        fallbackFilename
+      )
+      const blob = new Blob([response.data], {
+        type: response.headers?.['content-type'] || 'application/gzip'
+      })
+      const url = URL.createObjectURL(blob)
+      const link = document.createElement('a')
+      link.href = url
+      link.download = filename
+      document.body.appendChild(link)
+      link.click()
+      link.remove()
+      URL.revokeObjectURL(url)
+      addToast('Download da versão iniciado')
+      return true
+    } catch (err) {
+      const message = err.response?.data?.message || err.message || 'Erro ao baixar versão'
+      addToast(message, 'error')
+      return false
+    }
+  }
+
+  const removeServiceVersion = async (serviceId, deployment) => {
+    if (!serviceId || !deployment?.id) return false
+    const label = getDeploymentDisplayLabel(deployment)
+    if (!window.confirm(`Remover a versão "${label}"? Esta ação não remove a versão ativa.`)) {
+      return false
+    }
+    try {
+      const response = await api.delete(`/docker/services/${serviceId}/versions/${deployment.id}`)
+      addToast('Versão removida')
+      await Promise.all([loadServices(), loadContainers()])
+      const updated = response.data?.service
+      if (updated) {
+        setEditDialog((prev) => {
+          if (!prev || prev.id !== serviceId) return prev
+          return {
+            ...prev,
+            ...updated,
+            newEnvVars: (updated.envVars || []).map((env) => ({
+              ...env,
+              value: env.secret ? '******' : env.value
+            })),
+            newProjectArchive: null,
+            healthcheck: normalizeHealthcheckForm(updated.healthcheck || {}),
+            autoRollback: updated.autoRollback ?? true
+          }
+        })
+      }
+      return true
+    } catch (err) {
+      const message = err.response?.data?.message || err.message || 'Erro ao remover versão'
       addToast(message, 'error')
       return false
     }
@@ -3991,26 +4071,53 @@ const DockerPanel = ({ showPageIntro = true }) => {
                               key={deployment.id}
                               className="flex flex-wrap items-center justify-between gap-2 rounded-lg border border-slate-700 bg-slate-900 px-3 py-2"
                             >
-                              <div className="min-w-0">
+                              <div className="min-w-0 flex-1">
                                 <p className="truncate text-slate-200">
-                                  {deployment.versionLabel || deployment.label || deployment.filename || deployment.id}
+                                  {getDeploymentDisplayLabel(deployment)}
                                 </p>
                                 <p className="text-[11px] text-slate-500">
                                   {versionSummary.length ? `${versionSummary.join(' · ')} · ` : ''}
                                   {createdAt ? new Date(createdAt).toLocaleString() : 'sem data'} · {deployment.status || 'available'}
                                 </p>
                               </div>
-                              <button
-                                className="rounded-lg border border-slate-600 px-3 py-1.5 text-[11px] text-slate-200 hover:bg-slate-700 disabled:cursor-not-allowed disabled:opacity-50"
-                                disabled={
-                                  isActive ||
-                                  projectUploadStatus?.status === 'uploading' ||
-                                  projectUploadStatus?.status === 'processing'
-                                }
-                                onClick={() => rollbackServiceVersion(editDialog.id, deployment.id)}
-                              >
-                                {isActive ? 'Atual' : 'Rollback'}
-                              </button>
+                              <div className="flex flex-wrap gap-2">
+                                <button
+                                  className="inline-flex items-center gap-1.5 rounded-lg border border-blue-700 px-3 py-1.5 text-[11px] text-blue-200 hover:bg-blue-950 disabled:cursor-not-allowed disabled:opacity-50"
+                                  disabled={
+                                    !deployment.projectDir ||
+                                    projectUploadStatus?.status === 'uploading' ||
+                                    projectUploadStatus?.status === 'processing'
+                                  }
+                                  onClick={() => downloadServiceVersion(editDialog.id, deployment)}
+                                >
+                                  <Download className="h-3 w-3" />
+                                  Baixar
+                                </button>
+                                <button
+                                  className="inline-flex items-center gap-1.5 rounded-lg border border-rose-700 px-3 py-1.5 text-[11px] text-rose-200 hover:bg-rose-950 disabled:cursor-not-allowed disabled:opacity-50"
+                                  disabled={
+                                    isActive ||
+                                    projectUploadStatus?.status === 'uploading' ||
+                                    projectUploadStatus?.status === 'processing'
+                                  }
+                                  onClick={() => removeServiceVersion(editDialog.id, deployment)}
+                                >
+                                  <Trash2 className="h-3 w-3" />
+                                  Remover
+                                </button>
+                                <button
+                                  className="inline-flex items-center gap-1.5 rounded-lg border border-slate-600 px-3 py-1.5 text-[11px] text-slate-200 hover:bg-slate-700 disabled:cursor-not-allowed disabled:opacity-50"
+                                  disabled={
+                                    isActive ||
+                                    projectUploadStatus?.status === 'uploading' ||
+                                    projectUploadStatus?.status === 'processing'
+                                  }
+                                  onClick={() => rollbackServiceVersion(editDialog.id, deployment.id)}
+                                >
+                                  <RefreshCw className="h-3 w-3" />
+                                  {isActive ? 'Atual' : 'Rollback'}
+                                </button>
+                              </div>
                             </div>
                           )
                         })}

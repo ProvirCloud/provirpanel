@@ -11,6 +11,9 @@ const os = require('os');
 const http = require('http');
 const https = require('https');
 const { execFile, execSync } = require('child_process');
+const { pipeline } = require('stream/promises');
+const zlib = require('zlib');
+const tarfs = require('tar-fs');
 const multer = require('multer');
 
 const router = express.Router();
@@ -3095,6 +3098,23 @@ const sanitizePathSegment = (value, fallback = 'service') => {
 const getDeploymentRoot = (service) =>
   path.join(dockerBaseDir, '.versions', sanitizePathSegment(service.id || service.name));
 
+const isPathInside = (candidate, root) => {
+  if (!candidate || !root) return false;
+  const resolvedCandidate = path.resolve(candidate);
+  const resolvedRoot = path.resolve(root);
+  return resolvedCandidate === resolvedRoot || resolvedCandidate.startsWith(`${resolvedRoot}${path.sep}`);
+};
+
+const buildDeploymentDownloadFilename = (service, deployment) => {
+  const versionPart =
+    deployment.versionLabel ||
+    deployment.label ||
+    deployment.appVersion ||
+    deployment.id ||
+    'version';
+  return `${sanitizePathSegment(service.name || 'service')}-${sanitizePathSegment(versionPart, 'version')}.tar.gz`;
+};
+
 const createDeploymentProjectDir = (service, deploymentId) => {
   const root = getDeploymentRoot(service);
   fs.mkdirSync(root, { recursive: true });
@@ -3917,6 +3937,102 @@ router.get('/services/:id/versions', async (req, res, next) => {
     service = ensureActiveDeploymentRecord(service);
     res.json({ versions: (service.deployments || []).map(sanitizeDeploymentForClient) });
   } catch (err) {
+    next(err);
+  }
+});
+
+router.get('/services/:id/versions/:versionId/download', async (req, res, next) => {
+  try {
+    const services = dockerManager.listServices();
+    let service = services.find((s) => s.id === req.params.id);
+    if (!service) {
+      return res.status(404).json({ message: 'Service not found' });
+    }
+    service = ensureActiveDeploymentRecord(service);
+    const deployment = (service.deployments || []).find((entry) => entry.id === req.params.versionId);
+    if (!deployment) {
+      return res.status(404).json({ message: 'Versao nao encontrada' });
+    }
+    if (!deployment.projectDir || !fs.existsSync(deployment.projectDir)) {
+      return res.status(404).json({ message: 'Arquivos da versao nao encontrados' });
+    }
+    const stat = fs.statSync(deployment.projectDir);
+    if (!stat.isDirectory()) {
+      return res.status(400).json({ message: 'Versao nao aponta para uma pasta valida' });
+    }
+
+    const filename = buildDeploymentDownloadFilename(service, deployment);
+    appendServiceLog('info', `Download da versao ${deployment.id} iniciado para ${service.name}`);
+    res.setHeader('Content-Type', 'application/gzip');
+    res.setHeader('Content-Disposition', `attachment; filename="${filename}"`);
+    await pipeline(tarfs.pack(deployment.projectDir), zlib.createGzip(), res);
+  } catch (err) {
+    appendServiceLog('error', `Erro ao baixar versao ${req.params.versionId}: ${err.message}`);
+    if (res.headersSent) return;
+    next(err);
+  }
+});
+
+router.delete('/services/:id/versions/:versionId', async (req, res, next) => {
+  try {
+    const services = dockerManager.listServices();
+    let service = services.find((s) => s.id === req.params.id);
+    if (!service) {
+      return res.status(404).json({ message: 'Service not found' });
+    }
+    service = ensureActiveDeploymentRecord(service);
+    const deployment = (service.deployments || []).find((entry) => entry.id === req.params.versionId);
+    if (!deployment) {
+      return res.status(404).json({ message: 'Versao nao encontrada' });
+    }
+    if (deployment.id === service.activeDeploymentId || deployment.status === 'active') {
+      return res.status(400).json({ message: 'Nao e possivel remover a versao ativa.' });
+    }
+
+    const remainingDeployments = (service.deployments || [])
+      .filter((entry) => entry.id !== deployment.id)
+      .map((entry) => ({
+        ...entry,
+        status:
+          entry.status === 'failed'
+            ? 'failed'
+            : entry.id === service.activeDeploymentId
+              ? 'active'
+              : 'available'
+      }));
+
+    const updatedService = dockerManager.saveService({
+      ...service,
+      deployments: remainingDeployments,
+      updatedAt: new Date().toISOString()
+    });
+
+    const deploymentRoot = getDeploymentRoot(service);
+    const projectDirStillUsed = remainingDeployments.some(
+      (entry) => entry.projectDir && path.resolve(entry.projectDir) === path.resolve(deployment.projectDir || '')
+    );
+    if (
+      deployment.projectDir &&
+      !projectDirStillUsed &&
+      isPathInside(deployment.projectDir, deploymentRoot)
+    ) {
+      try {
+        fs.rmSync(deployment.projectDir, { recursive: true, force: true });
+      } catch (err) {
+        appendServiceLog(
+          'warn',
+          `Versao ${deployment.id} removida do registro, mas a pasta nao pode ser apagada: ${err.message}`
+        );
+      }
+    }
+
+    appendServiceLog('info', `Versao ${deployment.id} removida de ${service.name}`);
+    res.json({
+      service: sanitizeServiceForClient(updatedService),
+      removedVersionId: deployment.id
+    });
+  } catch (err) {
+    appendServiceLog('error', `Erro ao remover versao ${req.params.versionId}: ${err.message}`);
     next(err);
   }
 });
