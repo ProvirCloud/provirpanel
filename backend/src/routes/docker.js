@@ -145,6 +145,30 @@ const assembleChunkUpload = (uploadId) => {
   };
 };
 
+const ensureChunkUploadReady = (uploadId) => {
+  const { uploadDir, metadata } = readChunkMetadata(uploadId);
+  const totalChunks = Number(metadata.totalChunks);
+  if (!Number.isInteger(totalChunks) || totalChunks < 1) {
+    throw createHttpError('Total de chunks inválido', 400);
+  }
+
+  let receivedSize = 0;
+  for (let index = 0; index < totalChunks; index += 1) {
+    const chunkPath = path.join(uploadDir, `chunk-${index}`);
+    if (!fs.existsSync(chunkPath)) {
+      throw createHttpError(`Chunk ${index + 1}/${totalChunks} não recebido`, 400);
+    }
+    receivedSize += fs.statSync(chunkPath).size;
+  }
+
+  const expectedSize = Number(metadata.size || 0);
+  if (expectedSize > 0 && receivedSize !== expectedSize) {
+    throw createHttpError('Arquivo recebido com tamanho inválido', 400);
+  }
+
+  return metadata;
+};
+
 const pushBuildProgress = (progress, sessionId, message, phase = 'build') => {
   if (!message) return;
   progress.push(message);
@@ -158,7 +182,7 @@ const pushBuildProgress = (progress, sessionId, message, phase = 'build') => {
   }
 };
 
-const pushDeploymentProgress = (progress, sessionId, message, phase = 'process') => {
+const pushDeploymentProgress = (progress, sessionId, message, phase = 'process', extra = {}) => {
   if (!message) return;
   if (Array.isArray(progress)) {
     progress.push(message);
@@ -169,7 +193,8 @@ const pushDeploymentProgress = (progress, sessionId, message, phase = 'process')
       sessionId,
       phase,
       message,
-      ts: Date.now()
+      ts: Date.now(),
+      ...extra
     });
   }
 };
@@ -647,6 +672,22 @@ const sanitizeServiceForClient = (service) => ({
   deployments: (service.deployments || []).map(sanitizeDeploymentForClient)
 });
 
+const projectDeployJobs = new Map();
+
+const sanitizeProjectDeployJob = (job = {}) => ({
+  id: job.id,
+  serviceId: job.serviceId,
+  status: job.status,
+  message: job.message || '',
+  error: job.error || null,
+  progress: Array.isArray(job.progress) ? job.progress : [],
+  progressSessionId: job.progressSessionId || '',
+  service: job.service ? sanitizeServiceForClient(job.service) : null,
+  createdAt: job.createdAt,
+  startedAt: job.startedAt || null,
+  finishedAt: job.finishedAt || null
+});
+
 const sendServicesResponse = async (res, next) => {
   try {
     const services = await dockerManager.listManagedServices();
@@ -706,36 +747,105 @@ const resolveProjectPathFromVolume = (volumes = []) => {
   return null;
 };
 
-const resolveNodeCommand = (volumes = []) => {
-  const project = resolveProjectPathFromVolume(volumes);
-  if (!project?.hostPath) return null;
+const resolvePackageProjectPathFromVolume = (volumes = []) => {
+  const volume = volumes.find((m) => m.hostPath && m.containerPath);
+  if (!volume) return null;
 
+  const root = volume.hostPath;
+  const resolveContainerPath = (hostDir) => {
+    const relative = path.relative(root, hostDir).split(path.sep).join('/');
+    return relative ? path.posix.join(volume.containerPath, relative) : volume.containerPath;
+  };
+
+  const hasPackageJson = (dir) => fs.existsSync(path.join(dir, 'package.json'));
+  if (hasPackageJson(root)) {
+    return {
+      hostPath: root,
+      containerPath: volume.containerPath
+    };
+  }
+
+  const searchDepth = (dir, depth) => {
+    if (depth <= 0) return null;
+    let entries = [];
+    try {
+      entries = fs
+        .readdirSync(dir, { withFileTypes: true })
+        .filter((entry) => entry.isDirectory())
+        .filter((entry) => !['node_modules', '.git', 'dist', 'build'].includes(entry.name))
+        .map((entry) => entry.name)
+        .sort();
+    } catch (err) {
+      return null;
+    }
+
+    for (const entry of entries) {
+      const candidate = path.join(dir, entry);
+      if (hasPackageJson(candidate)) {
+        return {
+          hostPath: candidate,
+          containerPath: resolveContainerPath(candidate)
+        };
+      }
+    }
+    for (const entry of entries) {
+      const found = searchDepth(path.join(dir, entry), depth - 1);
+      if (found) return found;
+    }
+    return null;
+  };
+
+  return searchDepth(root, 3);
+};
+
+const buildNodeCommandFromPackage = (project) => {
+  if (!project?.hostPath) return null;
   const packagePath = path.join(project.hostPath, 'package.json');
   if (!fs.existsSync(packagePath)) return null;
 
   try {
     const pkg = JSON.parse(fs.readFileSync(packagePath, 'utf-8'));
     const scripts = pkg && typeof pkg === 'object' ? pkg.scripts || {} : {};
-    const deps = (pkg && typeof pkg === 'object' ? pkg.dependencies || {} : {}) || {};
+    const deps = {
+      ...((pkg && typeof pkg === 'object' ? pkg.dependencies || {} : {}) || {}),
+      ...((pkg && typeof pkg === 'object' ? pkg.devDependencies || {} : {}) || {})
+    };
+    const hasBuild = typeof scripts.build === 'string' && scripts.build.trim();
+    const hasStart = typeof scripts.start === 'string' && scripts.start.trim();
+    const hasDev = typeof scripts.dev === 'string' && scripts.dev.trim();
     const hasNext = Boolean(deps.next);
-    const startScript = typeof scripts.start === 'string' ? scripts.start.trim() : '';
-    if (hasNext && startScript.startsWith('next start')) {
-      return ['sh', '-c', 'npm install && npm run build && next start'];
+    const install = 'npm install';
+
+    if (hasBuild && hasStart) {
+      return ['sh', '-c', `${install} && npm run build && npm run start`];
     }
-    if (scripts.start) {
-      return ['sh', '-c', 'npm install && npm run start'];
+    if (hasNext && hasStart) {
+      return ['sh', '-c', `${install} && npm run start`];
     }
-    if (scripts.dev) {
-      return ['sh', '-c', 'npm install && npm run dev'];
+    if (hasStart) {
+      return ['sh', '-c', `${install} && npm run start`];
+    }
+    if (hasBuild && pkg.main) {
+      return ['sh', '-c', `${install} && npm run build && node ${shellQuote(pkg.main)}`];
+    }
+    if (hasBuild) {
+      return ['sh', '-c', `${install} && npm run build && npm start`];
+    }
+    if (hasDev) {
+      return ['sh', '-c', `${install} && npm run dev`];
     }
     if (pkg.main) {
-      return ['sh', '-c', `npm install && node ${pkg.main}`];
+      return ['sh', '-c', `${install} && node ${shellQuote(pkg.main)}`];
     }
   } catch (err) {
     return null;
   }
 
   return ['sh', '-c', 'npm install && npm start'];
+};
+
+const resolveNodeCommand = (volumes = []) => {
+  return buildNodeCommandFromPackage(resolvePackageProjectPathFromVolume(volumes));
 };
 
 const JAVA_IMAGE_KEYWORDS = [
@@ -1335,7 +1445,7 @@ const getNodeServiceProjectPath = (volumes = [], nodeServiceMode = DEFAULT_NODE_
   if (nodeServiceMode === 'sites') {
     return resolvePrimaryVolumeProjectPath(volumes);
   }
-  return resolveProjectPathFromVolume(volumes);
+  return resolvePackageProjectPathFromVolume(volumes) || resolvePrimaryVolumeProjectPath(volumes);
 };
 
 const getEnvProjectPath = (volumes = [], projectPath = null) =>
@@ -1581,6 +1691,45 @@ const isAutoProjectLaunchCommand = (command) => {
     /\bjava\b[\s\S]*\s-jar\s+/.test(value) ||
     PROJECT_ENTRYPOINT_FILES.some((filename) => value.includes(filename))
   );
+};
+
+const normalizeCommandText = (command) =>
+  stringifyCommand(command)
+    .replace(/^sh\s+-c\s+/, '')
+    .replace(/\s+/g, ' ')
+    .trim();
+
+const isAutoNodeLifecycleCommand = (command) => {
+  let value = normalizeCommandText(command);
+  if (!value) return false;
+  value = value.replace(/^cd\s+[^&]+&&\s*/, '').trim();
+  value = value.replace(/^NPM_CONFIG_PRODUCTION=false\s+/, '').trim();
+  value = value.replace(/^NEXT_STATIC_PAGE_GENERATION_TIMEOUT=\d+\s+/, '').trim();
+  value = value.replace(/--include=dev/g, '').replace(/\s+/g, ' ').trim();
+
+  if (['npm start', 'npm run start', 'npm install && npm start', 'npm install && npm run start'].includes(value)) {
+    return true;
+  }
+  if (/^npm (install|ci)\s*&&\s*npm run build\s*&&\s*npm (run )?start$/.test(value)) {
+    return true;
+  }
+  if (/^npm (install|ci)\s*&&\s*npm run build\s*&&\s*next start\b/.test(value)) {
+    return true;
+  }
+  if (/^npm (install|ci)\s*&&\s*npm run dev$/.test(value)) {
+    return true;
+  }
+  if (/^npm (install|ci)\s*&&\s*node\s+/.test(value)) {
+    return true;
+  }
+  return false;
+};
+
+const resolvePersistedProjectCommand = (service = {}, isNodeService = false) => {
+  if (!service.command) return null;
+  if (isAutoProjectLaunchCommand(service.command)) return null;
+  if (isNodeService && isAutoNodeLifecycleCommand(service.command)) return null;
+  return service.command;
 };
 
 const stripNextStartFlags = (command) => {
@@ -2777,6 +2926,10 @@ router.put('/services/:id', async (req, res, next) => {
       service
     );
     const isNodeSitesMode = service.templateId === 'node-app' && nodeServiceMode === 'sites';
+    const isNodeServiceForConfig =
+      service.templateId === 'node-app' ||
+      service.templateId === 'node' ||
+      String(service.image || '').startsWith('node');
     const resolvedHealthcheck = normalizeHealthcheckConfig(requestedHealthcheck || service.healthcheck);
     const resolvedAutoRollback = parseBooleanOption(requestedAutoRollback, service.autoRollback ?? true);
     const savedEnvVars = mergeEnvVars(
@@ -2786,7 +2939,12 @@ router.put('/services/:id', async (req, res, next) => {
     const savedPort = Number(hostPort) || service.hostPort;
     const savedBindLocal = bindLocalOnly ?? service.bindLocalOnly ?? false;
     const savedNetwork = networkName || service.networkName || 'provirpanel';
-    const savedCommand = isNodeSitesMode ? '' : command ?? pendingConfig?.command ?? stringifyCommand(service.command);
+    const requestedSavedCommand = command ?? pendingConfig?.command ?? stringifyCommand(service.command);
+    const savedCommand =
+      isNodeSitesMode ||
+      (isNodeServiceForConfig && isAutoNodeLifecycleCommand(normalizeCommand(requestedSavedCommand)))
+        ? ''
+        : requestedSavedCommand;
 
     if (!applyConfig) {
       const savedService = {
@@ -2845,10 +3003,7 @@ router.put('/services/:id', async (req, res, next) => {
       SERVICE_TEMPLATES.find((t) => t.id === service.templateId) ||
       { env: [], workdir: null, command: null };
     const previousNodeSiteConfig = service.nodeSiteConfig || null;
-    const isNodeService =
-      service.templateId === 'node-app' ||
-      service.templateId === 'node' ||
-      String(service.image || '').startsWith('node');
+    const isNodeService = isNodeServiceForConfig;
     const isNginxStaticService =
       service.templateId === 'nginx-static' ||
       String(service.image || '').startsWith('nginx');
@@ -2858,7 +3013,7 @@ router.put('/services/:id', async (req, res, next) => {
       isNginxStaticService,
       isNodeSitesMode
     });
-    const persistedCommand = isAutoProjectLaunchCommand(service.command) ? null : service.command;
+    const persistedCommand = resolvePersistedProjectCommand(service, isNodeService);
     const canAutoProjectLaunch = Boolean(
       projectLaunch &&
         !persistedCommand &&
@@ -2932,7 +3087,12 @@ router.put('/services/:id', async (req, res, next) => {
       `Env do container atualizada para ${service.name}: ${resolvedEnvVars.map((entry) => entry.key).join(', ') || 'nenhuma'}`
     );
 
-    const normalizedCommand = isNodeSitesMode ? null : normalizeCommand(command);
+    const requestedCommand = normalizeCommand(command);
+    const normalizedCommand =
+      isNodeSitesMode ||
+      (isNodeService && isAutoNodeLifecycleCommand(requestedCommand))
+        ? null
+        : requestedCommand;
     const hasUserCommand = isNodeSitesMode ? false : Boolean(normalizedCommand || persistedCommand);
     let autoProjectLaunch = null;
     let containerCmd = normalizedCommand || persistedCommand || template.command;
@@ -3391,7 +3551,7 @@ const prepareProjectRuntimeForDeploy = ({
     isNginxStaticService,
     isNodeSitesMode
   });
-  const persistedCommand = isAutoProjectLaunchCommand(service.command) ? null : service.command;
+  const persistedCommand = resolvePersistedProjectCommand(service, isNodeService);
   const canAutoProjectLaunch = Boolean(
     projectLaunch &&
       !persistedCommand &&
@@ -3642,6 +3802,7 @@ const promoteProjectDeployment = async ({
     nodeServiceMode,
     nodeSiteConfig
   });
+  pushProgress(`Comando candidato: ${stringifyCommand(candidateRuntime.containerCmd) || 'padrão da imagem'}`, 'prepare');
   const candidateName = `${sanitizePathSegment(service.name)}-candidate-${deployment.id.slice(0, 8)}`;
   let candidateContainer = null;
 
@@ -3694,6 +3855,7 @@ const promoteProjectDeployment = async ({
     nodeServiceMode,
     nodeSiteConfig
   });
+  pushProgress(`Comando definitivo: ${stringifyCommand(finalRuntime.containerCmd) || 'padrão da imagem'}`, 'promote');
   const previousContainerId = service.containerId;
   pushProgress('Parando a versão atual para promover a nova versão...', 'promote');
   await stopAndRemoveContainer(previousContainerId, service.name);
@@ -3789,8 +3951,12 @@ const promoteProjectDeployment = async ({
 const publishProjectArchive = async (serviceId, file, options = {}) => {
   const progress = Array.isArray(options.progress) ? options.progress : [];
   const progressSessionId = String(options.progressSessionId || '').trim();
-  const pushProgress = (message, phase) =>
-    pushDeploymentProgress(progress, progressSessionId, message, phase);
+  const progressJobId = String(options.progressJobId || '').trim();
+  const pushProgress = (message, phase, extra = {}) =>
+    pushDeploymentProgress(progress, progressSessionId, message, phase, {
+      ...(progressJobId ? { jobId: progressJobId } : {}),
+      ...extra
+    });
   const services = dockerManager.listServices();
   let service = services.find((s) => s.id === serviceId);
   if (!service) {
@@ -3807,8 +3973,22 @@ const publishProjectArchive = async (serviceId, file, options = {}) => {
   service = ensureActiveDeploymentRecord(volumeInfo.service);
   pushProgress('Volume do projeto localizado e versão atual registrada.', 'prepare');
 
-  const { nodeServiceMode, nodeSiteConfig } = resolveNodeServiceConfig({}, service);
+  const { nodeServiceMode, nodeSiteConfig } = resolveNodeServiceConfig(
+    {
+      nodeServiceMode: options.nodeServiceMode,
+      nodeSiteConfig: options.nodeSiteConfig
+    },
+    service
+  );
   const isNodeSitesMode = service.templateId === 'node-app' && nodeServiceMode === 'sites';
+  if (service.templateId === 'node-app') {
+    pushProgress(
+      isNodeSitesMode
+        ? `Modo Node Sites: publicando arquivos buildados em ${nodeSiteConfig.siteFolder}.`
+        : 'Modo Node Serviço: publicando fonte completo para instalar, buildar e iniciar.',
+      'prepare'
+    );
+  }
   const healthcheck = normalizeHealthcheckConfig(options.healthcheck || service.healthcheck);
   const autoRollback = parseBooleanOption(options.autoRollback, service.autoRollback ?? true);
   const deploymentId = crypto.randomUUID();
@@ -3914,29 +4094,147 @@ const publishProjectArchive = async (serviceId, file, options = {}) => {
   });
 
   appendServiceLog('info', `Atualizacao de projeto concluida: ${service.name}`);
-  pushProgress('Publicação concluída.', 'done');
+  pushProgress('Publicação concluída.', 'done', {
+    service: sanitizeServiceForClient(updatedService)
+  });
   return updatedService;
+};
+
+const startProjectPublishJob = ({
+  serviceId,
+  file = null,
+  fileFactory = null,
+  options = {},
+  cleanup = null
+}) => {
+  const jobId = crypto.randomUUID();
+  const progress = Array.isArray(options.progress) ? options.progress : [];
+  const progressSessionId = String(options.progressSessionId || '').trim();
+  const job = {
+    id: jobId,
+    serviceId,
+    status: 'queued',
+    message: 'Publicação recebida. Processamento iniciado em segundo plano.',
+    progress,
+    progressSessionId,
+    createdAt: new Date().toISOString()
+  };
+  projectDeployJobs.set(jobId, job);
+
+  const updateJob = (patch = {}) => {
+    const current = projectDeployJobs.get(jobId) || job;
+    const next = {
+      ...current,
+      ...patch,
+      progress
+    };
+    projectDeployJobs.set(jobId, next);
+    return next;
+  };
+
+  pushDeploymentProgress(progress, progressSessionId, job.message, 'prepare', { jobId });
+
+  setImmediate(async () => {
+    updateJob({
+      status: 'processing',
+      message: 'Processando publicação no servidor.',
+      startedAt: new Date().toISOString()
+    });
+    pushDeploymentProgress(progress, progressSessionId, 'Processando publicação no servidor...', 'process', { jobId });
+
+    try {
+      const publishFile = typeof fileFactory === 'function' ? fileFactory(jobId) : file;
+      const updatedService = await publishProjectArchive(serviceId, publishFile, {
+        ...options,
+        progress,
+        progressSessionId,
+        progressJobId: jobId
+      });
+      updateJob({
+        status: 'success',
+        message: 'Publicação concluída.',
+        service: updatedService,
+        finishedAt: new Date().toISOString()
+      });
+    } catch (err) {
+      const message = err?.message || 'Erro ao publicar projeto';
+      updateJob({
+        status: 'error',
+        message,
+        error: message,
+        finishedAt: new Date().toISOString()
+      });
+      appendServiceLog('error', `Erro no job de publicacao ${jobId}: ${message}`);
+      pushDeploymentProgress(progress, progressSessionId, `Falha na publicação: ${message}`, 'error', {
+        jobId,
+        error: message
+      });
+    } finally {
+      if (typeof cleanup === 'function') {
+        try {
+          cleanup();
+        } catch (cleanupErr) {
+          appendServiceLog('warn', `Falha ao limpar job ${jobId}: ${cleanupErr.message}`);
+        }
+      }
+      setTimeout(() => {
+        projectDeployJobs.delete(jobId);
+      }, 30 * 60 * 1000);
+    }
+  });
+
+  return job;
 };
 
 router.post('/services/:id/project-upload', upload.single('archive'), async (req, res, next) => {
   const progress = [];
   try {
-    const updatedService = await publishProjectArchive(req.params.id, req.file, {
-      envVars: parseEnvVarsPayload(req.body?.envVars),
-      healthcheck: parseHealthcheckPayload(req.body?.healthcheck),
-      autoRollback: req.body?.autoRollback,
-      versionMetadata: parseVersionMetadataPayload(req.body?.versionMetadata),
-      progressSessionId: req.body?.progressSessionId,
+    const services = dockerManager.listServices();
+    const service = services.find((s) => s.id === req.params.id);
+    if (!service) {
+      return res.status(404).json({ message: 'Service not found' });
+    }
+    if (!req.file?.path) {
+      throw createHttpError('Nenhum arquivo enviado.', 400);
+    }
+    const progressSessionId = String(req.body?.progressSessionId || '');
+    const job = startProjectPublishJob({
+      serviceId: req.params.id,
+      file: req.file,
+      options: {
+        envVars: parseEnvVarsPayload(req.body?.envVars),
+        healthcheck: parseHealthcheckPayload(req.body?.healthcheck),
+        autoRollback: req.body?.autoRollback,
+        versionMetadata: parseVersionMetadataPayload(req.body?.versionMetadata),
+        nodeServiceMode: req.body?.nodeServiceMode,
+        nodeSiteConfig: parseJsonObjectPayload(req.body?.nodeSiteConfig, 'nodeSiteConfig'),
+        progressSessionId,
+        progress
+      },
+      cleanup: () => {
+        if (req.file?.path) fs.unlink(req.file.path, () => {});
+      }
+    });
+    res.status(202).json({
+      accepted: true,
+      message: 'Arquivo recebido. Publicação em segundo plano iniciada.',
+      jobId: job.id,
+      job: sanitizeProjectDeployJob(job),
       progress
     });
-    res.json({ service: sanitizeServiceForClient(updatedService), progress });
   } catch (err) {
-    appendServiceLog('error', `Erro ao atualizar projeto ${req.params.id}: ${err.message}`);
-    if (req.body?.progressSessionId) {
-      pushDeploymentProgress(progress, req.body.progressSessionId, `Falha na publicação: ${err.message}`, 'error');
-    }
+    appendServiceLog('error', `Erro ao iniciar atualizacao de projeto ${req.params.id}: ${err.message}`);
+    if (req.file?.path) fs.unlink(req.file.path, () => {});
     sendProgressError(res, err, progress);
   }
+});
+
+router.get('/services/:id/project-upload/jobs/:jobId', (req, res) => {
+  const job = projectDeployJobs.get(req.params.jobId);
+  if (!job || job.serviceId !== req.params.id) {
+    return res.status(404).json({ message: 'Job de publicação não encontrado' });
+  }
+  return res.json({ job: sanitizeProjectDeployJob(job) });
 });
 
 router.post('/services/:id/project-upload/init', (req, res, next) => {
@@ -3962,6 +4260,8 @@ router.post('/services/:id/project-upload/init', (req, res, next) => {
       healthcheck: parseHealthcheckPayload(req.body?.healthcheck),
       autoRollback: req.body?.autoRollback,
       versionMetadata: parseVersionMetadataPayload(req.body?.versionMetadata),
+      nodeServiceMode: req.body?.nodeServiceMode,
+      nodeSiteConfig: parseJsonObjectPayload(req.body?.nodeSiteConfig, 'nodeSiteConfig'),
       progressSessionId: String(req.body?.progressSessionId || ''),
       totalChunks,
       createdAt: new Date().toISOString()
@@ -3990,26 +4290,54 @@ router.post('/services/:id/project-upload/complete', async (req, res, next) => {
   const uploadId = req.body?.uploadId;
   const progress = [];
   try {
-    const { metadata } = readChunkMetadata(uploadId);
+    const metadata = ensureChunkUploadReady(uploadId);
     if (metadata.type !== 'project-upload' || metadata.serviceId !== req.params.id) {
       return res.status(400).json({ message: 'Upload inválido para este serviço' });
     }
-    pushDeploymentProgress(progress, metadata.progressSessionId, 'Remontando arquivo enviado em partes...', 'upload');
-    const { archivePath, filename } = assembleChunkUpload(uploadId);
-    pushDeploymentProgress(progress, metadata.progressSessionId, 'Arquivo remontado. Iniciando processamento no servidor...', 'upload');
-    const updatedService = await publishProjectArchive(req.params.id, {
-      path: archivePath,
-      originalname: filename
-    }, {
-      envVars: metadata.envVars || null,
-      healthcheck: metadata.healthcheck || null,
-      autoRollback: metadata.autoRollback,
-      versionMetadata: metadata.versionMetadata || null,
-      progressSessionId: metadata.progressSessionId,
+    pushDeploymentProgress(
+      progress,
+      metadata.progressSessionId,
+      'Arquivo recebido em partes. Publicação em segundo plano iniciada.',
+      'upload'
+    );
+    const job = startProjectPublishJob({
+      serviceId: req.params.id,
+      fileFactory: (jobId) => {
+        pushDeploymentProgress(progress, metadata.progressSessionId, 'Remontando arquivo enviado em partes...', 'upload', {
+          jobId
+        });
+        const { archivePath, filename } = assembleChunkUpload(uploadId);
+        pushDeploymentProgress(
+          progress,
+          metadata.progressSessionId,
+          'Arquivo remontado. Iniciando processamento no servidor...',
+          'upload',
+          { jobId }
+        );
+        return {
+          path: archivePath,
+          originalname: filename
+        };
+      },
+      options: {
+        envVars: metadata.envVars || null,
+        healthcheck: metadata.healthcheck || null,
+        autoRollback: metadata.autoRollback,
+        versionMetadata: metadata.versionMetadata || null,
+        nodeServiceMode: metadata.nodeServiceMode,
+        nodeSiteConfig: metadata.nodeSiteConfig || null,
+        progressSessionId: metadata.progressSessionId,
+        progress
+      },
+      cleanup: () => cleanupChunkUpload(uploadId)
+    });
+    res.status(202).json({
+      accepted: true,
+      message: 'Arquivo recebido. Publicação em segundo plano iniciada.',
+      jobId: job.id,
+      job: sanitizeProjectDeployJob(job),
       progress
     });
-    cleanupChunkUpload(uploadId);
-    res.json({ service: sanitizeServiceForClient(updatedService), progress });
   } catch (err) {
     let progressSessionId = '';
     try {
@@ -4020,7 +4348,6 @@ router.post('/services/:id/project-upload/complete', async (req, res, next) => {
     if (progressSessionId) {
       pushDeploymentProgress(progress, progressSessionId, `Falha na publicação: ${err.message}`, 'error');
     }
-    if (uploadId) cleanupChunkUpload(uploadId);
     appendServiceLog('error', `Erro ao finalizar upload em partes ${req.params.id}: ${err.message}`);
     sendProgressError(res, err, progress);
   }

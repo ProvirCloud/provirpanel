@@ -177,6 +177,24 @@ const formatCommandForInput = (command) => {
   return ''
 }
 
+const isAutoNodeCommandInput = (command) => {
+  let value = formatCommandForInput(command)
+    .replace(/\s+/g, ' ')
+    .trim()
+  if (!value) return false
+  value = value.replace(/^cd\s+[^&]+&&\s*/, '').trim()
+  value = value.replace(/^NPM_CONFIG_PRODUCTION=false\s+/, '').trim()
+  value = value.replace(/^NEXT_STATIC_PAGE_GENERATION_TIMEOUT=\d+\s+/, '').trim()
+  value = value.replace(/--include=dev/g, '').replace(/\s+/g, ' ').trim()
+  return (
+    ['npm start', 'npm run start', 'npm install && npm start', 'npm install && npm run start'].includes(value) ||
+    /^npm (install|ci)\s*&&\s*npm run build\s*&&\s*npm (run )?start$/.test(value) ||
+    /^npm (install|ci)\s*&&\s*npm run build\s*&&\s*next start\b/.test(value) ||
+    /^npm (install|ci)\s*&&\s*npm run dev$/.test(value) ||
+    /^npm (install|ci)\s*&&\s*node\s+/.test(value)
+  )
+}
+
 const parseEnvFile = async (file) => {
   const content = await file.text()
   return content
@@ -1009,6 +1027,7 @@ const DockerPanel = ({ showPageIntro = true }) => {
   const progressSocket = useMemo(() => createDockerProgressSocket(), [])
   const buildSessionRef = useRef(null)
   const projectDeploySessionRef = useRef(null)
+  const completedProjectJobsRef = useRef(new Set())
 
   const templateMap = useMemo(
     () => new Map((templates || []).map((template) => [template.id, template])),
@@ -1320,6 +1339,56 @@ const DockerPanel = ({ showPageIntro = true }) => {
     }
   }
 
+  const applyPublishedServiceToDialog = (serviceId, updated) => {
+    if (!updated) return
+    setEditDialog((prev) => {
+      if (!prev || prev.id !== serviceId) return prev
+      return {
+        ...prev,
+        ...updated,
+        newEnvVars: (updated.envVars || []).map((env) => ({
+          ...env,
+          value: env.secret ? '******' : env.value
+        })),
+        newProjectArchive: null,
+        healthcheck: normalizeHealthcheckForm(updated.healthcheck || {}),
+        autoRollback: updated.autoRollback ?? true,
+        versionMode: 'auto',
+        versionAppVersion: '',
+        versionBuildNumber: '',
+        versionChangeType: 'fix'
+      }
+    })
+  }
+
+  const finishProjectDeployJob = async ({ serviceId, jobId, status, message, service }) => {
+    const terminalKey = jobId || `${serviceId}:${status}:${message}`
+    if (terminalKey && completedProjectJobsRef.current.has(terminalKey)) return
+    if (terminalKey) completedProjectJobsRef.current.add(terminalKey)
+
+    if (status === 'success') {
+      applyPublishedServiceToDialog(serviceId, service)
+      setProjectUploadStatus((prev) => ({
+        ...(prev || {}),
+        status: 'success',
+        progress: 100,
+        message: message || 'Projeto publicado com sucesso.'
+      }))
+      addToast(message || 'Projeto atualizado com sucesso')
+      await Promise.all([loadServices(), loadContainers()])
+      return
+    }
+
+    setProjectUploadStatus((prev) => ({
+      ...(prev || {}),
+      status: 'error',
+      progress: prev?.progress || 0,
+      message: message || 'Falha na publicação.'
+    }))
+    addToast(message || 'Falha na publicação', 'error')
+    await Promise.all([loadServices(), loadContainers()])
+  }
+
   useEffect(() => {
     loadContainers()
     loadTemplates()
@@ -1453,6 +1522,22 @@ const DockerPanel = ({ showPageIntro = true }) => {
               message: payload.message
             }
           })
+          if (payload.phase === 'done') {
+            void finishProjectDeployJob({
+              serviceId: payload.service?.id || editDialog?.id,
+              jobId: payload.jobId,
+              status: 'success',
+              message: payload.message || 'Projeto publicado com sucesso.',
+              service: payload.service
+            })
+          } else if (payload.phase === 'error') {
+            void finishProjectDeployJob({
+              serviceId: editDialog?.id,
+              jobId: payload.jobId,
+              status: 'error',
+              message: payload.error || payload.message || 'Falha na publicação.'
+            })
+          }
         }
         return
       }
@@ -1800,6 +1885,46 @@ const DockerPanel = ({ showPageIntro = true }) => {
     })
   }
 
+  const monitorProjectDeployJob = async (serviceId, jobId) => {
+    if (!serviceId || !jobId) return
+    for (let attempt = 0; attempt < 240; attempt += 1) {
+      await new Promise((resolve) => setTimeout(resolve, 2000))
+      try {
+        const response = await api.get(`/docker/services/${serviceId}/project-upload/jobs/${jobId}`)
+        const job = response.data?.job
+        if (!job) continue
+        mergeProjectProgressFromResponse(job.progress || [])
+        if (job.status === 'success') {
+          await finishProjectDeployJob({
+            serviceId,
+            jobId,
+            status: 'success',
+            message: job.message || 'Projeto publicado com sucesso.',
+            service: job.service
+          })
+          return
+        }
+        if (job.status === 'error') {
+          await finishProjectDeployJob({
+            serviceId,
+            jobId,
+            status: 'error',
+            message: job.error || job.message || 'Falha na publicação.'
+          })
+          return
+        }
+        setProjectUploadStatus((prev) => ({
+          ...(prev || {}),
+          status: 'processing',
+          progress: Math.max(prev?.progress || 0, 55),
+          message: job.message || 'Processando publicação no servidor...'
+        }))
+      } catch (err) {
+        if (err.response?.status === 404) return
+      }
+    }
+  }
+
   const uploadProjectArchive = async (serviceId, file, options = {}) => {
     if (!serviceId || !file) return false
     const progressSessionId = generateUUID()
@@ -1827,6 +1952,12 @@ const DockerPanel = ({ showPageIntro = true }) => {
     if (options.versionMetadata) {
       formData.append('versionMetadata', JSON.stringify(options.versionMetadata))
     }
+    if (options.nodeServiceMode) {
+      formData.append('nodeServiceMode', options.nodeServiceMode)
+    }
+    if (options.nodeSiteConfig) {
+      formData.append('nodeSiteConfig', JSON.stringify(options.nodeSiteConfig))
+    }
     try {
       setProjectUploadStatus({ status: 'uploading', progress: 0, message: 'Enviando arquivo...' })
       let response = null
@@ -1839,6 +1970,12 @@ const DockerPanel = ({ showPageIntro = true }) => {
         }
         if (options.versionMetadata) {
           metadata.versionMetadata = options.versionMetadata
+        }
+        if (options.nodeServiceMode) {
+          metadata.nodeServiceMode = options.nodeServiceMode
+        }
+        if (options.nodeSiteConfig) {
+          metadata.nodeSiteConfig = options.nodeSiteConfig
         }
         response = await uploadFileInChunks({
           file,
@@ -1877,26 +2014,24 @@ const DockerPanel = ({ showPageIntro = true }) => {
         })
       }
       mergeProjectProgressFromResponse(response?.data?.progress || [])
+      const accepted = response?.status === 202 || response?.data?.accepted
+      const jobId = response?.data?.jobId || response?.data?.job?.id
+      if (accepted) {
+        setProjectUploadStatus((prev) => ({
+          ...(prev || {}),
+          status: 'processing',
+          progress: Math.max(Math.min(prev?.progress || 0, 95), 55),
+          message: response?.data?.message || 'Arquivo recebido. Publicação em andamento no servidor...'
+        }))
+        addToast('Publicação iniciada. Acompanhe o progresso no modal.')
+        if (jobId) {
+          void monitorProjectDeployJob(serviceId, jobId)
+        }
+        return true
+      }
       const updated = response?.data?.service
       if (updated) {
-        setEditDialog((prev) => {
-          if (!prev || prev.id !== serviceId) return prev
-          return {
-            ...prev,
-            ...updated,
-            newEnvVars: (updated.envVars || []).map((env) => ({
-              ...env,
-              value: env.secret ? '******' : env.value
-            })),
-            newProjectArchive: null,
-            healthcheck: normalizeHealthcheckForm(updated.healthcheck || {}),
-            autoRollback: updated.autoRollback ?? true,
-            versionMode: 'auto',
-            versionAppVersion: '',
-            versionBuildNumber: '',
-            versionChangeType: 'fix'
-          }
-        })
+        applyPublishedServiceToDialog(serviceId, updated)
       }
       setProjectUploadStatus({
         status: 'success',
@@ -2066,6 +2201,11 @@ const DockerPanel = ({ showPageIntro = true }) => {
       siteFolder: pending?.nodeSiteConfig?.siteFolder || svc.nodeSiteConfig?.siteFolder || NODE_SITE_FOLDERS[0],
       fallbackFile: pending?.nodeSiteConfig?.fallbackFile || svc.nodeSiteConfig?.fallbackFile || 'index.html'
     }
+    const rawCommandInput = pending?.command ?? svc.command
+    const commandInput =
+      svc.templateId === 'node-app' && isAutoNodeCommandInput(rawCommandInput)
+        ? ''
+        : formatCommandForInput(rawCommandInput)
     setEditDialog({
       ...svc,
       newEnvVars: (pending?.envVars || svc.envVars || []).map((env) => ({
@@ -2075,7 +2215,7 @@ const DockerPanel = ({ showPageIntro = true }) => {
       newHostPort: pending?.hostPort ?? svc.hostPort,
       newNetworkName: pending?.networkName || svc.networkName || 'provirpanel',
       newBindLocalOnly: pending?.bindLocalOnly ?? svc.bindLocalOnly ?? false,
-      commandInput: formatCommandForInput(pending?.command ?? svc.command),
+      commandInput,
       newProjectArchive: null,
       healthcheck: normalizeHealthcheckForm(pending?.healthcheck || svc.healthcheck || {}),
       autoRollback: pending?.autoRollback ?? svc.autoRollback ?? true,
@@ -2149,7 +2289,9 @@ const DockerPanel = ({ showPageIntro = true }) => {
 
       if (form.projectArchive && response.data.service?.id) {
         await uploadProjectArchive(response.data.service.id, form.projectArchive, {
-          envVars: form.envs || []
+          envVars: form.envs || [],
+          nodeServiceMode: form.nodeServiceMode,
+          nodeSiteConfig: form.nodeSiteConfig
         })
       }
       
@@ -2344,7 +2486,7 @@ const DockerPanel = ({ showPageIntro = true }) => {
                   />
                   Serviço
                   <span className="mt-1 block text-xs text-slate-400">
-                    Configuração atual sem alterações. Usa o comando informado ou detectado pelo projeto.
+                    Recebe o fonte completo, instala dependências, executa build quando existir e inicia o app.
                   </span>
                 </label>
                 <label className={`rounded-xl border p-3 text-sm ${serviceForm.nodeServiceMode === NODE_SERVICE_MODES.sites ? 'border-cyan-400 bg-cyan-500/10 text-white' : 'border-slate-800 bg-slate-950 text-slate-300'}`}>
@@ -2363,7 +2505,7 @@ const DockerPanel = ({ showPageIntro = true }) => {
                   />
                   Sites
                   <span className="mt-1 block text-xs text-slate-400">
-                    Gera um serviço Node para publicar sites estáticos usando a raiz <code>/</code>.
+                    Recebe arquivos já buildados e publica em <code>www</code> ou <code>publish</code>.
                   </span>
                 </label>
               </div>
@@ -2442,7 +2584,7 @@ const DockerPanel = ({ showPageIntro = true }) => {
 
                   <div className="rounded-xl border border-slate-800 bg-slate-950/70 p-3 text-xs text-slate-300">
                     <p className="font-semibold text-slate-200">Fluxo automático</p>
-                    <p className="mt-1">Ao criar ou atualizar, o serviço gera a estrutura base, grava o arquivo <code>.env</code>, roda <code>npm install</code> e inicia com <code>npm start</code>.</p>
+                    <p className="mt-1">Ao criar ou atualizar, o serviço gera a estrutura base, grava o arquivo <code>.env</code> e serve a pasta publicada.</p>
                   </div>
                 </div>
               )}
@@ -2614,7 +2756,7 @@ const DockerPanel = ({ showPageIntro = true }) => {
                 onChange={(e) => setServiceForm((p) => ({ ...p, command: e.target.value }))}
               />
               <p className="text-xs text-slate-400">
-                Deixe vazio para detectar package.json, entrypoint.sh/start.sh ou .jar enviado.
+                Deixe vazio para detectar package.json e executar install/build/start automaticamente.
               </p>
             </div>
           )}
@@ -3592,7 +3734,7 @@ const DockerPanel = ({ showPageIntro = true }) => {
                       />
                       Serviço
                       <span className="mt-1 block text-xs text-slate-400">
-                        Mantém o comportamento atual do serviço Node.
+                        Fonte completo: instala dependências, builda quando houver script e inicia o app.
                       </span>
                     </label>
                     <label className={`rounded-xl border p-3 text-sm ${editDialog.nodeServiceMode === NODE_SERVICE_MODES.sites ? 'border-cyan-400 bg-cyan-500/10 text-white' : 'border-slate-700 bg-slate-800 text-slate-300'}`}>
@@ -3610,7 +3752,7 @@ const DockerPanel = ({ showPageIntro = true }) => {
                       />
                       Sites
                       <span className="mt-1 block text-xs text-slate-400">
-                        Serve o conteúdo do site em <code>/</code> e recria a estrutura automaticamente.
+                        Arquivos já buildados: publica em <code>www</code> ou <code>publish</code> e serve estático.
                       </span>
                     </label>
                   </div>
@@ -3675,7 +3817,7 @@ const DockerPanel = ({ showPageIntro = true }) => {
                           }
                         />
                         <p className="text-xs text-slate-400 mt-1">
-                          Em modo Sites o comando é automático: <code>npm install && npm start</code>.
+                          Em modo Sites o painel mantém o servidor Node estático e troca só a pasta publicada.
                         </p>
                       </div>
                     </div>
@@ -3692,7 +3834,7 @@ const DockerPanel = ({ showPageIntro = true }) => {
                     onChange={(e) => setEditDialog(prev => ({ ...prev, commandInput: e.target.value }))}
                   />
                   <p className="text-xs text-slate-400 mt-1">
-                    Deixe vazio para detectar package.json, entrypoint.sh/start.sh ou .jar enviado.
+                    Deixe vazio para detectar package.json e executar install/build/start automaticamente.
                   </p>
                 </div>
               )}
@@ -4058,7 +4200,9 @@ const DockerPanel = ({ showPageIntro = true }) => {
                             envVars: editDialog.newEnvVars || [],
                             healthcheck: editDialog.healthcheck,
                             autoRollback: editDialog.autoRollback ?? true,
-                            versionMetadata: buildVersionPayload(editDialog)
+                            versionMetadata: buildVersionPayload(editDialog),
+                            nodeServiceMode: editDialog.nodeServiceMode,
+                            nodeSiteConfig: editDialog.nodeSiteConfig
                           })
                           if (ok) {
                             setEditDialog(prev => ({ ...prev, newProjectArchive: null }))
@@ -4316,7 +4460,9 @@ const DockerPanel = ({ showPageIntro = true }) => {
                       envVars: editDialog.newEnvVars || [],
                       healthcheck: editDialog.healthcheck,
                       autoRollback: editDialog.autoRollback ?? true,
-                      versionMetadata: buildVersionPayload(editDialog)
+                      versionMetadata: buildVersionPayload(editDialog),
+                      nodeServiceMode: editDialog.nodeServiceMode,
+                      nodeSiteConfig: editDialog.nodeSiteConfig
                     })
                     if (!ok) {
                       return
