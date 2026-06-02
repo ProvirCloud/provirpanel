@@ -12,6 +12,7 @@ import {
   Database,
   Download,
   Edit3,
+  GitBranch,
   Globe2,
   HardDrive,
   History,
@@ -39,6 +40,7 @@ import {
 import {
   serviceActivityApi,
   serviceEnvironmentApi,
+  githubDeliveryApi,
   serviceLogsApi,
   serviceMetricsApi,
   servicesApi
@@ -47,6 +49,7 @@ import {
 const TABS = [
   { id: 'overview', label: 'Overview', icon: Layers },
   { id: 'deploys', label: 'Deploys', icon: UploadCloud },
+  { id: 'delivery', label: 'Delivery', icon: GitBranch },
   { id: 'environment', label: 'Environment', icon: Lock },
   { id: 'logs', label: 'Logs', icon: Terminal },
   { id: 'metrics', label: 'Metrics', icon: BarChart3 },
@@ -1021,6 +1024,311 @@ const ServiceActivityTab = ({ service }) => {
   )
 }
 
+const splitRepoFullName = (fullName = '') => {
+  const [owner, repo] = String(fullName || '').split('/')
+  return { owner, repo }
+}
+
+const ServiceDeliveryTab = ({ service, onReload }) => {
+  const [connectionState, setConnectionState] = useState({ connections: [], defaultConnectionId: null })
+  const [token, setToken] = useState('')
+  const [repos, setRepos] = useState([])
+  const [branches, setBranches] = useState([])
+  const [selectedRepo, setSelectedRepo] = useState(service.delivery?.repository || '')
+  const [selectedBranch, setSelectedBranch] = useState(service.delivery?.branch || 'main')
+  const [analysis, setAnalysis] = useState(null)
+  const [selectedBlueprintId, setSelectedBlueprintId] = useState(service.delivery?.blueprint?.id || '')
+  const [deployMode, setDeployMode] = useState(service.delivery?.deployMode || 'manual')
+  const [workflow, setWorkflow] = useState(null)
+  const [message, setMessage] = useState('')
+  const [loadingAction, setLoadingAction] = useState('')
+
+  const connectionId = connectionState.defaultConnectionId
+  const selectedBlueprint = useMemo(() => {
+    const candidates = analysis?.blueprints || []
+    return candidates.find((blueprint) => blueprint.id === selectedBlueprintId) || candidates[0] || service.delivery?.blueprint || null
+  }, [analysis, selectedBlueprintId, service.delivery?.blueprint])
+
+  const loadStatus = useCallback(async () => {
+    const status = await githubDeliveryApi.status()
+    setConnectionState(status)
+    return status
+  }, [])
+
+  const loadRepos = useCallback(async (id = connectionId) => {
+    if (!id) return []
+    const items = await githubDeliveryApi.listRepositories(id)
+    setRepos(items)
+    if (!selectedRepo && items[0]) {
+      setSelectedRepo(items[0].fullName)
+      setSelectedBranch(items[0].defaultBranch || 'main')
+    }
+    return items
+  }, [connectionId, selectedRepo])
+
+  const loadBranches = useCallback(async () => {
+    if (!selectedRepo || !connectionId) return
+    const { owner, repo } = splitRepoFullName(selectedRepo)
+    if (!owner || !repo) return
+    const items = await githubDeliveryApi.listBranches({ connectionId, owner, repo })
+    setBranches(items)
+    if (!items.some((branch) => branch.name === selectedBranch)) {
+      setSelectedBranch(items[0]?.name || selectedBranch || 'main')
+    }
+  }, [connectionId, selectedBranch, selectedRepo])
+
+  useEffect(() => {
+    let active = true
+    loadStatus()
+      .then((status) => {
+        if (!active || !status.defaultConnectionId) return null
+        return githubDeliveryApi.listRepositories(status.defaultConnectionId)
+      })
+      .then((items) => {
+        if (!active || !Array.isArray(items)) return
+        setRepos(items)
+        if (!selectedRepo && items[0]) {
+          setSelectedRepo(items[0].fullName)
+          setSelectedBranch(items[0].defaultBranch || 'main')
+        }
+      })
+      .catch(() => {})
+    return () => {
+      active = false
+    }
+  }, [loadStatus, selectedRepo])
+
+  useEffect(() => {
+    loadBranches().catch(() => {})
+  }, [loadBranches])
+
+  const connectGithub = async () => {
+    setLoadingAction('connect')
+    setMessage('')
+    try {
+      const status = await githubDeliveryApi.connect({ token })
+      setConnectionState(status)
+      setToken('')
+      await loadRepos(status.defaultConnectionId)
+      setMessage('GitHub conectado.')
+    } catch (err) {
+      setMessage(err.response?.data?.message || err.message || 'Falha ao conectar GitHub')
+    } finally {
+      setLoadingAction('')
+    }
+  }
+
+  const analyzeRepo = async () => {
+    setLoadingAction('analyze')
+    setMessage('')
+    try {
+      const { owner, repo } = splitRepoFullName(selectedRepo)
+      const result = await githubDeliveryApi.analyze({ connectionId, owner, repo, branch: selectedBranch })
+      setAnalysis(result)
+      setSelectedBlueprintId(result.blueprints?.[0]?.id || '')
+      setMessage(`${result.blueprints?.length || 0} blueprint(s) detectado(s).`)
+    } catch (err) {
+      setMessage(err.response?.data?.message || err.message || 'Falha ao analisar repositório')
+    } finally {
+      setLoadingAction('')
+    }
+  }
+
+  const saveDelivery = async () => {
+    if (!selectedBlueprint) {
+      setMessage('Analise o repositório e selecione um blueprint.')
+      return
+    }
+    setLoadingAction('save')
+    setMessage('')
+    try {
+      await githubDeliveryApi.saveServiceDelivery(service.id, {
+        connectionId,
+        repository: selectedRepo,
+        branch: selectedBranch,
+        blueprint: selectedBlueprint,
+        deployMode,
+        healthcheck: selectedBlueprint.healthcheck
+      })
+      setMessage('Configuração Delivery salva no serviço.')
+      await onReload()
+    } catch (err) {
+      setMessage(err.response?.data?.message || err.message || 'Falha ao salvar Delivery')
+    } finally {
+      setLoadingAction('')
+    }
+  }
+
+  const generateWorkflow = async (saveToGitHub = false) => {
+    if (!selectedBlueprint) {
+      setMessage('Selecione um blueprint para gerar workflow.')
+      return
+    }
+    setLoadingAction(saveToGitHub ? 'save-workflow' : 'workflow')
+    setMessage('')
+    try {
+      const result = await githubDeliveryApi.generateWorkflow(service.id, {
+        connectionId,
+        repository: selectedRepo,
+        branch: selectedBranch,
+        blueprint: selectedBlueprint,
+        deployMode,
+        saveToGitHub
+      })
+      setWorkflow(result.workflow)
+      setMessage(saveToGitHub ? 'Workflow salvo no GitHub.' : 'Workflow gerado.')
+      await onReload()
+    } catch (err) {
+      setMessage(err.response?.data?.message || err.message || 'Falha ao gerar workflow')
+    } finally {
+      setLoadingAction('')
+    }
+  }
+
+  const dispatchWorkflow = async () => {
+    setLoadingAction('dispatch')
+    setMessage('')
+    try {
+      await githubDeliveryApi.dispatchWorkflow(service.id, {
+        connectionId,
+        repository: selectedRepo || service.delivery?.repository,
+        branch: selectedBranch || service.delivery?.branch,
+        workflowPath: service.delivery?.workflowPath || workflow?.path
+      })
+      setMessage('Workflow manual disparado no GitHub.')
+      await onReload()
+    } catch (err) {
+      setMessage(err.response?.data?.message || err.message || 'Falha ao disparar workflow')
+    } finally {
+      setLoadingAction('')
+    }
+  }
+
+  return (
+    <div className="grid gap-4 xl:grid-cols-[0.85fr_1.15fr]">
+      <Panel title="GitHub connection" icon={GitBranch}>
+        <div className="space-y-4">
+          {connectionState.connections?.length ? (
+            <div className="rounded-lg border border-emerald-500/20 bg-emerald-500/10 p-3 text-sm text-emerald-100">
+              Conectado como {connectionState.connections[0].accountLogin}. Repositórios disponíveis: {repos.length}.
+            </div>
+          ) : (
+            <div className="space-y-3">
+              <p className="text-sm text-slate-400">Use um fine-grained token com acesso de leitura aos repositórios. Para salvar workflow, inclua permissão de conteúdo escrita.</p>
+              <input className={`${fieldClass} w-full`} type="password" value={token} onChange={(event) => setToken(event.target.value)} placeholder="github_pat_..." />
+              <button className={primaryButtonClass} type="button" onClick={connectGithub} disabled={!token || loadingAction === 'connect'}>
+                {loadingAction === 'connect' ? <Loader2 className="h-4 w-4 animate-spin" /> : <GitBranch className="h-4 w-4" />}
+                Conectar GitHub
+              </button>
+            </div>
+          )}
+
+          <div className="grid gap-3">
+            <label className="block">
+              <span className="mb-2 block text-xs text-slate-500">Repositório</span>
+              <select className={`${fieldClass} w-full`} value={selectedRepo} onChange={(event) => setSelectedRepo(event.target.value)} disabled={!repos.length}>
+                <option value="">Selecione</option>
+                {repos.map((repo) => (
+                  <option key={repo.id} value={repo.fullName}>{repo.fullName}</option>
+                ))}
+              </select>
+            </label>
+            <label className="block">
+              <span className="mb-2 block text-xs text-slate-500">Branch</span>
+              <select className={`${fieldClass} w-full`} value={selectedBranch} onChange={(event) => setSelectedBranch(event.target.value)}>
+                {branches.length ? branches.map((branch) => (
+                  <option key={branch.name} value={branch.name}>{branch.name}</option>
+                )) : <option value={selectedBranch}>{selectedBranch}</option>}
+              </select>
+            </label>
+            <label className="block">
+              <span className="mb-2 block text-xs text-slate-500">Deploy</span>
+              <select className={`${fieldClass} w-full`} value={deployMode} onChange={(event) => setDeployMode(event.target.value)}>
+                <option value="manual">Manual</option>
+                <option value="push">Automático por push</option>
+                <option value="tag">Automático por tag v*</option>
+              </select>
+            </label>
+            <button className={smallButtonClass} type="button" onClick={analyzeRepo} disabled={!selectedRepo || !selectedBranch || loadingAction === 'analyze'}>
+              {loadingAction === 'analyze' ? <Loader2 className="h-4 w-4 animate-spin" /> : <Search className="h-4 w-4" />}
+              Analisar projeto
+            </button>
+          </div>
+          {message ? <p className="rounded-lg border border-slate-800 bg-slate-900 px-3 py-2 text-sm text-slate-300">{message}</p> : null}
+        </div>
+      </Panel>
+
+      <Panel title="Project blueprint" icon={Package}>
+        <div className="space-y-4">
+          {service.delivery ? (
+            <div className="rounded-lg border border-blue-500/20 bg-blue-500/10 p-3 text-sm text-blue-100">
+              Vinculado em {service.delivery.repository || '-'} / {service.delivery.branch || '-'} / {service.delivery.projectPath || '.'}
+            </div>
+          ) : null}
+
+          <div className="grid gap-3 lg:grid-cols-2">
+            {(analysis?.blueprints || (service.delivery?.blueprint ? [service.delivery.blueprint] : [])).map((blueprint) => (
+              <button
+                key={blueprint.id}
+                type="button"
+                className={`rounded-xl border p-3 text-left transition ${
+                  selectedBlueprint?.id === blueprint.id
+                    ? 'border-blue-500/50 bg-blue-500/10'
+                    : 'border-slate-800 bg-slate-900/40 hover:border-slate-600'
+                }`}
+                onClick={() => setSelectedBlueprintId(blueprint.id)}
+              >
+                <div className="flex items-center justify-between gap-3">
+                  <p className="font-semibold text-white">{blueprint.label}</p>
+                  <span className="rounded-full border border-slate-700 px-2 py-1 text-xs text-slate-400">{blueprint.confidence}</span>
+                </div>
+                <p className="mt-2 text-sm text-slate-400">{blueprint.projectPath || '.'}</p>
+                <p className="mt-1 text-xs text-slate-500">{blueprint.buildType} / {blueprint.imageName}</p>
+              </button>
+            ))}
+          </div>
+
+          {selectedBlueprint ? (
+            <div className="rounded-lg border border-slate-800 bg-slate-900/40 p-3 text-sm text-slate-300">
+              <div className="grid gap-2 sm:grid-cols-2">
+                <InfoRow label="Build" value={selectedBlueprint.buildCommand || selectedBlueprint.buildType} />
+                <InfoRow label="Artefato" value={selectedBlueprint.artifactPath || '.'} />
+                <InfoRow label="Porta" value={selectedBlueprint.containerPort} />
+                <InfoRow label="Healthcheck" value={selectedBlueprint.healthcheck?.target || '-'} />
+              </div>
+            </div>
+          ) : (
+            <p className="text-sm text-slate-500">Conecte o GitHub e analise um repositório para escolher o blueprint.</p>
+          )}
+
+          <div className="flex flex-wrap gap-2">
+            <button className={smallButtonClass} type="button" onClick={saveDelivery} disabled={!selectedBlueprint || loadingAction === 'save'}>
+              <Save className="h-4 w-4" />
+              Salvar vínculo
+            </button>
+            <button className={smallButtonClass} type="button" onClick={() => generateWorkflow(false)} disabled={!selectedBlueprint || loadingAction === 'workflow'}>
+              <Copy className="h-4 w-4" />
+              Gerar workflow
+            </button>
+            <button className={primaryButtonClass} type="button" onClick={() => generateWorkflow(true)} disabled={!selectedBlueprint || !selectedRepo || loadingAction === 'save-workflow'}>
+              {loadingAction === 'save-workflow' ? <Loader2 className="h-4 w-4 animate-spin" /> : <UploadCloud className="h-4 w-4" />}
+              Salvar workflow no GitHub
+            </button>
+            <button className={smallButtonClass} type="button" onClick={dispatchWorkflow} disabled={!(service.delivery?.workflowPath || workflow?.path) || loadingAction === 'dispatch'}>
+              {loadingAction === 'dispatch' ? <Loader2 className="h-4 w-4 animate-spin" /> : <Play className="h-4 w-4" />}
+              Executar workflow
+            </button>
+          </div>
+
+          {workflow?.content ? (
+            <textarea className={`${fieldClass} h-80 w-full font-mono text-xs`} value={workflow.content} readOnly />
+          ) : null}
+        </div>
+      </Panel>
+    </div>
+  )
+}
+
 const ServiceSettingsTab = ({ service, settingsState, setSettingsState, onReload }) => {
   const [saving, setSaving] = useState('')
   const [deleteText, setDeleteText] = useState('')
@@ -1300,6 +1608,7 @@ const ServiceDetailsPage = () => {
 
       {activeTab === 'overview' ? <ServiceOverviewTab service={service} detail={detail} activity={activity} /> : null}
       {activeTab === 'deploys' ? <ServiceDeploysTab service={service} onReload={loadDetails} /> : null}
+      {activeTab === 'delivery' ? <ServiceDeliveryTab service={service} onReload={loadDetails} /> : null}
       {activeTab === 'environment' ? (
         <ServiceEnvironmentTab service={service} envRows={envRows} setEnvRows={setEnvRows} onReload={loadDetails} />
       ) : null}

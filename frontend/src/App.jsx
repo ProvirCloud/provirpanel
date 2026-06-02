@@ -22,6 +22,7 @@ import NginxVisualEditorTest from './pages/NginxVisualEditorTest'
 import NginxVisualEditorFull from './pages/NginxVisualEditorFull'
 import ConsoleModulePage from './pages/ConsoleModulePage'
 import InfrastructureCanvasPage from './pages/InfrastructureCanvasPage'
+import GitHubServiceWizardPage from './pages/GitHubServiceWizardPage.jsx'
 import ServiceDetailsPage from './pages/ServiceDetailsPage.jsx'
 import StacksPanel from './components/StacksPanel.jsx'
 import api from './services/api.js'
@@ -120,6 +121,7 @@ const App = () => {
           <Route path="stacks/canvas" element={<ModulePage showHeader={false} title="Infrastructure Canvas" subtitle="Editor visual de stacks"><StacksPanel /></ModulePage>} />
           <Route path="terminal" element={<ModulePage title="Terminal" subtitle="Acesso operacional aos ambientes conectados"><Terminal showPageIntro={false} /></ModulePage>} />
           <Route path="docker" element={<ModulePage title="Container Service" subtitle="Serviços, containers e topologias dos ambientes"><DockerPanel showPageIntro={false} /></ModulePage>} />
+          <Route path="cloud/services/new/github" element={<ModulePage showHeader={false} title="New from GitHub" subtitle="Criar serviço a partir de repositório"><GitHubServiceWizardPage /></ModulePage>} />
           <Route path="cloud/services/:serviceId" element={<ModulePage showHeader={false} title="Service Details" subtitle="Operação, observabilidade e auditoria"><ServiceDetailsPage /></ModulePage>} />
           <Route path="sites" element={<SitesPanel />} />
           <Route path="nginx" element={<NginxCanvasPage />} />

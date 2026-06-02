@@ -253,3 +253,59 @@ export const serviceEnvironmentApi = {
     return this.upsert(serviceId, nextEnvVars, options)
   }
 }
+
+export const githubDeliveryApi = {
+  async status() {
+    const response = await api.get('/ci-cd/github/status')
+    return response.data
+  },
+
+  async connect({ token, label }) {
+    const response = await api.post('/ci-cd/github/connect', { token, label })
+    return response.data
+  },
+
+  async listRepositories(connectionId) {
+    const response = await api.get('/ci-cd/github/repositories', {
+      params: connectionId ? { connectionId } : {}
+    })
+    return response.data?.repositories || []
+  },
+
+  async listBranches({ connectionId, owner, repo }) {
+    const response = await api.get(`/ci-cd/github/repositories/${owner}/${repo}/branches`, {
+      params: connectionId ? { connectionId } : {}
+    })
+    return response.data?.branches || []
+  },
+
+  async analyze({ connectionId, owner, repo, branch }) {
+    const response = await api.post('/ci-cd/github/analyze', {
+      connectionId,
+      owner,
+      repo,
+      branch
+    })
+    return response.data?.analysis || response.data
+  },
+
+  async createServiceFromBlueprint(payload) {
+    const response = await api.post('/ci-cd/github/services/from-blueprint', payload)
+    return response.data
+  },
+
+  async saveServiceDelivery(serviceId, payload) {
+    const response = await api.put(`/ci-cd/github/services/${serviceId}/delivery`, payload)
+    return response.data
+  },
+
+  async generateWorkflow(serviceId, payload) {
+    const response = await api.post(`/ci-cd/github/services/${serviceId}/workflow`, payload)
+    return response.data
+  },
+
+  async dispatchWorkflow(serviceId, payload = {}) {
+    const response = await api.post(`/ci-cd/github/services/${serviceId}/workflow/dispatch`, payload)
+    return response.data
+  }
+}

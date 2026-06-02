@@ -18,6 +18,7 @@ import {
   Database,
   Globe,
   Cpu,
+  GitBranch,
   Folder,
   FolderPlus,
   GripVertical,
@@ -3631,6 +3632,13 @@ const DockerPanel = ({ showPageIntro = true }) => {
               }}
             >
               Sync status
+            </button>
+            <button
+              className="flex items-center gap-2 rounded-xl border border-slate-700 bg-slate-950/70 px-4 py-2 text-sm font-semibold text-slate-200 transition hover:border-blue-500/40 hover:text-white"
+              onClick={() => navigate('/cloud/services/new/github')}
+            >
+              <GitBranch className="h-4 w-4" />
+              New from GitHub
             </button>
             <button
               className="flex items-center gap-2 rounded-xl bg-blue-500 px-4 py-2 text-sm font-semibold text-slate-950 transition hover:bg-blue-400"
