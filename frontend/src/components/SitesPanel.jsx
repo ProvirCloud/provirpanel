@@ -6,6 +6,7 @@ import {
   Download,
   ExternalLink,
   FileArchive,
+  FolderOpen,
   Globe,
   KeyRound,
   LayoutList,
@@ -139,6 +140,12 @@ const downloadBlob = (blob, filename) => {
   link.click()
   link.remove()
   window.URL.revokeObjectURL(url)
+}
+
+const normalizeStoragePath = (value = '/') => {
+  const raw = String(value || '/').trim() || '/'
+  const withSlash = raw.startsWith('/') ? raw : `/${raw}`
+  return withSlash.replace(/\/+/g, '/')
 }
 
 const postUploadChunk = async (url, buildFormData, config = {}) => {
@@ -488,6 +495,24 @@ const SitesPanel = () => {
     }
   }
 
+  const openWpContentStorage = async (site = selectedSite, targetPath = '/') => {
+    if (!site) return
+    const normalizedPath = normalizeStoragePath(targetPath)
+    setBusy(`wp-content-${site.id}`)
+    setMessage(null)
+    try {
+      const response = await api.post(`/sites/${site.id}/wp-content/storage`)
+      const environmentId = response.data?.environment?.id || response.data?.wpContentStorage?.environmentId
+      if (!environmentId) {
+        throw new Error('Ambiente wp-content não foi criado')
+      }
+      window.location.assign(`/files?environmentId=${encodeURIComponent(environmentId)}&path=${encodeURIComponent(normalizedPath)}`)
+    } catch (err) {
+      setMessage({ type: 'error', text: getErrorMessage(err, 'Erro ao abrir wp-content') })
+      setBusy('')
+    }
+  }
+
   const deleteSite = async (site) => {
     if (!site) return
     const confirmed = await askConfirm({
@@ -719,6 +744,16 @@ const SitesPanel = () => {
                         }}
                       >
                         Manutenção
+                      </Button>
+                      <Button
+                        type="button"
+                        size="sm"
+                        variant="secondary"
+                        leadingIcon={<FolderOpen size={15} />}
+                        loading={busy === `wp-content-${site.id}`}
+                        onClick={() => openWpContentStorage(site, '/')}
+                      >
+                        wp-content
                       </Button>
                       <Button
                         type="button"
@@ -996,6 +1031,27 @@ const SitesPanel = () => {
                   </div>
                 ) : null}
 
+                <div className="rounded-lg border border-[var(--color-border-subtle)] bg-[var(--color-box-muted)] p-4">
+                  <div className="mb-3 flex items-center gap-2 text-sm font-semibold text-[var(--color-text)]">
+                    <FolderOpen size={16} />
+                    Arquivos do wp-content
+                  </div>
+                  <div className="flex flex-wrap gap-2">
+                    <Button type="button" variant="secondary" leadingIcon={<FolderOpen size={16} />} loading={busy === `wp-content-${selectedSite.id}`} onClick={() => openWpContentStorage(selectedSite, '/')}>
+                      Abrir wp-content
+                    </Button>
+                    <Button type="button" variant="ghost" loading={busy === `wp-content-${selectedSite.id}`} onClick={() => openWpContentStorage(selectedSite, '/themes')}>
+                      Temas
+                    </Button>
+                    <Button type="button" variant="ghost" loading={busy === `wp-content-${selectedSite.id}`} onClick={() => openWpContentStorage(selectedSite, '/plugins')}>
+                      Plugins
+                    </Button>
+                    <Button type="button" variant="ghost" loading={busy === `wp-content-${selectedSite.id}`} onClick={() => openWpContentStorage(selectedSite, '/uploads')}>
+                      Uploads
+                    </Button>
+                  </div>
+                </div>
+
                 <div className="flex flex-wrap gap-2">
                   <Button type="button" variant="secondary" leadingIcon={<Download size={16} />} loading={busy === `backup-${selectedSite.id}`} onClick={() => generateBackup(selectedSite)}>
                     Fazer backup
@@ -1041,6 +1097,11 @@ const SitesPanel = () => {
                 <div className="rounded-lg border border-[var(--color-border-subtle)] bg-[var(--color-box-muted)] p-3">
                   <p className="text-xs text-[var(--color-text-soft)]">Nginx</p>
                   <p className="mt-2 font-mono text-xs text-[var(--color-text)]">{selectedSite.nginxConfigName || 'pendente'}</p>
+                </div>
+                <div className="rounded-lg border border-[var(--color-border-subtle)] bg-[var(--color-box-muted)] p-3">
+                  <p className="text-xs text-[var(--color-text-soft)]">wp-content</p>
+                  <p className="mt-2 break-all font-mono text-xs text-[var(--color-text)]">{selectedSite.wpContentStorage?.basePath || selectedSite.paths?.wpContent || `${selectedSite.paths?.wordpress || ''}/wp-content`}</p>
+                  <p className="mt-1 break-all font-mono text-[10px] text-[var(--color-text-soft)]">{selectedSite.wpContentStorage?.environmentId || 'ambiente ainda não criado'}</p>
                 </div>
                 <div className="rounded-lg border border-[var(--color-border-subtle)] bg-[var(--color-box-muted)] p-3">
                   <p className="text-xs text-[var(--color-text-soft)]">Rotinas</p>

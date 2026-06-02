@@ -9,10 +9,12 @@ const { execFile } = require('child_process');
 const multer = require('multer');
 const DockerManager = require('../services/DockerManager');
 const NginxManager = require('../services/NginxManager');
+const { StorageEnvironmentManager, DEFAULT_PERMISSIONS } = require('../services/StorageEnvironmentManager');
 
 const router = express.Router();
 const dockerManager = new DockerManager();
 const nginxManager = new NginxManager();
+const storageEnvironmentManager = new StorageEnvironmentManager();
 
 const uploadTempDir = path.join(os.tmpdir(), 'provirpanel-sites-upload');
 const chunkUploadRoot = path.join(os.tmpdir(), 'provirpanel-sites-chunks');
@@ -800,6 +802,7 @@ const createWordPressSite = async (body = {}) => {
     siteDir,
     paths: {
       wordpress: wordpressDir,
+      wpContent: path.join(wordpressDir, 'wp-content'),
       database: databaseDir,
       migrations: migrationsDir
     },
@@ -961,6 +964,68 @@ const getSiteOr404 = (siteId) => {
     throw createHttpError('Site não encontrado', 404);
   }
   return site;
+};
+
+const buildWpContentStorageId = (site) => `site-${site.id}-wp-content`;
+
+const ensureWpContentStorageEnvironment = async (site) => {
+  if (!site.paths?.wordpress) {
+    throw createHttpError('Pasta do WordPress não encontrada para este site', 400);
+  }
+  const wpContentPath = site.paths.wpContent || path.join(site.paths.wordpress, 'wp-content');
+  fs.mkdirSync(wpContentPath, { recursive: true });
+  ['themes', 'plugins', 'uploads'].forEach((entry) => {
+    fs.mkdirSync(path.join(wpContentPath, entry), { recursive: true });
+  });
+
+  try {
+    await repairWordPressFilesystemPermissions(site);
+  } catch {
+    // Permission repair is best-effort; the file manager still points to the correct folder.
+  }
+
+  const environmentId = buildWpContentStorageId(site);
+  const payload = {
+    id: environmentId,
+    name: `WP Content - ${site.name}`,
+    provider: 'local',
+    isActive: true,
+    config: {
+      basePath: wpContentPath
+    },
+    permissions: DEFAULT_PERMISSIONS
+  };
+  let environment;
+  const existing = storageEnvironmentManager.listEnvironments().find((env) => env.id === environmentId);
+  if (existing) {
+    environment = storageEnvironmentManager.updateEnvironment(environmentId, payload);
+  } else {
+    environment = storageEnvironmentManager.createEnvironment(payload);
+  }
+
+  site.wpContentStorage = {
+    environmentId,
+    basePath: wpContentPath,
+    paths: {
+      root: '/',
+      themes: '/themes',
+      plugins: '/plugins',
+      uploads: '/uploads'
+    },
+    updatedAt: new Date().toISOString()
+  };
+  site.paths = {
+    ...(site.paths || {}),
+    wpContent: wpContentPath
+  };
+  site.updatedAt = new Date().toISOString();
+  saveSite(site);
+
+  return {
+    environment,
+    wpContentStorage: site.wpContentStorage,
+    fileManagerUrl: `/files?environmentId=${encodeURIComponent(environmentId)}&path=%2F`
+  };
 };
 
 const removeContainerById = async (containerId, warnings, label) => {
@@ -1127,6 +1192,15 @@ const removeSite = async (site, options = {}) => {
       warnings.push(`Serviço ${serviceId} não foi removido do registro: ${err.message}`);
     }
   });
+
+  const wpContentStorageId = site.wpContentStorage?.environmentId || buildWpContentStorageId(site);
+  try {
+    storageEnvironmentManager.deleteEnvironment(wpContentStorageId);
+  } catch (err) {
+    if (!/not found/i.test(err.message || '')) {
+      warnings.push(`Ambiente wp-content não foi removido: ${err.message}`);
+    }
+  }
 
   const networkName = getSiteNetworkName(site);
   if (networkName && networkName !== legacySitesNetworkName) {
@@ -1454,6 +1528,19 @@ router.post('/:id/backup', async (req, res, next) => {
     });
   } catch (err) {
     if (stagingDir) fs.rmSync(stagingDir, { recursive: true, force: true });
+    next(err);
+  }
+});
+
+router.post('/:id/wp-content/storage', async (req, res, next) => {
+  try {
+    const site = getSiteOr404(req.params.id);
+    const result = await ensureWpContentStorageEnvironment(site);
+    res.json({
+      ...result,
+      site: await decorateSite(site)
+    });
+  } catch (err) {
     next(err);
   }
 });

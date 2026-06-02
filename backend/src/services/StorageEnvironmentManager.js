@@ -248,7 +248,7 @@ class StorageEnvironmentManager {
     if (!environment) {
       throw new Error('Storage environment not found');
     }
-    if (environment.provider === 'local') {
+    if (environment.id === 'local-default') {
       throw new Error('Default local storage cannot be removed');
     }
     registry.environments = registry.environments.filter((env) => env.id !== environmentId);

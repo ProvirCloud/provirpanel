@@ -51,7 +51,8 @@ class StorageManager {
   safeResolve(targetPath = '/') {
     const cleaned = targetPath.startsWith('/') ? targetPath.slice(1) : targetPath;
     const resolved = path.resolve(this.basePath, cleaned);
-    if (!resolved.startsWith(this.basePath)) {
+    const relative = path.relative(this.basePath, resolved);
+    if (relative.startsWith('..') || path.isAbsolute(relative)) {
       throw new Error('Invalid path');
     }
     return resolved;

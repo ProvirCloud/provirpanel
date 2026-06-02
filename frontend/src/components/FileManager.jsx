@@ -34,6 +34,24 @@ const isArchiveName = (name) => {
   return ARCHIVE_SUFFIXES.some((suffix) => lowerName.endsWith(suffix))
 }
 
+const normalizeStoragePath = (value = '/') => {
+  const raw = String(value || '/').trim() || '/'
+  const withSlash = raw.startsWith('/') ? raw : `/${raw}`
+  return withSlash.replace(/\/+/g, '/')
+}
+
+const getInitialStorageTarget = () => {
+  if (typeof window === 'undefined') {
+    return { environmentId: '', path: '/', applied: false }
+  }
+  const params = new URLSearchParams(window.location.search)
+  return {
+    environmentId: params.get('environmentId') || '',
+    path: normalizeStoragePath(params.get('path') || '/'),
+    applied: false,
+  }
+}
+
 const iconFor = (name, isDir) => {
   if (isDir) return Folder
   const ext = name.split('.').pop().toLowerCase()
@@ -155,6 +173,7 @@ const FileManager = ({ showPageIntro = true }) => {
   const itemsRequestRef = useRef(0)
   const statsRequestRef = useRef(0)
   const previewRequestRef = useRef(0)
+  const initialStorageTargetRef = useRef(getInitialStorageTarget())
 
   const selectedEnvironment = environments.find((environment) => environment.id === selectedEnvironmentId) || null
   const selectedProviderMeta = providerCatalog.find((provider) => provider.id === environmentForm.provider)
@@ -171,9 +190,11 @@ const FileManager = ({ showPageIntro = true }) => {
     setProviderCatalog(nextCatalog)
     setEnvironments(nextEnvironments)
 
+    const preferredAvailable = preferredEnvironmentId && nextEnvironments.some((environment) => environment.id === preferredEnvironmentId)
+    const currentAvailable = selectedEnvironmentId && nextEnvironments.some((environment) => environment.id === selectedEnvironmentId)
     const nextEnvironmentId =
-      preferredEnvironmentId ||
-      selectedEnvironmentId ||
+      (preferredAvailable ? preferredEnvironmentId : '') ||
+      (currentAvailable ? selectedEnvironmentId : '') ||
       nextEnvironments[0]?.id ||
       ''
 
@@ -307,9 +328,8 @@ const FileManager = ({ showPageIntro = true }) => {
     let active = true
     ;(async () => {
       try {
-        const loaded = await loadProvidersAndEnvironments()
-        if (!active || !loaded.environmentId) return
-        await refreshEnvironment(loaded.environmentId, '/', loaded)
+        const initialTarget = initialStorageTargetRef.current
+        await loadProvidersAndEnvironments(initialTarget.environmentId)
       } catch (err) {
         if (active) {
           setToast(err.response?.data?.message || 'Erro ao carregar storages')
@@ -340,7 +360,13 @@ const FileManager = ({ showPageIntro = true }) => {
     let active = true
     if (!selectedEnvironmentId) return undefined
 
-    refreshEnvironment(selectedEnvironmentId, '/').catch((err) => {
+    const initialTarget = initialStorageTargetRef.current
+    const targetPath = !initialTarget.applied && initialTarget.environmentId === selectedEnvironmentId
+      ? initialTarget.path
+      : '/'
+    initialTarget.applied = true
+
+    refreshEnvironment(selectedEnvironmentId, targetPath).catch((err) => {
       if (active) {
         const status = err.response?.status
         const message = err.response?.data?.message || 'Erro ao carregar ambiente'
