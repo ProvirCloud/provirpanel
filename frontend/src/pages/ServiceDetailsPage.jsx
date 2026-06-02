@@ -1250,7 +1250,9 @@ const ServiceDeliveryTab = ({ service, onReload }) => {
           {!activeConnection || editingToken ? (
             <div className="space-y-3">
               <p className="text-sm text-slate-400">
-                {activeConnection ? 'Cole o novo token para substituir a conexão atual.' : 'Use um fine-grained token com acesso de leitura aos repositórios. Para salvar workflow, inclua permissão de conteúdo escrita.'}
+                {activeConnection ? 'Cole o novo token para substituir a conexão atual.' : <>
+                  Use um <a href="https://github.com/settings/personal-access-tokens/new" target="_blank" rel="noreferrer" className="text-blue-400 underline hover:text-blue-300">fine-grained token</a> com acesso de leitura aos repositórios. Para salvar workflow, inclua permissão de conteúdo escrita.
+                </>}
               </p>
               <input className={`${fieldClass} w-full`} type="password" value={token} onChange={(event) => setToken(event.target.value)} placeholder="github_pat_..." />
               <button className={primaryButtonClass} type="button" onClick={connectGithub} disabled={!token || loadingAction === 'connect'}>
