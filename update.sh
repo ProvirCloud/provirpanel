@@ -2,7 +2,7 @@
 set -euo pipefail
 
 INSTALL_DIR="$(pwd)/provirpanel"
-REPO_URL="git@github.com:ProvirCloud/provirpanel.git"
+REPO_URL="${PROVIRPANEL_REPO_URL:-git@github-zeus:ProvirCloud/provirpanel.git}"
 
 log() {
   printf "\n[update] %s\n" "$1"
@@ -71,7 +71,11 @@ configure_github_ssh() {
     ssh-keyscan github.com >> "${HOME}/.ssh/known_hosts" 2>/dev/null || true
   fi
 
-  export GIT_SSH_COMMAND="${GIT_SSH_COMMAND:-ssh -o StrictHostKeyChecking=accept-new}"
+  if [[ -f /root/.ssh/config ]]; then
+    export GIT_SSH_COMMAND="${GIT_SSH_COMMAND:-ssh -F /root/.ssh/config -o StrictHostKeyChecking=accept-new}"
+  else
+    export GIT_SSH_COMMAND="${GIT_SSH_COMMAND:-ssh -o StrictHostKeyChecking=accept-new}"
+  fi
 }
 
 configure_git_origin() {

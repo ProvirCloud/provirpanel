@@ -4,7 +4,7 @@ set -euo pipefail
 # CloudPainel one-liner installer (Linux only)
 # Usage: curl -fsSL https://example.com/install.sh | bash
 
-REPO_URL="git@github.com:ProvirCloud/provirpanel.git"
+REPO_URL="${PROVIRPANEL_REPO_URL:-git@github-zeus:ProvirCloud/provirpanel.git}"
 INSTALL_DIR="$(pwd)/provirpanel"
 NODE_MAJOR="22"
 ADMIN_USER="admin"
@@ -137,7 +137,11 @@ configure_github_ssh() {
     ssh-keyscan github.com >> "${HOME}/.ssh/known_hosts" 2>/dev/null || true
   fi
 
-  export GIT_SSH_COMMAND="${GIT_SSH_COMMAND:-ssh -o StrictHostKeyChecking=accept-new}"
+  if [[ -f /root/.ssh/config ]]; then
+    export GIT_SSH_COMMAND="${GIT_SSH_COMMAND:-ssh -F /root/.ssh/config -o StrictHostKeyChecking=accept-new}"
+  else
+    export GIT_SSH_COMMAND="${GIT_SSH_COMMAND:-ssh -o StrictHostKeyChecking=accept-new}"
+  fi
 }
 
 configure_git_origin() {
