@@ -726,9 +726,9 @@ const SitesPanel = () => {
                       </div>
                     </div>
 
-                    <div className="flex shrink-0 flex-wrap gap-2 xl:max-w-[360px] xl:justify-end">
+                    <div className="grid w-full shrink-0 grid-cols-2 gap-2 sm:grid-cols-3 xl:w-[360px] xl:grid-cols-2">
                       {site.url ? (
-                        <a className="zeus-btn zeus-btn-secondary min-h-[36px] px-3 py-2 text-xs" href={site.url} target="_blank" rel="noreferrer">
+                        <a className="zeus-btn zeus-btn-secondary min-h-[36px] w-full justify-center px-3 py-2 text-xs" href={site.url} target="_blank" rel="noreferrer">
                           <ExternalLink size={14} />
                           Abrir
                         </a>
@@ -737,6 +737,7 @@ const SitesPanel = () => {
                         type="button"
                         size="sm"
                         variant="secondary"
+                        className="w-full justify-center"
                         leadingIcon={<Wrench size={15} />}
                         onClick={() => {
                           setSelectedSiteId(site.id)
@@ -749,6 +750,7 @@ const SitesPanel = () => {
                         type="button"
                         size="sm"
                         variant="secondary"
+                        className="w-full justify-center"
                         leadingIcon={<FolderOpen size={15} />}
                         loading={busy === `wp-content-${site.id}`}
                         onClick={() => openWpContentStorage(site, '/')}
@@ -759,6 +761,7 @@ const SitesPanel = () => {
                         type="button"
                         size="sm"
                         variant="secondary"
+                        className="w-full justify-center"
                         leadingIcon={<Download size={15} />}
                         loading={busy === `backup-${site.id}`}
                         onClick={() => generateBackup(site)}
@@ -769,6 +772,7 @@ const SitesPanel = () => {
                         type="button"
                         size="sm"
                         variant="ghost"
+                        className="w-full justify-center"
                         leadingIcon={<UploadCloud size={15} />}
                         onClick={() => {
                           setSelectedSiteId(site.id)
@@ -781,6 +785,7 @@ const SitesPanel = () => {
                         type="button"
                         size="sm"
                         variant="danger"
+                        className="w-full justify-center"
                         leadingIcon={<Trash2 size={15} />}
                         loading={busy === `delete-${site.id}`}
                         onClick={() => deleteSite(site)}
