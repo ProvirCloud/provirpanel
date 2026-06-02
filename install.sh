@@ -4,7 +4,7 @@ set -euo pipefail
 # CloudPainel one-liner installer (Linux only)
 # Usage: curl -fsSL https://example.com/install.sh | bash
 
-REPO_URL="https://github.com/ProvirCloud/provirpanel.git"
+REPO_URL="git@github.com:ProvirCloud/provirpanel.git"
 INSTALL_DIR="$(pwd)/provirpanel"
 NODE_MAJOR="22"
 ADMIN_USER="admin"
@@ -115,14 +115,36 @@ install_packages() {
   log "Installing base packages"
   if [[ "${PKG_MANAGER}" == "apt" ]]; then
     apt-get update -y
-    apt-get install -y curl wget git ca-certificates gnupg lsb-release openssl nginx unzip tar
+    apt-get install -y curl wget git openssh-client ca-certificates gnupg lsb-release openssl nginx unzip tar
   elif [[ "${PKG_MANAGER}" == "dnf" ]]; then
-    dnf install -y curl wget git ca-certificates gnupg2 openssl nginx unzip tar
+    dnf install -y curl wget git openssh-clients ca-certificates gnupg2 openssl nginx unzip tar
   elif [[ "${PKG_MANAGER}" == "yum" ]]; then
-    yum install -y curl wget git ca-certificates gnupg2 openssl nginx unzip tar
+    yum install -y curl wget git openssh-clients ca-certificates gnupg2 openssl nginx unzip tar
   elif [[ "${PKG_MANAGER}" == "zypper" ]]; then
     zypper refresh
-    zypper install -y curl wget git ca-certificates gpg2 openssl nginx unzip tar
+    zypper install -y curl wget git openssh ca-certificates gpg2 openssl nginx unzip tar
+  fi
+}
+
+configure_github_ssh() {
+  log "Configuring GitHub SSH access"
+  mkdir -p "${HOME}/.ssh"
+  chmod 700 "${HOME}/.ssh"
+  touch "${HOME}/.ssh/known_hosts"
+  chmod 600 "${HOME}/.ssh/known_hosts"
+
+  if ! ssh-keygen -F github.com -f "${HOME}/.ssh/known_hosts" >/dev/null 2>&1; then
+    ssh-keyscan github.com >> "${HOME}/.ssh/known_hosts" 2>/dev/null || true
+  fi
+
+  export GIT_SSH_COMMAND="${GIT_SSH_COMMAND:-ssh -o StrictHostKeyChecking=accept-new}"
+}
+
+configure_git_origin() {
+  if git remote get-url origin >/dev/null 2>&1; then
+    git remote set-url origin "${REPO_URL}"
+  else
+    git remote add origin "${REPO_URL}"
   fi
 }
 
@@ -223,9 +245,10 @@ create_user() {
 
 clone_repo() {
   log "Cloning repository"
+  configure_github_ssh
   if [[ ! -d "${INSTALL_DIR}" ]]; then
     git clone "${REPO_URL}" "${INSTALL_DIR}" || {
-      log "Failed to clone repository. Make sure it's public or configure credentials."
+      log "Failed to clone repository. Configure an SSH key/deploy key authorized for ${REPO_URL} on this server."
       exit 1
     }
     chown -R provirpanel:provirpanel "${INSTALL_DIR}"
@@ -233,7 +256,11 @@ clone_repo() {
     log "Repository found, checking for updates"
     cd "${INSTALL_DIR}"
     git config --global --add safe.directory "${INSTALL_DIR}"
-    git fetch origin
+    configure_git_origin
+    git fetch origin || {
+      log "Failed to fetch repository. Configure an SSH key/deploy key authorized for ${REPO_URL} on this server."
+      exit 1
+    }
     if ! git diff --quiet HEAD origin/main; then
       log "Updates found, pulling latest changes"
       git reset --hard origin/main

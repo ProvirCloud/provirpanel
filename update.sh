@@ -2,6 +2,7 @@
 set -euo pipefail
 
 INSTALL_DIR="$(pwd)/provirpanel"
+REPO_URL="git@github.com:ProvirCloud/provirpanel.git"
 
 log() {
   printf "\n[update] %s\n" "$1"
@@ -57,6 +58,33 @@ configure_sites_runtime() {
   mkdir -p "${sites_dir}" "${INSTALL_DIR}/backend/data"
   chown -R provirpanel:provirpanel "${sites_dir}" "${INSTALL_DIR}/backend/data" 2>/dev/null || true
   chmod -R 775 "${sites_dir}" 2>/dev/null || true
+}
+
+configure_github_ssh() {
+  log "Configurando acesso Git SSH ao GitHub"
+  mkdir -p "${HOME}/.ssh"
+  chmod 700 "${HOME}/.ssh"
+  touch "${HOME}/.ssh/known_hosts"
+  chmod 600 "${HOME}/.ssh/known_hosts"
+
+  if ! ssh-keygen -F github.com -f "${HOME}/.ssh/known_hosts" >/dev/null 2>&1; then
+    ssh-keyscan github.com >> "${HOME}/.ssh/known_hosts" 2>/dev/null || true
+  fi
+
+  export GIT_SSH_COMMAND="${GIT_SSH_COMMAND:-ssh -o StrictHostKeyChecking=accept-new}"
+}
+
+configure_git_origin() {
+  if ! git rev-parse --is-inside-work-tree >/dev/null 2>&1; then
+    echo "Erro: ${INSTALL_DIR} nao e um repositorio Git"
+    exit 1
+  fi
+
+  if git remote get-url origin >/dev/null 2>&1; then
+    git remote set-url origin "${REPO_URL}"
+  else
+    git remote add origin "${REPO_URL}"
+  fi
 }
 
 install_certbot() {
@@ -158,14 +186,14 @@ cd "${INSTALL_DIR}"
 log "Verificando dependencias de extracao"
 if command -v apt-get >/dev/null 2>&1; then
   apt-get update -y
-  apt-get install -y unzip tar build-essential python3
+  apt-get install -y unzip tar build-essential python3 openssh-client
 elif command -v dnf >/dev/null 2>&1; then
-  dnf install -y unzip tar gcc gcc-c++ make python3
+  dnf install -y unzip tar gcc gcc-c++ make python3 openssh-clients
 elif command -v yum >/dev/null 2>&1; then
-  yum install -y unzip tar gcc gcc-c++ make python3
+  yum install -y unzip tar gcc gcc-c++ make python3 openssh-clients
 elif command -v zypper >/dev/null 2>&1; then
   zypper refresh
-  zypper install -y unzip tar gcc gcc-c++ make python3
+  zypper install -y unzip tar gcc gcc-c++ make python3 openssh
 fi
 
 install_certbot
@@ -204,7 +232,12 @@ fi
 
 log "Baixando atualizações"
 git config --global --add safe.directory "${INSTALL_DIR}"
-git fetch origin
+configure_github_ssh
+configure_git_origin
+git fetch origin || {
+  echo "Erro: falha ao acessar ${REPO_URL}. Configure uma chave SSH/deploy key autorizada no GitHub para este servidor."
+  exit 1
+}
 git reset --hard origin/main
 
 log "Atualizando dependências backend"
