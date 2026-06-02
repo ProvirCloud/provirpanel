@@ -1042,8 +1042,10 @@ const ServiceDeliveryTab = ({ service, onReload }) => {
   const [workflow, setWorkflow] = useState(null)
   const [message, setMessage] = useState('')
   const [loadingAction, setLoadingAction] = useState('')
+  const [editingToken, setEditingToken] = useState(false)
 
   const connectionId = connectionState.defaultConnectionId
+  const activeConnection = connectionState.connections?.[0] || null
   const selectedBlueprint = useMemo(() => {
     const candidates = analysis?.blueprints || []
     return candidates.find((blueprint) => blueprint.id === selectedBlueprintId) || candidates[0] || service.delivery?.blueprint || null
@@ -1109,10 +1111,31 @@ const ServiceDeliveryTab = ({ service, onReload }) => {
       const status = await githubDeliveryApi.connect({ token })
       setConnectionState(status)
       setToken('')
+      setEditingToken(false)
       await loadRepos(status.defaultConnectionId)
-      setMessage('GitHub conectado.')
+      setMessage(activeConnection ? 'Token GitHub atualizado.' : 'GitHub conectado.')
     } catch (err) {
       setMessage(err.response?.data?.message || err.message || 'Falha ao conectar GitHub')
+    } finally {
+      setLoadingAction('')
+    }
+  }
+
+  const removeGithubConnection = async () => {
+    if (!connectionId) return
+    if (!window.confirm('Remover a conexão GitHub salva neste painel?')) return
+    setLoadingAction('remove-connection')
+    setMessage('')
+    try {
+      const status = await githubDeliveryApi.removeConnection(connectionId)
+      setConnectionState(status)
+      setRepos([])
+      setBranches([])
+      setToken('')
+      setEditingToken(false)
+      setMessage('Conexão GitHub removida.')
+    } catch (err) {
+      setMessage(err.response?.data?.message || err.message || 'Falha ao remover conexão GitHub')
     } finally {
       setLoadingAction('')
     }
@@ -1208,20 +1231,34 @@ const ServiceDeliveryTab = ({ service, onReload }) => {
     <div className="grid gap-4 xl:grid-cols-[0.85fr_1.15fr]">
       <Panel title="GitHub connection" icon={GitBranch}>
         <div className="space-y-4">
-          {connectionState.connections?.length ? (
+          {activeConnection ? (
             <div className="rounded-lg border border-emerald-500/20 bg-emerald-500/10 p-3 text-sm text-emerald-100">
-              Conectado como {connectionState.connections[0].accountLogin}. Repositórios disponíveis: {repos.length}.
+              <div className="flex flex-wrap items-center justify-between gap-3">
+                <span>Conectado como {activeConnection.accountLogin}. Repositórios disponíveis: {repos.length}.</span>
+                <div className="flex flex-wrap gap-2">
+                  <button className={smallButtonClass} type="button" onClick={() => setEditingToken((value) => !value)}>
+                    {editingToken ? 'Cancelar alteração' : 'Alterar token'}
+                  </button>
+                  <button className="inline-flex items-center justify-center gap-2 rounded-lg border border-rose-500/30 bg-rose-500/10 px-3 py-2 text-xs font-medium text-rose-200 transition hover:bg-rose-500/20 disabled:cursor-not-allowed disabled:opacity-50" type="button" onClick={removeGithubConnection} disabled={loadingAction === 'remove-connection'}>
+                    {loadingAction === 'remove-connection' ? <Loader2 className="h-4 w-4 animate-spin" /> : <Trash2 className="h-4 w-4" />}
+                    Remover
+                  </button>
+                </div>
+              </div>
             </div>
-          ) : (
+          ) : null}
+          {!activeConnection || editingToken ? (
             <div className="space-y-3">
-              <p className="text-sm text-slate-400">Use um fine-grained token com acesso de leitura aos repositórios. Para salvar workflow, inclua permissão de conteúdo escrita.</p>
+              <p className="text-sm text-slate-400">
+                {activeConnection ? 'Cole o novo token para substituir a conexão atual.' : 'Use um fine-grained token com acesso de leitura aos repositórios. Para salvar workflow, inclua permissão de conteúdo escrita.'}
+              </p>
               <input className={`${fieldClass} w-full`} type="password" value={token} onChange={(event) => setToken(event.target.value)} placeholder="github_pat_..." />
               <button className={primaryButtonClass} type="button" onClick={connectGithub} disabled={!token || loadingAction === 'connect'}>
                 {loadingAction === 'connect' ? <Loader2 className="h-4 w-4 animate-spin" /> : <GitBranch className="h-4 w-4" />}
-                Conectar GitHub
+                {activeConnection ? 'Atualizar token' : 'Conectar GitHub'}
               </button>
             </div>
-          )}
+          ) : null}
 
           <div className="grid gap-3">
             <label className="block">

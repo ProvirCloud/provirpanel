@@ -265,6 +265,11 @@ export const githubDeliveryApi = {
     return response.data
   },
 
+  async removeConnection(connectionId) {
+    const response = await api.delete(`/ci-cd/github/connections/${connectionId}`)
+    return response.data
+  },
+
   async listRepositories(connectionId) {
     const response = await api.get('/ci-cd/github/repositories', {
       params: connectionId ? { connectionId } : {}

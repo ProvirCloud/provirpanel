@@ -211,6 +211,14 @@ router.post('/github/connect', async (req, res, next) => {
   }
 });
 
+router.delete('/github/connections/:connectionId', (req, res, next) => {
+  try {
+    res.json(githubDelivery.removeConnection(req.params.connectionId));
+  } catch (err) {
+    next(err);
+  }
+});
+
 router.get('/github/repositories', async (req, res, next) => {
   try {
     const repositories = await githubDelivery.listRepositories(req.query?.connectionId);

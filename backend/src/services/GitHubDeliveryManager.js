@@ -107,6 +107,30 @@ class GitHubDeliveryManager {
     };
   }
 
+  removeConnection(connectionId) {
+    const store = this.readStore();
+    const id = connectionId || store.defaultConnectionId;
+    const existing = store.connections.find((entry) => entry.id === id);
+    if (!existing) {
+      const err = new Error('Conexão GitHub não encontrada');
+      err.status = 404;
+      throw err;
+    }
+    const nextConnections = store.connections.filter((entry) => entry.id !== id);
+    const nextStore = {
+      connections: nextConnections,
+      defaultConnectionId:
+        store.defaultConnectionId === id
+          ? nextConnections[0]?.id || null
+          : store.defaultConnectionId
+    };
+    this.writeStore(nextStore);
+    return {
+      removedConnection: this.sanitizeConnection(existing),
+      ...this.listConnections()
+    };
+  }
+
   getConnection(connectionId = null) {
     const store = this.readStore();
     const id = connectionId || store.defaultConnectionId;

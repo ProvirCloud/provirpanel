@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useMemo, useState } from 'react'
 import { useNavigate } from 'react-router-dom'
-import { ArrowLeft, GitBranch, Loader2, Package, Search, Server, UploadCloud } from 'lucide-react'
+import { ArrowLeft, GitBranch, Loader2, Package, Search, Server, Trash2 } from 'lucide-react'
 import { githubDeliveryApi } from '../services/serviceDetailsApi.js'
 
 const fieldClass = 'rounded-lg border border-slate-700 bg-slate-950 px-3 py-2 text-sm text-white outline-none transition placeholder:text-slate-600 focus:border-blue-500/60'
@@ -42,8 +42,10 @@ const GitHubServiceWizardPage = () => {
   const [deployMode, setDeployMode] = useState('manual')
   const [loadingAction, setLoadingAction] = useState('')
   const [message, setMessage] = useState('')
+  const [editingToken, setEditingToken] = useState(false)
 
   const connectionId = connectionState.defaultConnectionId
+  const activeConnection = connectionState.connections?.[0] || null
   const selectedBlueprint = useMemo(() => {
     const blueprints = analysis?.blueprints || []
     return blueprints.find((blueprint) => blueprint.id === selectedBlueprintId) || blueprints[0] || null
@@ -112,10 +114,35 @@ const GitHubServiceWizardPage = () => {
       const status = await githubDeliveryApi.connect({ token })
       setConnectionState(status)
       setToken('')
+      setEditingToken(false)
       await loadRepos(status.defaultConnectionId)
-      setMessage('GitHub conectado.')
+      setMessage(activeConnection ? 'Token GitHub atualizado.' : 'GitHub conectado.')
     } catch (err) {
       setMessage(err.response?.data?.message || err.message || 'Falha ao conectar GitHub')
+    } finally {
+      setLoadingAction('')
+    }
+  }
+
+  const removeGithubConnection = async () => {
+    if (!connectionId) return
+    if (!window.confirm('Remover a conexão GitHub salva neste painel?')) return
+    setLoadingAction('remove-connection')
+    setMessage('')
+    try {
+      const status = await githubDeliveryApi.removeConnection(connectionId)
+      setConnectionState(status)
+      setRepos([])
+      setBranches([])
+      setSelectedRepo('')
+      setSelectedBranch('main')
+      setAnalysis(null)
+      setSelectedBlueprintId('')
+      setToken('')
+      setEditingToken(false)
+      setMessage('Conexão GitHub removida.')
+    } catch (err) {
+      setMessage(err.response?.data?.message || err.message || 'Falha ao remover conexão GitHub')
     } finally {
       setLoadingAction('')
     }
@@ -179,9 +206,9 @@ const GitHubServiceWizardPage = () => {
             <p className="text-xs uppercase tracking-[0.24em] text-blue-200/70">GitHub Delivery</p>
             <h1 className="mt-1 text-2xl font-semibold text-white">New from GitHub</h1>
           </div>
-          {connectionState.connections?.length ? (
+          {activeConnection ? (
             <span className="rounded-full border border-emerald-500/30 bg-emerald-500/10 px-3 py-1 text-xs text-emerald-200">
-              {connectionState.connections[0].accountLogin}
+              {activeConnection.accountLogin}
             </span>
           ) : null}
         </div>
@@ -194,14 +221,33 @@ const GitHubServiceWizardPage = () => {
             GitHub
           </h2>
           <div className="space-y-3">
-            {!connectionState.connections?.length ? (
-              <>
+            {activeConnection ? (
+              <div className="rounded-lg border border-emerald-500/20 bg-emerald-500/10 p-3 text-sm text-emerald-100">
+                <div className="flex flex-wrap items-center justify-between gap-3">
+                  <span>Conectado como {activeConnection.accountLogin}.</span>
+                  <div className="flex flex-wrap gap-2">
+                    <button className={smallButtonClass} type="button" onClick={() => setEditingToken((value) => !value)}>
+                      {editingToken ? 'Cancelar alteração' : 'Alterar token'}
+                    </button>
+                    <button className="inline-flex items-center justify-center gap-2 rounded-lg border border-rose-500/30 bg-rose-500/10 px-3 py-2 text-xs font-medium text-rose-200 transition hover:bg-rose-500/20 disabled:cursor-not-allowed disabled:opacity-50" type="button" onClick={removeGithubConnection} disabled={loadingAction === 'remove-connection'}>
+                      {loadingAction === 'remove-connection' ? <Loader2 className="h-4 w-4 animate-spin" /> : <Trash2 className="h-4 w-4" />}
+                      Remover
+                    </button>
+                  </div>
+                </div>
+              </div>
+            ) : null}
+            {!activeConnection || editingToken ? (
+              <div className="space-y-3">
+                <p className="text-sm text-slate-400">
+                  {activeConnection ? 'Cole o novo token para substituir a conexão atual.' : 'Use um fine-grained token com acesso aos repositórios.'}
+                </p>
                 <input className={`${fieldClass} w-full`} type="password" value={token} onChange={(event) => setToken(event.target.value)} placeholder="github_pat_..." />
                 <button className={primaryButtonClass} type="button" onClick={connectGithub} disabled={!token || loadingAction === 'connect'}>
                   {loadingAction === 'connect' ? <Loader2 className="h-4 w-4 animate-spin" /> : <GitBranch className="h-4 w-4" />}
-                  Conectar
+                  {activeConnection ? 'Atualizar token' : 'Conectar'}
                 </button>
-              </>
+              </div>
             ) : null}
             <label className="block">
               <span className="mb-2 block text-xs text-slate-500">Repositório</span>
