@@ -366,6 +366,11 @@ const escapeSql = (value) =>
     .replace(/\\/g, '\\\\')
     .replace(/'/g, "\\'");
 
+const getSafeTablePrefix = (site) => {
+  const prefix = site.wordpress?.tablePrefix || 'wp_';
+  return /^[a-zA-Z0-9_]+$/.test(prefix) ? prefix : 'wp_';
+};
+
 const getSiteUrl = (site) => `${site.ssl ? 'https' : 'http'}://${site.domain}`;
 
 const buildNginxConfig = (site, hostPort) => `server {
@@ -623,7 +628,7 @@ const importSqlFile = async (site, sqlFile) => {
 };
 
 const updateWordPressUrls = async (site) => {
-  const prefix = site.wordpress?.tablePrefix || 'wp_';
+  const prefix = getSafeTablePrefix(site);
   const url = getSiteUrl(site);
   await runSql(site, `UPDATE ${prefix}options SET option_value='${escapeSql(url)}' WHERE option_name IN ('siteurl','home');`);
 };
@@ -698,7 +703,7 @@ const truncateCacheTablesIfPresent = async (site, tables) => {
 };
 
 const cleanupWordPressCacheDatabase = async (site) => {
-  const prefix = site.wordpress?.tablePrefix || 'wp_';
+  const prefix = getSafeTablePrefix(site);
   const disabledOptions = [
     'litespeed.conf.guest',
     'litespeed.conf.guest_optm',
@@ -958,6 +963,192 @@ const getSiteOr404 = (siteId) => {
   return site;
 };
 
+const removeContainerById = async (containerId, warnings, label) => {
+  if (!containerId) return;
+  try {
+    await dockerManager.docker.getContainer(containerId).remove({ force: true });
+  } catch (err) {
+    warnings.push(`${label} não foi removido automaticamente: ${err.message}`);
+  }
+};
+
+const sanitizeSiteForBackupConfig = (site) => ({
+  ...sanitizeSiteForClient(site),
+  backupNote: 'Senhas sensíveis foram mascaradas. Atualize wp-config.php com as credenciais da nova instância ao restaurar.'
+});
+
+const buildRestoreReadme = (site, filename) => `# Restaurar WordPress - ${site.name}
+
+Backup gerado pelo ProvirPanel em ${new Date().toISOString()}.
+
+## Conteúdo do pacote
+
+- \`wordpress/\`: arquivos do WordPress, incluindo \`wp-content\`, plugins, temas, uploads e \`wp-config.php\` quando existir.
+- \`database/wordpress.sql\`: dump do banco de dados.
+- \`config/provirpanel-site.json\`: metadados do site no painel, com senhas mascaradas.
+- \`config/nginx.conf\`: configuração Nginx usada pelo painel, quando disponível.
+
+## Restaurar em uma instância básica de WordPress
+
+1. Crie uma instalação limpa de WordPress com MySQL ou MariaDB.
+2. Pare temporariamente o WordPress ou coloque o site em manutenção.
+3. Copie o conteúdo da pasta \`wordpress/\` para a raiz pública da nova instalação.
+4. Ajuste permissões: diretórios \`755\`, arquivos \`644\` e \`wp-content\` gravável pelo usuário do PHP.
+5. Crie um banco vazio e importe o dump:
+
+\`\`\`bash
+mysql -u USUARIO -p NOME_DO_BANCO < database/wordpress.sql
+\`\`\`
+
+6. Edite \`wp-config.php\` e atualize \`DB_NAME\`, \`DB_USER\`, \`DB_PASSWORD\` e \`DB_HOST\`.
+7. Se o domínio mudou, atualize \`siteurl\` e \`home\` no banco:
+
+\`\`\`sql
+UPDATE wp_options SET option_value='https://novo-dominio.com.br' WHERE option_name IN ('siteurl','home');
+\`\`\`
+
+8. Limpe caches de plugins e, se necessário, gere novamente links permanentes no painel do WordPress.
+9. Aponte o Nginx/Apache para a nova raiz pública e valide o acesso ao \`/wp-admin\`.
+
+Arquivo: ${filename}
+Domínio original: ${site.domain}
+`;
+
+const dumpDatabaseToFile = async (site, sqlFile) => {
+  if (!site.containers?.database) {
+    throw createHttpError('Container de banco não encontrado para este site', 400);
+  }
+  const status = await inspectContainerStatus(site.containers.database);
+  if (status !== 'running') {
+    throw createHttpError('O banco precisa estar em execução para gerar o backup completo.', 400);
+  }
+  const db = site.database || {};
+  const script = [
+    'set -e',
+    'DUMP="$(command -v mariadb-dump || command -v mysqldump)"',
+    '"$DUMP" --single-transaction --quick --routines --triggers -u"$PROVIR_DB_USER" -p"$PROVIR_DB_PASS" "$PROVIR_DB_NAME"'
+  ].join('\n');
+  const result = await dockerExecShell(
+    site.containers.database,
+    script,
+    {
+      PROVIR_DB_USER: db.user || 'wordpress',
+      PROVIR_DB_PASS: db.password || '',
+      PROVIR_DB_NAME: db.name || 'wordpress'
+    },
+    { maxBuffer: 1024 * 1024 * 1024 }
+  );
+  fs.writeFileSync(sqlFile, result.stdout, 'utf8');
+};
+
+const generateSiteBackup = async (site) => {
+  if (!site.paths?.wordpress || !fs.existsSync(site.paths.wordpress)) {
+    throw createHttpError('Pasta do WordPress não encontrada para backup', 400);
+  }
+
+  const backupId = new Date().toISOString().replace(/[-:]/g, '').replace(/\..+/, '');
+  const backupDir = path.join(site.paths?.backups || path.join(site.siteDir, 'backups'));
+  const stagingDir = path.join(backupDir, `work-${backupId}`);
+  const filename = `${slugify(site.name, 'wordpress')}-${backupId}.tar.gz`;
+  const archivePath = path.join(backupDir, filename);
+  fs.mkdirSync(path.join(stagingDir, 'database'), { recursive: true });
+  fs.mkdirSync(path.join(stagingDir, 'config'), { recursive: true });
+
+  try {
+    await dumpDatabaseToFile(site, path.join(stagingDir, 'database', 'wordpress.sql'));
+    fs.writeFileSync(path.join(stagingDir, 'README-restore.md'), buildRestoreReadme(site, filename), 'utf8');
+    fs.writeFileSync(
+      path.join(stagingDir, 'config', 'provirpanel-site.json'),
+      JSON.stringify(sanitizeSiteForBackupConfig(site), null, 2),
+      'utf8'
+    );
+    if (site.nginxConfigName) {
+      try {
+        const nginxConfigPath = nginxManager.resolveConfigPath(site.nginxConfigName);
+        if (fs.existsSync(nginxConfigPath)) {
+          fs.copyFileSync(nginxConfigPath, path.join(stagingDir, 'config', 'nginx.conf'));
+        }
+      } catch (err) {
+        fs.writeFileSync(path.join(stagingDir, 'config', 'nginx-warning.txt'), err.message, 'utf8');
+      }
+    }
+
+    const wordpressLink = path.join(stagingDir, 'wordpress');
+    try {
+      fs.symlinkSync(site.paths.wordpress, wordpressLink, 'dir');
+    } catch (err) {
+      fs.cpSync(site.paths.wordpress, wordpressLink, { recursive: true, force: true });
+    }
+
+    await ensureExtractor('tar', 'tar');
+    await runCommand('tar', ['-czhf', archivePath, '-C', stagingDir, '.'], { timeout: 900000, maxBuffer: 50 * 1024 * 1024 });
+    site.lastBackup = {
+      id: backupId,
+      filename,
+      archivePath,
+      createdAt: new Date().toISOString()
+    };
+    site.updatedAt = new Date().toISOString();
+    saveSite(site);
+    return { archivePath, filename, stagingDir };
+  } catch (err) {
+    fs.rmSync(stagingDir, { recursive: true, force: true });
+    throw err;
+  }
+};
+
+const removeSite = async (site, options = {}) => {
+  const confirmName = String(options.confirmName || '').trim();
+  if (confirmName !== site.name) {
+    throw createHttpError('Digite o nome exato do site para confirmar a exclusão.', 400);
+  }
+
+  const warnings = [];
+  await removeContainerById(site.containers?.wordpress, warnings, 'Container WordPress');
+  await removeContainerById(site.containers?.database, warnings, 'Container de banco');
+
+  if (site.nginxConfigName) {
+    try {
+      nginxManager.deleteConfig(site.nginxConfigName);
+      try {
+        nginxManager.reload();
+      } catch (err) {
+        warnings.push(`Nginx removido, mas o reload falhou: ${err.message}`);
+      }
+    } catch (err) {
+      warnings.push(`Configuração Nginx não foi removida: ${err.message}`);
+    }
+  }
+
+  [site.services?.wordpress, site.services?.database].filter(Boolean).forEach((serviceId) => {
+    try {
+      dockerManager.removeService(serviceId);
+    } catch (err) {
+      warnings.push(`Serviço ${serviceId} não foi removido do registro: ${err.message}`);
+    }
+  });
+
+  const networkName = getSiteNetworkName(site);
+  if (networkName && networkName !== legacySitesNetworkName) {
+    try {
+      await runCommand('docker', ['network', 'rm', networkName], { timeout: 30000 });
+    } catch (err) {
+      warnings.push(`Rede Docker ${networkName} não foi removida: ${err.message}`);
+    }
+  }
+
+  if (options.removeFiles !== false && site.siteDir) {
+    try {
+      fs.rmSync(site.siteDir, { recursive: true, force: true });
+    } catch (err) {
+      warnings.push(`Arquivos locais não foram removidos: ${err.message}`);
+    }
+  }
+
+  writeSites(readSites().filter((entry) => entry.id !== site.id));
+  return warnings;
+};
+
 const requireMigrationTargetReady = async (site) => {
   if (!site?.containers?.database) {
     throw createHttpError('A migração precisa de um site WordPress criado com banco de dados.', 400);
@@ -1190,21 +1381,79 @@ router.post('/:id/reset-password', async (req, res, next) => {
   try {
     const site = getSiteOr404(req.params.id);
     const username = String(req.body?.username || site.wordpress?.adminUser || 'admin').trim();
-    const password = String(req.body?.password || '').trim() || randomPassword(18);
-    const prefix = site.wordpress?.tablePrefix || 'wp_';
+    const rawPassword = String(req.body?.password || '').trim();
+    const shouldChangePassword = Boolean(rawPassword || req.body?.generatePassword);
+    const password = shouldChangePassword ? rawPassword || randomPassword(18) : null;
+    const email = String(req.body?.email || '').trim();
+    const displayName = String(req.body?.displayName || '').trim();
+    const firstName = String(req.body?.firstName || '').trim();
+    const lastName = String(req.body?.lastName || '').trim();
+    const prefix = getSafeTablePrefix(site);
+    const userCheck = await runSql(
+      site,
+      `SELECT ID FROM ${prefix}users WHERE user_login='${escapeSql(username)}' LIMIT 1;`
+    );
+    if (!/\d+/.test(userCheck.stdout || '')) {
+      throw createHttpError('Usuário WordPress não encontrado', 404);
+    }
+    const assignments = [];
+    if (shouldChangePassword) assignments.push(`user_pass=MD5('${escapeSql(password)}')`);
+    if (email) assignments.push(`user_email='${escapeSql(email)}'`);
+    if (displayName) assignments.push(`display_name='${escapeSql(displayName)}'`, `user_nicename='${escapeSql(slugify(displayName, username))}'`);
+    const metaRows = [
+      firstName ? ['first_name', firstName] : null,
+      lastName ? ['last_name', lastName] : null,
+      displayName ? ['nickname', displayName] : null
+    ].filter(Boolean);
+    const metaSql = metaRows.length
+      ? [
+          `SET @provir_user_id := (SELECT ID FROM ${prefix}users WHERE user_login='${escapeSql(username)}' LIMIT 1);`,
+          `DELETE FROM ${prefix}usermeta WHERE user_id=@provir_user_id AND meta_key IN (${metaRows.map(([key]) => `'${escapeSql(key)}'`).join(',')});`,
+          metaRows
+            .map(([key, value]) => `INSERT INTO ${prefix}usermeta (user_id, meta_key, meta_value) SELECT @provir_user_id, '${escapeSql(key)}', '${escapeSql(value)}' WHERE @provir_user_id IS NOT NULL;`)
+            .join(' ')
+        ].join(' ')
+      : '';
+    if (!assignments.length && !metaRows.length) {
+      throw createHttpError('Informe uma senha nova, marque gerar senha ou altere algum dado do perfil.', 400);
+    }
+    const updateUserSql = assignments.length
+      ? `UPDATE ${prefix}users SET ${assignments.join(', ')} WHERE user_login='${escapeSql(username)}' LIMIT 1;`
+      : '';
     await runSql(
       site,
-      `UPDATE ${prefix}users SET user_pass=MD5('${escapeSql(password)}') WHERE user_login='${escapeSql(username)}' LIMIT 1;`
+      `${updateUserSql} ${metaSql}`
     );
     site.wordpress = {
       ...(site.wordpress || {}),
       adminUser: username,
-      lastPasswordResetAt: new Date().toISOString()
+      adminEmail: email || site.wordpress?.adminEmail,
+      adminDisplayName: displayName || site.wordpress?.adminDisplayName,
+      adminFirstName: firstName || site.wordpress?.adminFirstName,
+      adminLastName: lastName || site.wordpress?.adminLastName,
+      ...(shouldChangePassword ? { lastPasswordResetAt: new Date().toISOString() } : {})
     };
     site.updatedAt = new Date().toISOString();
     saveSite(site);
-    res.json({ site: await decorateSite(site), username, password });
+    res.json({ site: await decorateSite(site), username, password, generated: shouldChangePassword && !rawPassword });
   } catch (err) {
+    next(err);
+  }
+});
+
+router.post('/:id/backup', async (req, res, next) => {
+  let stagingDir = null;
+  try {
+    const site = getSiteOr404(req.params.id);
+    const backup = await generateSiteBackup(site);
+    stagingDir = backup.stagingDir;
+    res.setHeader('X-ProvirPanel-Backup-File', backup.filename);
+    res.download(backup.archivePath, backup.filename, (err) => {
+      if (stagingDir) fs.rmSync(stagingDir, { recursive: true, force: true });
+      if (err && !res.headersSent) next(err);
+    });
+  } catch (err) {
+    if (stagingDir) fs.rmSync(stagingDir, { recursive: true, force: true });
     next(err);
   }
 });
@@ -1300,6 +1549,19 @@ router.post('/:id/migrate/complete', async (req, res, next) => {
     });
   } catch (err) {
     if (uploadId) cleanupChunkUpload(uploadId);
+    next(err);
+  }
+});
+
+router.delete('/:id', async (req, res, next) => {
+  try {
+    const site = getSiteOr404(req.params.id);
+    const warnings = await removeSite(site, {
+      confirmName: req.body?.confirmName,
+      removeFiles: req.body?.removeFiles !== false
+    });
+    res.json({ ok: true, removedId: site.id, warnings });
+  } catch (err) {
     next(err);
   }
 });

@@ -3,10 +3,12 @@ import {
   AlertTriangle,
   CheckCircle2,
   Database,
+  Download,
   ExternalLink,
   FileArchive,
   Globe,
   KeyRound,
+  LayoutList,
   LoaderCircle,
   Lock,
   Plus,
@@ -14,12 +16,15 @@ import {
   Server,
   Settings2,
   Shield,
+  Trash2,
   UploadCloud,
+  UserRound,
   Wrench,
 } from 'lucide-react'
 import api, { uploadApi } from '../services/api.js'
 import Button from './ui/Button'
 import Input from './ui/Input'
+import { useConfirm } from './ui/ConfirmModal'
 
 const UPLOAD_CHUNK_SIZE_BYTES = 25 * 1024 * 1024
 
@@ -43,9 +48,9 @@ const serviceOptions = [
 ]
 
 const tabs = [
-  { id: 'create', label: 'Criar', icon: Plus },
-  { id: 'migrate', label: 'Migrar', icon: UploadCloud },
-  { id: 'operate', label: 'Operar', icon: Wrench },
+  { id: 'overview', label: 'Sites', icon: LayoutList },
+  { id: 'operate', label: 'Manutenção', icon: Wrench },
+  { id: 'migrate', label: 'Restaurar', icon: UploadCloud },
 ]
 
 const Field = ({ label, children }) => (
@@ -72,6 +77,15 @@ const Panel = ({ title, icon: Icon, action, children }) => (
   </section>
 )
 
+const StatusPill = ({ ok, children }) => (
+  <span className={`inline-flex min-h-[26px] items-center gap-1 rounded-full px-2.5 py-1 text-xs font-semibold ${
+    ok ? 'bg-emerald-500/12 text-emerald-200' : 'bg-amber-500/12 text-amber-200'
+  }`}>
+    {ok ? <CheckCircle2 size={13} /> : <AlertTriangle size={13} />}
+    {children}
+  </span>
+)
+
 const formatBytes = (value) => {
   const bytes = Number(value || 0)
   if (!bytes) return '0 B'
@@ -82,6 +96,50 @@ const formatBytes = (value) => {
 
 const getErrorMessage = (err, fallback) =>
   err?.response?.data?.message || err?.response?.data?.error || err?.message || fallback
+
+const getBlobAwareErrorMessage = async (err, fallback) => {
+  const data = err?.response?.data
+  if (data instanceof Blob) {
+    try {
+      const text = await data.text()
+      const parsed = JSON.parse(text)
+      return parsed.message || parsed.error || fallback
+    } catch {
+      return fallback
+    }
+  }
+  return getErrorMessage(err, fallback)
+}
+
+const formatDateTime = (value) => {
+  if (!value) return 'Nunca'
+  const date = new Date(value)
+  if (Number.isNaN(date.getTime())) return 'Nunca'
+  return date.toLocaleString('pt-BR', {
+    day: '2-digit',
+    month: '2-digit',
+    year: 'numeric',
+    hour: '2-digit',
+    minute: '2-digit',
+  })
+}
+
+const getDownloadFilename = (response, fallback) => {
+  const disposition = response.headers?.['content-disposition'] || ''
+  const match = disposition.match(/filename="?([^"]+)"?/i)
+  return match?.[1] || response.headers?.['x-provirpanel-backup-file'] || fallback
+}
+
+const downloadBlob = (blob, filename) => {
+  const url = window.URL.createObjectURL(blob)
+  const link = document.createElement('a')
+  link.href = url
+  link.download = filename
+  document.body.appendChild(link)
+  link.click()
+  link.remove()
+  window.URL.revokeObjectURL(url)
+}
 
 const postUploadChunk = async (url, buildFormData, config = {}) => {
   let lastError = null
@@ -141,13 +199,22 @@ const uploadFileInChunks = async ({ siteId, file, onProgress }) => {
 }
 
 const SitesPanel = () => {
-  const [activeTab, setActiveTab] = useState('create')
+  const confirm = useConfirm()
+  const [activeTab, setActiveTab] = useState('overview')
   const [sites, setSites] = useState([])
   const [baseDir, setBaseDir] = useState('')
   const [selectedSiteId, setSelectedSiteId] = useState('')
   const [createForm, setCreateForm] = useState(defaultCreateForm)
   const [domainForm, setDomainForm] = useState({ domain: '' })
-  const [passwordForm, setPasswordForm] = useState({ username: 'admin', password: '' })
+  const [passwordForm, setPasswordForm] = useState({
+    username: 'admin',
+    password: '',
+    generatePassword: false,
+    email: '',
+    displayName: '',
+    firstName: '',
+    lastName: '',
+  })
   const [migrationFile, setMigrationFile] = useState(null)
   const [migrationProgress, setMigrationProgress] = useState(0)
   const [migrationStep, setMigrationStep] = useState('')
@@ -157,6 +224,14 @@ const SitesPanel = () => {
   const [message, setMessage] = useState(null)
   const [loading, setLoading] = useState(true)
   const [busy, setBusy] = useState('')
+
+  const askConfirm = useCallback(
+    async (options) => {
+      if (!confirm) return window.confirm(options.message || options.title || 'Confirmar')
+      return confirm(options)
+    },
+    [confirm]
+  )
 
   const selectedSite = useMemo(
     () => sites.find((site) => site.id === selectedSiteId) || sites[0] || null,
@@ -170,7 +245,7 @@ const SitesPanel = () => {
       const nextSites = response.data?.sites || []
       setSites(nextSites)
       setBaseDir(response.data?.baseDir || '')
-      setSelectedSiteId((current) => current || nextSites[0]?.id || '')
+      setSelectedSiteId((current) => (nextSites.some((site) => site.id === current) ? current : nextSites[0]?.id || ''))
     } catch (err) {
       setMessage({ type: 'error', text: getErrorMessage(err, 'Erro ao carregar sites') })
     } finally {
@@ -188,6 +263,10 @@ const SitesPanel = () => {
     setPasswordForm((current) => ({
       ...current,
       username: selectedSite.wordpress?.adminUser || 'admin',
+      email: selectedSite.wordpress?.adminEmail || '',
+      displayName: selectedSite.wordpress?.adminDisplayName || '',
+      firstName: selectedSite.wordpress?.adminFirstName || '',
+      lastName: selectedSite.wordpress?.adminLastName || '',
     }))
   }, [selectedSite])
 
@@ -219,6 +298,13 @@ const SitesPanel = () => {
   const submitDomain = async (event) => {
     event.preventDefault()
     if (!selectedSite) return
+    const confirmed = await askConfirm({
+      title: 'Alterar domínio',
+      message: `Aplicar o domínio ${domainForm.domain} no site ${selectedSite.name}? O painel também tentará atualizar siteurl/home no WordPress.`,
+      confirmText: 'Aplicar domínio',
+      variant: 'warning',
+    })
+    if (!confirmed) return
     setBusy('domain')
     setMessage(null)
     try {
@@ -236,15 +322,22 @@ const SitesPanel = () => {
   const submitPasswordReset = async (event) => {
     event.preventDefault()
     if (!selectedSite) return
+    const confirmed = await askConfirm({
+      title: 'Atualizar perfil WordPress',
+      message: `Atualizar o usuário ${passwordForm.username} no site ${selectedSite.name}? A senha só será alterada se você informar uma nova senha ou marcar a geração automática.`,
+      confirmText: 'Atualizar usuário',
+      variant: 'warning',
+    })
+    if (!confirmed) return
     setBusy('password')
     setMessage(null)
     setGeneratedPassword(null)
     try {
       const response = await api.post(`/sites/${selectedSite.id}/reset-password`, passwordForm)
-      setGeneratedPassword({ username: response.data.username, password: response.data.password })
+      setGeneratedPassword(response.data.password ? { username: response.data.username, password: response.data.password } : null)
       setSites((current) => current.map((site) => (site.id === response.data.site.id ? response.data.site : site)))
-      setPasswordForm((current) => ({ ...current, password: '' }))
-      setMessage({ type: 'success', text: 'Senha do WordPress atualizada' })
+      setPasswordForm((current) => ({ ...current, password: '', generatePassword: false }))
+      setMessage({ type: 'success', text: 'Usuário do WordPress atualizado' })
     } catch (err) {
       setMessage({ type: 'error', text: getErrorMessage(err, 'Erro ao resetar senha') })
     } finally {
@@ -254,6 +347,13 @@ const SitesPanel = () => {
 
   const optimizeDatabase = async () => {
     if (!selectedSite) return
+    const confirmed = await askConfirm({
+      title: 'Otimizar banco',
+      message: `Executar otimização no banco do site ${selectedSite.name}? A ação usa mysqlcheck/mariadb-check no container do banco.`,
+      confirmText: 'Otimizar',
+      variant: 'warning',
+    })
+    if (!confirmed) return
     setBusy('optimize')
     setMessage(null)
     try {
@@ -269,6 +369,13 @@ const SitesPanel = () => {
 
   const fixSsl = async () => {
     if (!selectedSite) return
+    const confirmed = await askConfirm({
+      title: 'Ativar HTTPS',
+      message: `Atualizar wp-config.php e banco do site ${selectedSite.name} para operar atrás do proxy HTTPS?`,
+      confirmText: 'Ativar HTTPS',
+      variant: 'warning',
+    })
+    if (!confirmed) return
     setBusy('fix-ssl')
     setMessage(null)
     try {
@@ -285,6 +392,13 @@ const SitesPanel = () => {
 
   const fixPermissions = async () => {
     if (!selectedSite) return
+    const confirmed = await askConfirm({
+      title: 'Corrigir permissões',
+      message: `Ajustar permissões dos arquivos WordPress do site ${selectedSite.name}?`,
+      confirmText: 'Corrigir',
+      variant: 'warning',
+    })
+    if (!confirmed) return
     setBusy('fix-permissions')
     setMessage(null)
     try {
@@ -304,6 +418,13 @@ const SitesPanel = () => {
       setMessage({ type: 'error', text: 'A migração precisa de um site WordPress criado com o banco em execução.' })
       return
     }
+    const confirmed = await askConfirm({
+      title: 'Restaurar backup',
+      message: `Aplicar ${migrationFile.name} no site ${selectedSite.name}? Esta ação pode sobrescrever wp-content, importar SQL e alterar siteurl/home.`,
+      confirmText: 'Restaurar',
+      variant: 'warning',
+    })
+    if (!confirmed) return
     setBusy('migration')
     setMessage(null)
     setMigrationResult(null)
@@ -343,6 +464,60 @@ const SitesPanel = () => {
     setMigrationStep(`Arquivo pronto em ${totalChunks} parte${totalChunks > 1 ? 's' : ''}`)
   }
 
+  const generateBackup = async (site = selectedSite) => {
+    if (!site) return
+    const confirmed = await askConfirm({
+      title: 'Gerar backup',
+      message: `Gerar e baixar um backup completo do site ${site.name}? O pacote inclui dump SQL, arquivos WordPress, configuração e README de restauração.`,
+      confirmText: 'Gerar backup',
+      variant: 'info',
+    })
+    if (!confirmed) return
+    setBusy(`backup-${site.id}`)
+    setMessage(null)
+    try {
+      const response = await api.post(`/sites/${site.id}/backup`, {}, { responseType: 'blob', timeout: 900000 })
+      const filename = getDownloadFilename(response, `${site.slug || site.name || 'wordpress'}-backup.tar.gz`)
+      downloadBlob(new Blob([response.data], { type: response.headers?.['content-type'] || 'application/gzip' }), filename)
+      await loadSites()
+      setMessage({ type: 'success', text: 'Backup gerado e baixado' })
+    } catch (err) {
+      setMessage({ type: 'error', text: await getBlobAwareErrorMessage(err, 'Erro ao gerar backup') })
+    } finally {
+      setBusy('')
+    }
+  }
+
+  const deleteSite = async (site) => {
+    if (!site) return
+    const confirmed = await askConfirm({
+      title: 'Excluir site',
+      message: `Esta ação remove containers, registro do painel, configuração Nginx e arquivos locais de ${site.name}. Gere um backup antes se precisar manter uma cópia.`,
+      confirmText: 'Excluir site',
+      variant: 'danger',
+      requiredText: site.name,
+      requiredTextLabel: `Digite exatamente "${site.name}" para excluir`,
+    })
+    if (!confirmed) return
+    setBusy(`delete-${site.id}`)
+    setMessage(null)
+    try {
+      const response = await api.delete(`/sites/${site.id}`, {
+        data: { confirmName: site.name, removeFiles: true },
+      })
+      const warnings = (response.data?.warnings || []).filter(Boolean).join(' ')
+      const nextSites = sites.filter((entry) => entry.id !== site.id)
+      setSites(nextSites)
+      setSelectedSiteId((currentSelected) => (currentSelected === site.id ? nextSites[0]?.id || '' : currentSelected))
+      setActiveTab('overview')
+      setMessage({ type: warnings ? 'warning' : 'success', text: warnings || 'Site removido' })
+    } catch (err) {
+      setMessage({ type: 'error', text: getErrorMessage(err, 'Erro ao excluir site') })
+    } finally {
+      setBusy('')
+    }
+  }
+
   const statusCounts = useMemo(() => {
     const running = sites.filter((site) => site.status === 'running').length
     return {
@@ -361,19 +536,24 @@ const SitesPanel = () => {
               <p className="text-xs font-semibold uppercase tracking-[0.18em] text-[var(--color-text-soft)]">Sites</p>
               <h1 className="mt-2 text-2xl font-semibold text-[var(--color-text)]">Publicação, CMS e migração</h1>
             </div>
-            <div className="grid grid-cols-3 gap-2">
-              <div className="rounded-lg border border-[var(--color-border-subtle)] bg-[var(--color-box-muted)] px-3 py-2">
-                <p className="text-xs text-[var(--color-text-soft)]">Total</p>
-                <p className="text-lg font-semibold text-[var(--color-text)]">{statusCounts.total}</p>
+            <div className="flex flex-col gap-3 sm:flex-row sm:items-center">
+              <div className="grid grid-cols-3 gap-2">
+                <div className="rounded-lg border border-[var(--color-border-subtle)] bg-[var(--color-box-muted)] px-3 py-2">
+                  <p className="text-xs text-[var(--color-text-soft)]">Total</p>
+                  <p className="text-lg font-semibold text-[var(--color-text)]">{statusCounts.total}</p>
+                </div>
+                <div className="rounded-lg border border-emerald-400/20 bg-emerald-500/10 px-3 py-2">
+                  <p className="text-xs text-emerald-200">Online</p>
+                  <p className="text-lg font-semibold text-emerald-100">{statusCounts.running}</p>
+                </div>
+                <div className="rounded-lg border border-amber-400/20 bg-amber-500/10 px-3 py-2">
+                  <p className="text-xs text-amber-200">Atenção</p>
+                  <p className="text-lg font-semibold text-amber-100">{statusCounts.attention}</p>
+                </div>
               </div>
-              <div className="rounded-lg border border-emerald-400/20 bg-emerald-500/10 px-3 py-2">
-                <p className="text-xs text-emerald-200">Online</p>
-                <p className="text-lg font-semibold text-emerald-100">{statusCounts.running}</p>
-              </div>
-              <div className="rounded-lg border border-amber-400/20 bg-amber-500/10 px-3 py-2">
-                <p className="text-xs text-amber-200">Atenção</p>
-                <p className="text-lg font-semibold text-amber-100">{statusCounts.attention}</p>
-              </div>
+              <Button type="button" variant="primary" leadingIcon={<Plus size={16} />} onClick={() => setActiveTab('create')}>
+                Criar novo site
+              </Button>
             </div>
           </div>
           <div className="mt-4 grid gap-2 sm:grid-cols-3">
@@ -456,6 +636,131 @@ const SitesPanel = () => {
         </div>
       ) : null}
 
+      {activeTab === 'overview' ? (
+        <Panel
+          title="Sites existentes"
+          icon={LayoutList}
+          action={
+            <div className="flex flex-wrap gap-2">
+              <Button type="button" size="sm" variant="ghost" leadingIcon={<RefreshCcw size={15} />} onClick={loadSites} loading={loading}>
+                Atualizar
+              </Button>
+              <Button type="button" size="sm" variant="primary" leadingIcon={<Plus size={15} />} onClick={() => setActiveTab('create')}>
+                Criar novo site
+              </Button>
+            </div>
+          }
+        >
+          {sites.length === 0 ? (
+            <div className="rounded-lg border border-dashed border-[var(--color-border)] bg-[var(--color-box-muted)] p-6 text-sm text-[var(--color-text-muted)]">
+              <p className="font-semibold text-[var(--color-text)]">Nenhum site cadastrado ainda.</p>
+              <p className="mt-1">Crie um WordPress para liberar manutenção, backup, restauração e ajustes de perfil.</p>
+              <Button type="button" className="mt-4" variant="primary" leadingIcon={<Plus size={16} />} onClick={() => setActiveTab('create')}>
+                Criar novo site
+              </Button>
+            </div>
+          ) : (
+            <div className="grid gap-3">
+              {sites.map((site) => (
+                <article
+                  key={site.id}
+                  className={`rounded-lg border p-4 transition ${
+                    selectedSite?.id === site.id
+                      ? 'border-[var(--color-brand)] bg-[var(--color-brand)]/10'
+                      : 'border-[var(--color-border-subtle)] bg-[var(--color-box-muted)]'
+                  }`}
+                >
+                  <div className="flex flex-col gap-4 xl:flex-row xl:items-start xl:justify-between">
+                    <div className="min-w-0 space-y-3">
+                      <div className="flex flex-wrap items-center gap-2">
+                        <h2 className="truncate text-base font-semibold text-[var(--color-text)]">{site.name}</h2>
+                        <StatusPill ok={site.status === 'running'}>{site.status === 'running' ? 'Online' : 'Verificar'}</StatusPill>
+                      </div>
+                      <div className="flex flex-wrap items-center gap-x-4 gap-y-2 text-sm text-[var(--color-text-muted)]">
+                        <span className="inline-flex items-center gap-1">
+                          <Globe size={14} />
+                          {site.domain}
+                        </span>
+                        <span className="font-mono text-xs">:{site.port}</span>
+                        <span>Criado {formatDateTime(site.createdAt)}</span>
+                        <span>Backup {formatDateTime(site.lastBackup?.createdAt)}</span>
+                      </div>
+                      <div className="grid gap-2 text-xs sm:grid-cols-3">
+                        <div className="rounded-lg border border-[var(--color-border-subtle)] bg-black/10 px-3 py-2">
+                          <p className="text-[var(--color-text-soft)]">WordPress</p>
+                          <p className="mt-1 font-semibold text-[var(--color-text)]">{site.wordpressStatus}</p>
+                        </div>
+                        <div className="rounded-lg border border-[var(--color-border-subtle)] bg-black/10 px-3 py-2">
+                          <p className="text-[var(--color-text-soft)]">Banco</p>
+                          <p className="mt-1 font-semibold text-[var(--color-text)]">{site.databaseStatus}</p>
+                        </div>
+                        <div className="rounded-lg border border-[var(--color-border-subtle)] bg-black/10 px-3 py-2">
+                          <p className="text-[var(--color-text-soft)]">Última restauração</p>
+                          <p className="mt-1 font-semibold text-[var(--color-text)]">{formatDateTime(site.lastMigration?.createdAt)}</p>
+                        </div>
+                      </div>
+                    </div>
+
+                    <div className="flex shrink-0 flex-wrap gap-2 xl:max-w-[360px] xl:justify-end">
+                      {site.url ? (
+                        <a className="zeus-btn zeus-btn-secondary min-h-[36px] px-3 py-2 text-xs" href={site.url} target="_blank" rel="noreferrer">
+                          <ExternalLink size={14} />
+                          Abrir
+                        </a>
+                      ) : null}
+                      <Button
+                        type="button"
+                        size="sm"
+                        variant="secondary"
+                        leadingIcon={<Wrench size={15} />}
+                        onClick={() => {
+                          setSelectedSiteId(site.id)
+                          setActiveTab('operate')
+                        }}
+                      >
+                        Manutenção
+                      </Button>
+                      <Button
+                        type="button"
+                        size="sm"
+                        variant="secondary"
+                        leadingIcon={<Download size={15} />}
+                        loading={busy === `backup-${site.id}`}
+                        onClick={() => generateBackup(site)}
+                      >
+                        Backup
+                      </Button>
+                      <Button
+                        type="button"
+                        size="sm"
+                        variant="ghost"
+                        leadingIcon={<UploadCloud size={15} />}
+                        onClick={() => {
+                          setSelectedSiteId(site.id)
+                          setActiveTab('migrate')
+                        }}
+                      >
+                        Restaurar
+                      </Button>
+                      <Button
+                        type="button"
+                        size="sm"
+                        variant="danger"
+                        leadingIcon={<Trash2 size={15} />}
+                        loading={busy === `delete-${site.id}`}
+                        onClick={() => deleteSite(site)}
+                      >
+                        Remover
+                      </Button>
+                    </div>
+                  </div>
+                </article>
+              ))}
+            </div>
+          )}
+        </Panel>
+      ) : null}
+
       {activeTab === 'create' ? (
         <div className="grid gap-5 xl:grid-cols-[420px_minmax(0,1fr)]">
           <Panel title="Serviço" icon={Server}>
@@ -484,7 +789,15 @@ const SitesPanel = () => {
             </div>
           </Panel>
 
-          <Panel title="Novo WordPress" icon={Globe}>
+          <Panel
+            title="Novo WordPress"
+            icon={Globe}
+            action={
+              <Button type="button" size="sm" variant="ghost" onClick={() => setActiveTab('overview')}>
+                Voltar para sites
+              </Button>
+            }
+          >
             <form className="grid gap-4 lg:grid-cols-2" onSubmit={submitCreate}>
               <Field label="Cliente ou projeto">
                 <Input value={createForm.name} onChange={(event) => handleCreateChange('name', event.target.value)} placeholder="cliente-site" required />
@@ -532,7 +845,7 @@ const SitesPanel = () => {
 
       {activeTab === 'migrate' ? (
         <div className="grid gap-5 xl:grid-cols-[minmax(0,1fr)_420px]">
-          <Panel title="Migração WordPress" icon={FileArchive}>
+          <Panel title={selectedSite ? `Restaurar backup - ${selectedSite.name}` : 'Restaurar backup'} icon={FileArchive}>
             <form className="space-y-4" onSubmit={submitMigration}>
               <Field label="Arquivo">
                 <input
@@ -564,7 +877,7 @@ const SitesPanel = () => {
                 loading={busy === 'migration'}
                 disabled={!selectedSite || selectedSite.databaseStatus !== 'running' || !migrationFile}
               >
-                Aplicar migração
+                Restaurar backup
               </Button>
               {selectedSite && selectedSite.databaseStatus !== 'running' ? (
                 <div className="rounded-lg border border-amber-400/30 bg-amber-500/10 px-3 py-2 text-sm text-amber-100">
@@ -608,7 +921,7 @@ const SitesPanel = () => {
       {activeTab === 'operate' ? (
         <div className="grid gap-5 xl:grid-cols-[minmax(0,1fr)_420px]">
           <Panel
-            title="Operação"
+            title={selectedSite ? `Manutenção - ${selectedSite.name}` : 'Manutenção'}
             icon={Settings2}
             action={selectedSite?.url ? (
               <a className="zeus-btn zeus-btn-secondary min-h-[36px] px-3 py-2 text-xs" href={selectedSite.url} target="_blank" rel="noreferrer">
@@ -619,30 +932,62 @@ const SitesPanel = () => {
           >
             {selectedSite ? (
               <div className="space-y-4">
-                <form className="grid gap-3 lg:grid-cols-[minmax(0,1fr)_160px]" onSubmit={submitDomain}>
-                  <Field label="Domínio">
-                    <Input value={domainForm.domain} onChange={(event) => setDomainForm({ domain: event.target.value })} required />
-                  </Field>
-                  <div className="flex items-end">
-                    <Button type="submit" variant="secondary" className="w-full" leadingIcon={<Globe size={16} />} loading={busy === 'domain'}>
-                      Alterar
-                    </Button>
-                  </div>
-                </form>
+                <div className="rounded-lg border border-[var(--color-border-subtle)] bg-[var(--color-box-muted)] p-4">
+                  <form className="grid gap-3 lg:grid-cols-[minmax(0,1fr)_160px]" onSubmit={submitDomain}>
+                    <Field label="Domínio">
+                      <Input value={domainForm.domain} onChange={(event) => setDomainForm({ domain: event.target.value })} required />
+                    </Field>
+                    <div className="flex items-end">
+                      <Button type="submit" variant="secondary" className="w-full" leadingIcon={<Globe size={16} />} loading={busy === 'domain'}>
+                        Alterar
+                      </Button>
+                    </div>
+                  </form>
+                </div>
 
-                <form className="grid gap-3 lg:grid-cols-[1fr_1fr_160px]" onSubmit={submitPasswordReset}>
-                  <Field label="Usuário">
-                    <Input value={passwordForm.username} onChange={(event) => setPasswordForm((current) => ({ ...current, username: event.target.value }))} />
-                  </Field>
-                  <Field label="Nova senha">
-                    <Input type="password" value={passwordForm.password} onChange={(event) => setPasswordForm((current) => ({ ...current, password: event.target.value }))} placeholder="Gerar automaticamente" />
-                  </Field>
-                  <div className="flex items-end">
-                    <Button type="submit" variant="secondary" className="w-full" leadingIcon={<KeyRound size={16} />} loading={busy === 'password'}>
-                      Resetar
-                    </Button>
+                <div className="rounded-lg border border-[var(--color-border-subtle)] bg-[var(--color-box-muted)] p-4">
+                  <div className="mb-3 flex items-center gap-2 text-sm font-semibold text-[var(--color-text)]">
+                    <UserRound size={16} />
+                    Usuário e perfil do WordPress
                   </div>
-                </form>
+                  <form className="grid gap-3 lg:grid-cols-2" onSubmit={submitPasswordReset}>
+                    <Field label="Usuário existente">
+                      <Input value={passwordForm.username} onChange={(event) => setPasswordForm((current) => ({ ...current, username: event.target.value }))} />
+                    </Field>
+                    <Field label="Nova senha">
+                      <Input type="password" value={passwordForm.password} onChange={(event) => setPasswordForm((current) => ({ ...current, password: event.target.value }))} placeholder="Manter senha atual" />
+                    </Field>
+                    <Field label="E-mail">
+                      <Input type="email" value={passwordForm.email} onChange={(event) => setPasswordForm((current) => ({ ...current, email: event.target.value }))} placeholder="usuario@site.com.br" />
+                    </Field>
+                    <Field label="Nome de exibição">
+                      <Input value={passwordForm.displayName} onChange={(event) => setPasswordForm((current) => ({ ...current, displayName: event.target.value }))} placeholder="Nome público" />
+                    </Field>
+                    <Field label="Nome">
+                      <Input value={passwordForm.firstName} onChange={(event) => setPasswordForm((current) => ({ ...current, firstName: event.target.value }))} />
+                    </Field>
+                    <Field label="Sobrenome">
+                      <Input value={passwordForm.lastName} onChange={(event) => setPasswordForm((current) => ({ ...current, lastName: event.target.value }))} />
+                    </Field>
+                    <div className="flex items-center gap-3 lg:col-span-2">
+                      <label className="flex cursor-pointer items-center gap-2 text-sm text-[var(--color-text-muted)]">
+                        <input
+                          type="checkbox"
+                          checked={passwordForm.generatePassword}
+                          onChange={(event) => setPasswordForm((current) => ({ ...current, generatePassword: event.target.checked }))}
+                          className="h-4 w-4 rounded border-[var(--color-border)] accent-[var(--color-brand)]"
+                        />
+                        <KeyRound size={14} />
+                        Gerar senha automaticamente
+                      </label>
+                    </div>
+                    <div className="flex items-end lg:col-span-2">
+                      <Button type="submit" variant="secondary" className="w-full sm:w-auto" leadingIcon={<KeyRound size={16} />} loading={busy === 'password'}>
+                        Atualizar usuário
+                      </Button>
+                    </div>
+                  </form>
+                </div>
 
                 {generatedPassword ? (
                   <div className="rounded-lg border border-cyan-400/20 bg-cyan-500/10 p-3 text-sm text-cyan-100">
@@ -652,6 +997,9 @@ const SitesPanel = () => {
                 ) : null}
 
                 <div className="flex flex-wrap gap-2">
+                  <Button type="button" variant="secondary" leadingIcon={<Download size={16} />} loading={busy === `backup-${selectedSite.id}`} onClick={() => generateBackup(selectedSite)}>
+                    Fazer backup
+                  </Button>
                   <Button type="button" variant="secondary" leadingIcon={<Database size={16} />} loading={busy === 'optimize'} onClick={optimizeDatabase}>
                     Otimizar banco
                   </Button>
@@ -665,6 +1013,9 @@ const SitesPanel = () => {
                   ) : null}
                   <Button type="button" variant="ghost" leadingIcon={<RefreshCcw size={16} />} onClick={loadSites} loading={loading}>
                     Recarregar status
+                  </Button>
+                  <Button type="button" variant="danger" leadingIcon={<Trash2 size={16} />} loading={busy === `delete-${selectedSite.id}`} onClick={() => deleteSite(selectedSite)}>
+                    Remover site
                   </Button>
                 </div>
               </div>
@@ -690,6 +1041,11 @@ const SitesPanel = () => {
                 <div className="rounded-lg border border-[var(--color-border-subtle)] bg-[var(--color-box-muted)] p-3">
                   <p className="text-xs text-[var(--color-text-soft)]">Nginx</p>
                   <p className="mt-2 font-mono text-xs text-[var(--color-text)]">{selectedSite.nginxConfigName || 'pendente'}</p>
+                </div>
+                <div className="rounded-lg border border-[var(--color-border-subtle)] bg-[var(--color-box-muted)] p-3">
+                  <p className="text-xs text-[var(--color-text-soft)]">Rotinas</p>
+                  <p className="mt-2 text-[var(--color-text)]">Backup: {formatDateTime(selectedSite.lastBackup?.createdAt)}</p>
+                  <p className="text-[var(--color-text)]">Banco otimizado: {formatDateTime(selectedSite.lastDbOptimizeAt)}</p>
                 </div>
               </div>
             ) : (

@@ -3,6 +3,7 @@ import { AlertTriangle, Trash2, X } from 'lucide-react'
 
 const ConfirmContext = createContext(null)
 
+// eslint-disable-next-line react-refresh/only-export-components
 export const useConfirm = () => useContext(ConfirmContext)
 
 export function ConfirmProvider({ children }) {
@@ -16,6 +17,8 @@ export function ConfirmProvider({ children }) {
         confirmText: options.confirmText || 'Confirmar',
         cancelText: options.cancelText || 'Cancelar',
         variant: options.variant || 'danger', // 'danger' | 'warning' | 'info'
+        requiredText: options.requiredText || '',
+        requiredTextLabel: options.requiredTextLabel || '',
         resolve,
       })
     })
@@ -39,7 +42,8 @@ export function ConfirmProvider({ children }) {
   )
 }
 
-function ConfirmModal({ title, message, confirmText, cancelText, variant, onConfirm, onCancel }) {
+function ConfirmModal({ title, message, confirmText, cancelText, variant, requiredText, requiredTextLabel, onConfirm, onCancel }) {
+  const [typedText, setTypedText] = useState('')
   const colors = {
     danger: { icon: '#f87171', bg: 'rgba(239,68,68,0.08)', border: 'rgba(239,68,68,0.25)', btn: 'linear-gradient(135deg,#dc2626,#b91c1c)' },
     warning: { icon: '#fbbf24', bg: 'rgba(251,191,36,0.08)', border: 'rgba(251,191,36,0.25)', btn: 'linear-gradient(135deg,#d97706,#b45309)' },
@@ -47,6 +51,7 @@ function ConfirmModal({ title, message, confirmText, cancelText, variant, onConf
   }
   const c = colors[variant] || colors.danger
   const Icon = variant === 'danger' ? Trash2 : AlertTriangle
+  const isBlocked = Boolean(requiredText) && typedText !== requiredText
 
   return (
     <div
@@ -62,6 +67,29 @@ function ConfirmModal({ title, message, confirmText, cancelText, variant, onConf
           <div style={{ flex: 1 }}>
             <div style={{ fontSize: 14, fontWeight: 600, color: '#f1f5f9' }}>{title}</div>
             <div style={{ fontSize: 12, color: '#94a3b8', marginTop: 4, lineHeight: 1.5 }}>{message}</div>
+            {requiredText ? (
+              <label style={{ display: 'block', marginTop: 12 }}>
+                <span style={{ display: 'block', marginBottom: 6, fontSize: 11, fontWeight: 600, color: '#cbd5e1' }}>
+                  {requiredTextLabel || `Digite "${requiredText}" para confirmar`}
+                </span>
+                <input
+                  value={typedText}
+                  onChange={(event) => setTypedText(event.target.value)}
+                  autoFocus
+                  style={{
+                    width: '100%',
+                    minHeight: 36,
+                    borderRadius: 8,
+                    border: '1px solid rgba(148,163,184,0.22)',
+                    background: 'rgba(15,23,42,0.72)',
+                    color: '#e2e8f0',
+                    outline: 'none',
+                    padding: '8px 10px',
+                    fontSize: 12,
+                  }}
+                />
+              </label>
+            ) : null}
           </div>
           <button onClick={onCancel} style={{ background: 'rgba(255,255,255,0.06)', border: '1px solid rgba(255,255,255,0.09)', borderRadius: 7, color: '#64748b', cursor: 'pointer', padding: '4px 6px', lineHeight: 1, display: 'flex', flexShrink: 0 }}>
             <X size={12} />
@@ -74,8 +102,8 @@ function ConfirmModal({ title, message, confirmText, cancelText, variant, onConf
             style={{ fontSize: 12, padding: '8px 16px', borderRadius: 9, border: '1px solid rgba(255,255,255,0.1)', background: 'rgba(255,255,255,0.05)', color: '#cbd5e1', cursor: 'pointer' }}>
             {cancelText}
           </button>
-          <button onClick={onConfirm}
-            style={{ fontSize: 12, fontWeight: 600, padding: '8px 16px', borderRadius: 9, border: 'none', background: c.btn, color: '#fff', cursor: 'pointer', boxShadow: '0 4px 12px rgba(0,0,0,0.3)' }}>
+          <button onClick={onConfirm} disabled={isBlocked}
+            style={{ fontSize: 12, fontWeight: 600, padding: '8px 16px', borderRadius: 9, border: 'none', background: c.btn, color: '#fff', cursor: isBlocked ? 'not-allowed' : 'pointer', opacity: isBlocked ? 0.55 : 1, boxShadow: '0 4px 12px rgba(0,0,0,0.3)' }}>
             {confirmText}
           </button>
         </div>
