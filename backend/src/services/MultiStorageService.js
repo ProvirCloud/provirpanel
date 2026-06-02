@@ -45,7 +45,8 @@ class MultiStorageService {
   getProvider(environment) {
     if (environment.provider === 'local') {
       return new StorageManager({
-        basePath: environment.config?.basePath || process.env.CLOUDPAINEL_PROJECTS_DIR
+        basePath: environment.config?.basePath || process.env.CLOUDPAINEL_PROJECTS_DIR,
+        ensureDockerDir: !environment.config?.basePath
       });
     }
     if (environment.provider === 's3') {
@@ -57,7 +58,8 @@ class MultiStorageService {
   getProviderByDraft(payload = {}) {
     if (payload.provider === 'local') {
       return new StorageManager({
-        basePath: payload.config?.basePath || process.env.CLOUDPAINEL_PROJECTS_DIR
+        basePath: payload.config?.basePath || process.env.CLOUDPAINEL_PROJECTS_DIR,
+        ensureDockerDir: !payload.config?.basePath
       });
     }
     if (payload.provider === 's3') {

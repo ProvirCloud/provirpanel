@@ -173,6 +173,7 @@ const FileManager = ({ showPageIntro = true }) => {
   const itemsRequestRef = useRef(0)
   const statsRequestRef = useRef(0)
   const previewRequestRef = useRef(0)
+  const selectedEnvironmentIdRef = useRef('')
   const initialStorageTargetRef = useRef(getInitialStorageTarget())
 
   const selectedEnvironment = environments.find((environment) => environment.id === selectedEnvironmentId) || null
@@ -182,6 +183,10 @@ const FileManager = ({ showPageIntro = true }) => {
   const requestConfig = (environmentId) => ({ params: { environmentId } })
   const findEnvironmentById = (environmentId, environmentList = environments) =>
     environmentList.find((environment) => environment.id === environmentId) || null
+
+  useEffect(() => {
+    selectedEnvironmentIdRef.current = selectedEnvironmentId
+  }, [selectedEnvironmentId])
 
   const loadProvidersAndEnvironments = async (preferredEnvironmentId = null) => {
     const response = await api.get('/storage/providers')
@@ -216,7 +221,7 @@ const FileManager = ({ showPageIntro = true }) => {
   const loadTree = async (environmentId) => {
     const requestId = ++treeRequestRef.current
     const response = await api.get('/storage/tree', requestConfig(environmentId))
-    if (requestId !== treeRequestRef.current || environmentId !== selectedEnvironmentId) return
+    if (requestId !== treeRequestRef.current || environmentId !== selectedEnvironmentIdRef.current) return
     setTree(response.data.tree || [])
     if (Array.isArray(response.data.environments) && response.data.environments.length > 0) {
       setEnvironments(response.data.environments)
@@ -237,7 +242,7 @@ const FileManager = ({ showPageIntro = true }) => {
           pageToken: nextPageToken || undefined,
         },
       })
-      if (requestId !== itemsRequestRef.current || environmentId !== selectedEnvironmentId) return
+      if (requestId !== itemsRequestRef.current || environmentId !== selectedEnvironmentIdRef.current) return
       setItems(response.data.items || [])
       setPath(targetPath)
       setPagination({
@@ -271,7 +276,7 @@ const FileManager = ({ showPageIntro = true }) => {
     const requestId = ++statsRequestRef.current
     try {
       const response = await api.get('/storage/stats', requestConfig(environmentId))
-      if (requestId !== statsRequestRef.current || environmentId !== selectedEnvironmentId) return
+      if (requestId !== statsRequestRef.current || environmentId !== selectedEnvironmentIdRef.current) return
       setUsage({
         used: response.data?.stats?.used || 0,
         total: response.data?.stats?.total || 0,

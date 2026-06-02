@@ -977,6 +977,11 @@ const ensureWpContentStorageEnvironment = async (site) => {
   ['themes', 'plugins', 'uploads'].forEach((entry) => {
     fs.mkdirSync(path.join(wpContentPath, entry), { recursive: true });
   });
+  try {
+    fs.rmdirSync(path.join(wpContentPath, 'docker'));
+  } catch {
+    // Keep the folder if it does not exist or has any user content.
+  }
 
   try {
     await repairWordPressFilesystemPermissions(site);

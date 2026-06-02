@@ -45,7 +45,9 @@ class StorageManager {
       this.basePath = path.join(process.cwd(), 'backend/data/projects');
       fs.mkdirSync(this.basePath, { recursive: true });
     }
-    fs.mkdirSync(path.join(this.basePath, 'docker'), { recursive: true });
+    if (options.ensureDockerDir !== false) {
+      fs.mkdirSync(path.join(this.basePath, 'docker'), { recursive: true });
+    }
   }
 
   safeResolve(targetPath = '/') {
