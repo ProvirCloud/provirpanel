@@ -1,4 +1,4 @@
-import { createElement, useCallback, useEffect, useMemo, useRef, useState } from 'react'
+import { Fragment, createElement, useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { useNavigate, useParams, useSearchParams } from 'react-router-dom'
 import {
   Activity,
@@ -184,6 +184,23 @@ const formatDeploymentStatus = (deployment, active = false) => {
   if (deployment?.status === 'active') return 'ativa'
   if (deployment?.status === 'available') return 'disponível'
   return deployment?.status || 'disponível'
+}
+
+const normalizeDeploymentLogLine = (line) => {
+  if (!line) return ''
+  if (typeof line === 'string') return line
+  return line.message || line.error || JSON.stringify(line)
+}
+
+const getDeploymentLogLines = (deployment = {}) => {
+  const lines = (Array.isArray(deployment.deployLog) ? deployment.deployLog : [])
+    .map(normalizeDeploymentLogLine)
+    .filter(Boolean)
+  const errorMessage = deployment.deployLogError || deployment.error
+  if (errorMessage && !lines.some((line) => line.includes(errorMessage))) {
+    return [...lines, `Erro: ${errorMessage}`]
+  }
+  return lines
 }
 
 const cloneEnvRows = (rows = []) =>
@@ -772,6 +789,7 @@ const ServiceOverviewTab = ({ service, detail, activity }) => {
 
 const DeployHistory = ({ service, busyVersionId, onRollback, onDownload, onRemove }) => {
   const deployments = Array.isArray(service.deployments) ? service.deployments : []
+  const [openLogId, setOpenLogId] = useState('')
   if (!deployments.length) {
     return <p className="text-sm text-slate-500">Nenhuma versão publicada registrada.</p>
   }
@@ -791,50 +809,88 @@ const DeployHistory = ({ service, busyVersionId, onRollback, onDownload, onRemov
           {deployments.map((deployment) => {
             const active = deployment.id === service.activeDeploymentId || deployment.status === 'active'
             const busy = busyVersionId === deployment.id
+            const logLines = getDeploymentLogLines(deployment)
+            const logOpen = openLogId === deployment.id
             return (
-              <tr key={deployment.id} className={`border-t ${active ? 'border-emerald-500/30 bg-emerald-500/5' : 'border-slate-800'}`}>
-                <td className="px-3 py-3">
-                  <div className="flex min-w-0 flex-wrap items-center gap-2">
-                    <span className="truncate font-medium text-white">{formatDeploymentLabel(deployment)}</span>
-                    {active ? (
-                      <span className="inline-flex items-center gap-1 rounded-full border border-emerald-400/30 bg-emerald-400/10 px-2 py-0.5 text-[11px] font-semibold text-emerald-100">
-                        <CheckCircle2 className="h-3 w-3" />
-                        ATIVA
-                      </span>
-                    ) : null}
-                  </div>
-                  <p className="mt-1 truncate text-xs text-slate-500">{deployment.id}</p>
-                </td>
-                <td className="px-3 py-3">
-                  <span className={`rounded-full border px-2 py-1 text-xs ${
-                    deployment.status === 'failed'
-                      ? 'border-rose-500/30 bg-rose-500/10 text-rose-200'
-                      : active
-                        ? 'border-emerald-500/30 bg-emerald-500/10 text-emerald-200'
-                        : 'border-slate-700 bg-slate-900 text-slate-300'
-                  }`}>
-                    {formatDeploymentStatus(deployment, active)}
-                  </span>
-                </td>
-                <td className="max-w-xs truncate px-3 py-3 text-slate-400">{deployment.archiveName || deployment.projectDir || '-'}</td>
-                <td className="px-3 py-3 text-slate-400">{formatDateTime(deployment.finishedAt || deployment.createdAt)}</td>
-                <td className="px-3 py-3">
-                  <div className="flex justify-end gap-2">
-                    <button className={smallButtonClass} type="button" onClick={() => onDownload(deployment)} disabled={busy}>
-                      <Download className="h-4 w-4" />
-                      Baixar
-                    </button>
-                    <button className={smallButtonClass} type="button" onClick={() => onRollback(deployment)} disabled={active || busy}>
-                      <RotateCcw className="h-4 w-4" />
-                      Rollback
-                    </button>
-                    <button className="inline-flex items-center gap-2 rounded-lg border border-rose-500/30 bg-rose-500/10 px-3 py-2 text-xs text-rose-200 hover:bg-rose-500/20 disabled:cursor-not-allowed disabled:opacity-50" type="button" onClick={() => onRemove(deployment)} disabled={active || busy}>
-                      <Trash2 className="h-4 w-4" />
-                      Remover
-                    </button>
-                  </div>
-                </td>
-              </tr>
+              <Fragment key={deployment.id}>
+                <tr className={`border-t ${active ? 'border-emerald-500/30 bg-emerald-500/5' : 'border-slate-800'}`}>
+                  <td className="px-3 py-3">
+                    <div className="flex min-w-0 flex-wrap items-center gap-2">
+                      <span className="truncate font-medium text-white">{formatDeploymentLabel(deployment)}</span>
+                      {active ? (
+                        <span className="inline-flex items-center gap-1 rounded-full border border-emerald-400/30 bg-emerald-400/10 px-2 py-0.5 text-[11px] font-semibold text-emerald-100">
+                          <CheckCircle2 className="h-3 w-3" />
+                          ATIVA
+                        </span>
+                      ) : null}
+                    </div>
+                    <p className="mt-1 truncate text-xs text-slate-500">{deployment.id}</p>
+                  </td>
+                  <td className="px-3 py-3">
+                    <span className={`rounded-full border px-2 py-1 text-xs ${
+                      deployment.status === 'failed'
+                        ? 'border-rose-500/30 bg-rose-500/10 text-rose-200'
+                        : active
+                          ? 'border-emerald-500/30 bg-emerald-500/10 text-emerald-200'
+                          : 'border-slate-700 bg-slate-900 text-slate-300'
+                    }`}>
+                      {formatDeploymentStatus(deployment, active)}
+                    </span>
+                  </td>
+                  <td className="max-w-xs truncate px-3 py-3 text-slate-400">{deployment.archiveName || deployment.projectDir || '-'}</td>
+                  <td className="px-3 py-3 text-slate-400">{formatDateTime(deployment.finishedAt || deployment.createdAt)}</td>
+                  <td className="px-3 py-3">
+                    <div className="flex flex-wrap justify-end gap-2">
+                      <button className={smallButtonClass} type="button" onClick={() => setOpenLogId(logOpen ? '' : deployment.id)} disabled={!logLines.length}>
+                        <Terminal className="h-4 w-4" />
+                        {logOpen ? 'Ocultar log' : 'Log'}
+                      </button>
+                      <button className={smallButtonClass} type="button" onClick={() => onDownload(deployment)} disabled={busy}>
+                        <Download className="h-4 w-4" />
+                        Baixar
+                      </button>
+                      <button className={smallButtonClass} type="button" onClick={() => onRollback(deployment)} disabled={active || busy}>
+                        <RotateCcw className="h-4 w-4" />
+                        Rollback
+                      </button>
+                      <button className="inline-flex items-center gap-2 rounded-lg border border-rose-500/30 bg-rose-500/10 px-3 py-2 text-xs text-rose-200 hover:bg-rose-500/20 disabled:cursor-not-allowed disabled:opacity-50" type="button" onClick={() => onRemove(deployment)} disabled={active || busy}>
+                        <Trash2 className="h-4 w-4" />
+                        Remover
+                      </button>
+                    </div>
+                  </td>
+                </tr>
+                {logOpen ? (
+                  <tr className="border-t border-slate-800 bg-slate-950/60">
+                    <td colSpan={5} className="px-3 py-3">
+                      <div className="rounded-lg border border-slate-800 bg-black p-3">
+                        <div className="mb-3 flex flex-wrap items-center justify-between gap-2">
+                          <div className="min-w-0">
+                            <p className="text-xs font-semibold uppercase text-slate-400">Log do deploy</p>
+                            <p className="truncate text-xs text-slate-600">
+                              {deployment.deployLogUpdatedAt ? `Atualizado em ${formatDateTime(deployment.deployLogUpdatedAt)}` : 'Registro salvo da versão'}
+                            </p>
+                          </div>
+                          <button className={smallButtonClass} type="button" onClick={() => navigator.clipboard?.writeText(logLines.join('\n'))}>
+                            <Copy className="h-4 w-4" />
+                            Copiar
+                          </button>
+                        </div>
+                        {deployment.deployLogError || deployment.error ? (
+                          <div className="mb-3 rounded-md border border-rose-500/30 bg-rose-500/10 px-3 py-2 text-xs text-rose-100">
+                            Erro: {deployment.deployLogError || deployment.error}
+                          </div>
+                        ) : null}
+                        <div className="max-h-80 overflow-auto whitespace-pre-wrap rounded-md bg-slate-950 p-3 font-mono text-[11px] leading-5 text-slate-300">
+                          {logLines.map((line, index) => (
+                            <p key={`${deployment.id}-log-${index}`}>{line}</p>
+                          ))}
+                        </div>
+                      </div>
+                    </td>
+                  </tr>
+                ) : null}
+              </Fragment>
             )
           })}
         </tbody>
@@ -857,9 +913,12 @@ const ServiceDeploysTab = ({
   const [versionChangeType, setVersionChangeType] = useState('fix')
   const [error, setError] = useState('')
   const [busyVersionId, setBusyVersionId] = useState('')
+  const [versionsVisible, setVersionsVisible] = useState(false)
   const mountedRef = useRef(true)
   const progress = deployProgress
   const deployRunning = isDeployRunning(progress)
+  const deployments = Array.isArray(service.deployments) ? service.deployments : []
+  const activeDeployment = getActiveDeployment(service)
 
   useEffect(() => () => {
     mountedRef.current = false
@@ -1099,9 +1158,26 @@ const ServiceDeploysTab = ({
   }
 
   return (
-    <div className="grid gap-4 xl:grid-cols-[0.9fr_1.1fr]">
-      <Panel title="Publicar nova versão" icon={UploadCloud}>
+    <div className="space-y-4">
+      <Panel
+        title="Publicar nova versão"
+        icon={UploadCloud}
+        actions={
+          deployments.length ? (
+            <button className={smallButtonClass} type="button" onClick={() => setVersionsVisible((current) => !current)}>
+              <History className="h-4 w-4" />
+              {versionsVisible ? 'Ocultar versões' : `Ver versões (${deployments.length})`}
+            </button>
+          ) : null
+        }
+      >
         <div className="space-y-4">
+          {activeDeployment ? (
+            <div className="rounded-lg border border-emerald-500/20 bg-emerald-500/10 px-3 py-2 text-xs text-emerald-100">
+              Versão ativa atual: <span className="font-semibold text-white">{formatDeploymentLabel(activeDeployment)}</span>
+              {' '}· publicada em {formatDateTime(activeDeployment.promotedAt || activeDeployment.finishedAt || activeDeployment.createdAt)}
+            </div>
+          ) : null}
           <label className="block">
             <span className="mb-2 block text-xs text-slate-500">Arquivo da versão</span>
             <input
@@ -1146,15 +1222,42 @@ const ServiceDeploysTab = ({
           <DeployProgressPanel progress={progress} error={error || progress?.error} />
         </div>
       </Panel>
-      <Panel title="Versões publicadas" icon={History}>
-        <DeployHistory
-          service={service}
-          busyVersionId={busyVersionId}
-          onRollback={handleRollback}
-          onDownload={handleDownload}
-          onRemove={handleRemove}
-        />
-      </Panel>
+
+      {versionsVisible ? (
+        <Panel
+          title="Versões publicadas"
+          icon={History}
+          actions={
+            <button className={smallButtonClass} type="button" onClick={() => setVersionsVisible(false)}>
+              <X className="h-4 w-4" />
+              Fechar
+            </button>
+          }
+        >
+          <DeployHistory
+            service={service}
+            busyVersionId={busyVersionId}
+            onRollback={handleRollback}
+            onDownload={handleDownload}
+            onRemove={handleRemove}
+          />
+        </Panel>
+      ) : (
+        <button
+          className="flex w-full flex-col gap-2 rounded-xl border border-slate-800 bg-slate-950/60 p-3 text-left text-sm text-slate-300 transition hover:border-blue-500/30 hover:bg-slate-900/80 sm:flex-row sm:items-center sm:justify-between"
+          type="button"
+          onClick={() => setVersionsVisible(true)}
+        >
+          <span className="inline-flex min-w-0 items-center gap-2">
+            <History className="h-4 w-4 shrink-0 text-blue-300" />
+            <span className="truncate">
+              Versões publicadas ocultas
+              {activeDeployment ? ` · ativa: ${formatDeploymentLabel(activeDeployment)}` : ''}
+            </span>
+          </span>
+          <span className="text-xs text-blue-200">{deployments.length ? `Ver ${deployments.length} versão(ões)` : 'Nenhuma versão registrada'}</span>
+        </button>
+      )}
     </div>
   )
 }

@@ -444,8 +444,35 @@ const maskEnvVars = (envVars = []) =>
     value: env.secret ? SECRET_MASK : env.value
   }));
 
+const MAX_DEPLOYMENT_LOG_ENTRIES = 500;
+
+const normalizeDeploymentLogLine = (entry) => {
+  if (!entry) return '';
+  if (typeof entry === 'string') return entry;
+  return entry.message || entry.error || JSON.stringify(entry);
+};
+
+const createDeploymentLogSnapshot = (progress = [], { status = '', error = '' } = {}) => {
+  const lines = (Array.isArray(progress) ? progress : [])
+    .map(normalizeDeploymentLogLine)
+    .filter(Boolean)
+    .slice(-MAX_DEPLOYMENT_LOG_ENTRIES);
+  if (error && !lines.some((line) => line.includes(error))) {
+    lines.push(`Erro: ${error}`);
+  }
+  return {
+    deployLog: lines.slice(-MAX_DEPLOYMENT_LOG_ENTRIES),
+    deployLogStatus: status || null,
+    deployLogError: error || null,
+    deployLogUpdatedAt: new Date().toISOString()
+  };
+};
+
 const sanitizeDeploymentForClient = (deployment = {}) => ({
   ...deployment,
+  deployLog: Array.isArray(deployment.deployLog)
+    ? deployment.deployLog.map(normalizeDeploymentLogLine).filter(Boolean).slice(-MAX_DEPLOYMENT_LOG_ENTRIES)
+    : [],
   envVars: maskEnvVars(deployment.envVars || [])
 });
 
@@ -1859,6 +1886,88 @@ const requestHealthcheckUrl = (targetUrl, timeoutSeconds) =>
     req.end();
   });
 
+const inspectContainerState = async (containerId) => {
+  if (!containerId) return null;
+  try {
+    const inspect = await dockerManager.docker.getContainer(containerId).inspect();
+    return inspect?.State || null;
+  } catch (err) {
+    appendServiceLog('warn', `Nao foi possivel inspecionar estado do container ${containerId}: ${err.message}`);
+    return null;
+  }
+};
+
+const waitForRuntimeReadinessBeforeHealth = async ({
+  serviceName,
+  containerId,
+  endpoints = [],
+  startupGraceSeconds = 0,
+  intervalSeconds = 10,
+  timeoutSeconds = 5,
+  onProgress = null,
+  onAttemptFailure = null
+}) => {
+  const graceSeconds = clampNumber(startupGraceSeconds, 0, 0, 3600);
+  if (!graceSeconds || !containerId || !endpoints.length) return null;
+
+  const startedAt = Date.now();
+  const deadline = startedAt + (graceSeconds * 1000);
+  let lastError = null;
+  let probe = 1;
+  if (onProgress) {
+    onProgress(`Aguardando startup/compilação de ${serviceName} antes do healthcheck por até ${graceSeconds}s...`);
+  }
+
+  while (Date.now() < deadline) {
+    const state = await inspectContainerState(containerId);
+    if (state && state.Running === false) {
+      const exitCode = state.ExitCode ?? 'desconhecido';
+      const reason = state.Error || state.OOMKilled ? 'erro/OOM' : 'processo encerrado';
+      throw createHttpError(
+        `Container ${serviceName} encerrou antes do healthcheck (${reason}, exit ${exitCode})`,
+        502
+      );
+    }
+
+    const attemptErrors = [];
+    for (const endpoint of endpoints) {
+      try {
+        const result = await requestHealthcheckUrl(endpoint.targetUrl, timeoutSeconds);
+        if (onProgress) {
+          onProgress(`Runtime de ${serviceName} respondeu em ${endpoint.label}; healthcheck liberado.`);
+        }
+        return {
+          ok: true,
+          targetUrl: endpoint.targetUrl,
+          statusCode: result.statusCode,
+          endpoint: endpoint.label
+        };
+      } catch (err) {
+        attemptErrors.push(`${endpoint.label}: ${err.message}`);
+      }
+    }
+
+    lastError = new Error(attemptErrors.join(' | ') || 'sem resposta');
+    if (onProgress) {
+      const elapsed = Math.round((Date.now() - startedAt) / 1000);
+      onProgress(`Startup ainda não respondeu (${elapsed}/${graceSeconds}s): ${lastError.message}`);
+    }
+    if (onAttemptFailure) {
+      await onAttemptFailure(lastError, probe, graceSeconds);
+    }
+    probe += 1;
+
+    const remaining = Math.max(0, deadline - Date.now());
+    if (remaining <= 0) break;
+    await delay(Math.min(Math.max(1, Number(intervalSeconds || 10)) * 1000, remaining));
+  }
+
+  if (onProgress) {
+    onProgress(`Tempo de startup/compilação de ${serviceName} terminou; iniciando healthcheck formal.`);
+  }
+  return null;
+};
+
 const waitForServiceHealth = async ({
   serviceName,
   healthcheck,
@@ -1867,6 +1976,7 @@ const waitForServiceHealth = async ({
   containerPort = null,
   networkName = '',
   preferContainerHealthcheck = false,
+  startupGraceSeconds = 0,
   onProgress = null,
   onAttemptFailure = null
 }) => {
@@ -1898,6 +2008,18 @@ const waitForServiceHealth = async ({
   if (onProgress && endpoints.length > 1) {
     onProgress(`Healthcheck ${serviceName} usará ${endpoints.map((endpoint) => endpoint.label).join(' e ')}.`);
   }
+
+  const startupResult = await waitForRuntimeReadinessBeforeHealth({
+    serviceName,
+    containerId,
+    endpoints,
+    startupGraceSeconds,
+    intervalSeconds: config.intervalSeconds,
+    timeoutSeconds: config.timeoutSeconds,
+    onProgress,
+    onAttemptFailure
+  });
+  if (startupResult) return startupResult;
 
   let lastError = null;
   for (let attempt = 1; attempt <= config.retries; attempt += 1) {
@@ -4586,6 +4708,11 @@ const describeRuntimeStartStep = (service = {}, runtime = {}, stageLabel = 'vers
   };
 };
 
+const resolveRuntimeStartupGraceSeconds = (runtimeStartStep = {}) => {
+  if (runtimeStartStep.phase !== 'compile') return 0;
+  return clampNumber(process.env.PROVIRPANEL_DEPLOY_STARTUP_GRACE_SECONDS, 180, 0, 3600);
+};
+
 const rollbackToPreviousDeployment = async ({
   service,
   previousDeployment,
@@ -4652,7 +4779,8 @@ const promoteProjectDeployment = async ({
   nodeSiteConfig,
   healthcheck,
   autoRollback,
-  pushProgress = () => {}
+  pushProgress = () => {},
+  getDeploymentLogSnapshot = () => ({})
 }) => {
   const networkName = service.networkName || 'bridge';
   const bindLocalOnly = service.bindLocalOnly ?? false;
@@ -4705,6 +4833,7 @@ const promoteProjectDeployment = async ({
     });
     const candidateStartStep = describeRuntimeStartStep(candidateService, candidateRuntime, 'versão candidata');
     pushProgress(candidateStartStep.message, candidateStartStep.phase);
+    const candidateStartupGraceSeconds = resolveRuntimeStartupGraceSeconds(candidateStartStep);
     const emitCandidateLogs = createDeploymentLogEmitter({
       containerId: candidateContainer?.Id,
       pushProgress,
@@ -4721,20 +4850,25 @@ const promoteProjectDeployment = async ({
       containerPort: service.containerPort,
       networkName,
       preferContainerHealthcheck: true,
+      startupGraceSeconds: candidateStartupGraceSeconds,
       onProgress: (message) => pushProgress(message, 'healthcheck'),
       onAttemptFailure: emitCandidateLogs
     });
     pushProgress('Versão candidata aprovada no healthcheck.', 'healthcheck');
   } catch (err) {
+    const errorMessage = err.message || 'Falha na versão candidata';
+    const failedAt = new Date().toISOString();
     await stopAndRemoveContainer(candidateContainer?.Id, candidateName);
+    pushProgress(`Versão candidata falhou: ${errorMessage}`, 'error');
     saveServiceDeploymentState(service, {
       ...deployment,
       status: 'failed',
-      failedAt: new Date().toISOString(),
-      error: err.message
+      failedAt,
+      finishedAt: failedAt,
+      error: errorMessage,
+      ...getDeploymentLogSnapshot('failed', errorMessage)
     }, service.activeDeploymentId);
-    appendServiceLog('error', `Versao candidata rejeitada para ${service.name}: ${err.message}`);
-    pushProgress(`Versão candidata falhou: ${err.message}`, 'error');
+    appendServiceLog('error', `Versao candidata rejeitada para ${service.name}: ${errorMessage}`);
     throw err;
   }
 
@@ -4772,6 +4906,7 @@ const promoteProjectDeployment = async ({
     const finalStartStep = describeRuntimeStartStep(candidateService, finalRuntime, 'versão definitiva');
     const finalStartPhase = finalStartStep.phase === 'candidate' ? 'promote' : finalStartStep.phase;
     pushProgress(finalStartStep.message, finalStartPhase);
+    const finalStartupGraceSeconds = resolveRuntimeStartupGraceSeconds(finalStartStep);
     const emitFinalLogs = createDeploymentLogEmitter({
       containerId: finalContainer?.Id,
       pushProgress,
@@ -4784,19 +4919,27 @@ const promoteProjectDeployment = async ({
       serviceName: service.name,
       healthcheck,
       hostPort: service.hostPort,
+      containerId: finalContainer?.Id,
+      containerPort: service.containerPort,
+      networkName,
+      startupGraceSeconds: finalStartupGraceSeconds,
       onProgress: (message) => pushProgress(message, 'healthcheck'),
       onAttemptFailure: emitFinalLogs
     });
     pushProgress('Healthcheck final aprovado.', 'healthcheck');
   } catch (err) {
+    const errorMessage = err.message || 'Falha ao promover versão';
+    const failedAt = new Date().toISOString();
     await stopAndRemoveContainer(finalContainer?.Id, service.name);
+    pushProgress(`Falha ao promover versão: ${errorMessage}`, 'error');
     saveServiceDeploymentState(service, {
       ...deployment,
       status: 'failed',
-      failedAt: new Date().toISOString(),
-      error: err.message
+      failedAt,
+      finishedAt: failedAt,
+      error: errorMessage,
+      ...getDeploymentLogSnapshot('failed', errorMessage)
     }, service.activeDeploymentId);
-    pushProgress(`Falha ao promover versão: ${err.message}`, 'error');
 
     if (autoRollback && previousDeployment?.projectDir) {
       const rolledBack = await rollbackToPreviousDeployment({
@@ -4808,8 +4951,16 @@ const promoteProjectDeployment = async ({
         pushProgress
       });
       if (rolledBack) {
+        saveServiceDeploymentState(rolledBack, {
+          ...deployment,
+          status: 'failed',
+          failedAt,
+          finishedAt: failedAt,
+          error: errorMessage,
+          ...getDeploymentLogSnapshot('failed', errorMessage)
+        }, rolledBack.activeDeploymentId);
         throw createHttpError(
-          `Nova versao falhou e o rollback automatico foi executado: ${err.message}`,
+          `Nova versao falhou e o rollback automatico foi executado: ${errorMessage}`,
           502
         );
       }
@@ -4827,7 +4978,8 @@ const promoteProjectDeployment = async ({
     healthcheck,
     status: 'active',
     containerId: finalContainer.Id,
-    promotedAt: new Date().toISOString()
+    promotedAt: new Date().toISOString(),
+    finishedAt: new Date().toISOString()
   };
   const updatedService = {
     ...candidateService,
@@ -4848,13 +5000,22 @@ const promoteProjectDeployment = async ({
 
   appendServiceLog('info', `Versao ${deployment.id} publicada para ${service.name}`);
   pushProgress('Versão publicada e estado salvo no painel.', 'done');
-  return saveServiceDeploymentState(updatedService, promotedDeployment, deployment.id);
+  return saveServiceDeploymentState(
+    updatedService,
+    {
+      ...promotedDeployment,
+      ...getDeploymentLogSnapshot('active')
+    },
+    deployment.id
+  );
 };
 
 const publishProjectArchive = async (serviceId, file, options = {}) => {
   const progress = Array.isArray(options.progress) ? options.progress : [];
   const progressSessionId = String(options.progressSessionId || '').trim();
   const progressJobId = String(options.progressJobId || '').trim();
+  const getDeploymentLogSnapshot = (status = '', error = '') =>
+    createDeploymentLogSnapshot(progress, { status, error });
   const pushProgress = (message, phase, extra = {}) => {
     const payload = {
       ...(progressJobId ? { jobId: progressJobId } : {}),
@@ -4994,7 +5155,8 @@ const publishProjectArchive = async (serviceId, file, options = {}) => {
     nodeServiceMode,
     nodeSiteConfig,
     status: 'pending',
-    createdAt: new Date().toISOString()
+    createdAt: new Date().toISOString(),
+    ...getDeploymentLogSnapshot('pending')
   };
 
   const updatedService = await promoteProjectDeployment({
@@ -5005,7 +5167,8 @@ const publishProjectArchive = async (serviceId, file, options = {}) => {
     nodeSiteConfig,
     healthcheck,
     autoRollback,
-    pushProgress
+    pushProgress,
+    getDeploymentLogSnapshot
   });
 
   appendServiceLog('info', `Atualizacao de projeto concluida: ${service.name}`);
