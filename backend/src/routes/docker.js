@@ -5602,6 +5602,89 @@ const SERVICE_TEMPLATES = [
 ];
 
 const initDockerSocket = (io) => {
+  // Docker container terminal namespace
+  const termNamespace = io.of('/api/docker/terminal');
+  termNamespace.use((socket, next) => {
+    const token = extractToken(socket.handshake);
+    if (!token) return next(new Error('Unauthorized'));
+    try {
+      const payload = jwt.verify(token, jwtSecret);
+      socket.user = { id: payload.sub, role: payload.role, username: payload.username };
+      return next();
+    } catch (err) {
+      return next(new Error('Unauthorized'));
+    }
+  });
+
+  termNamespace.on('connection', (socket) => {
+    let execStream = null;
+    let execInstance = null;
+
+    socket.on('attach', async (payload = {}) => {
+      const { containerId } = payload;
+      if (!containerId) {
+        socket.emit('error', { message: 'containerId is required' });
+        return;
+      }
+      // Cleanup previous session
+      if (execStream) {
+        try { execStream.destroy(); } catch (e) { /* ignore */ }
+        execStream = null;
+      }
+      try {
+        const container = dockerManager.docker.getContainer(containerId);
+        const inspect = await container.inspect();
+        if (!inspect.State?.Running) {
+          socket.emit('error', { message: 'Container não está rodando' });
+          return;
+        }
+        execInstance = await container.exec({
+          Cmd: ['/bin/sh', '-c', 'if command -v bash >/dev/null 2>&1; then exec bash; else exec sh; fi'],
+          AttachStdin: true,
+          AttachStdout: true,
+          AttachStderr: true,
+          Tty: true
+        });
+        const stream = await execInstance.start({ hijack: true, stdin: true, Tty: true });
+        execStream = stream;
+        socket.emit('ready', { message: 'Terminal conectado' });
+        stream.on('data', (chunk) => {
+          socket.emit('output', { data: chunk.toString('utf8') });
+        });
+        stream.on('end', () => {
+          socket.emit('done', { message: 'Sessão encerrada' });
+          execStream = null;
+        });
+        stream.on('error', (err) => {
+          socket.emit('error', { message: err.message || 'Stream error' });
+          execStream = null;
+        });
+      } catch (err) {
+        socket.emit('error', { message: err.message || 'Falha ao conectar ao container' });
+      }
+    });
+
+    socket.on('input', (payload = {}) => {
+      if (execStream && payload.data) {
+        try { execStream.write(payload.data); } catch (e) { /* ignore */ }
+      }
+    });
+
+    socket.on('resize', async (payload = {}) => {
+      const { cols, rows } = payload;
+      if (execInstance && cols && rows) {
+        try { await execInstance.resize({ h: rows, w: cols }); } catch (e) { /* ignore */ }
+      }
+    });
+
+    socket.on('disconnect', () => {
+      if (execStream) {
+        try { execStream.destroy(); } catch (e) { /* ignore */ }
+        execStream = null;
+      }
+    });
+  });
+
   // Progress namespace for pull/build events
   progressNamespace = io.of('/api/docker/progress');
   progressNamespace.use((socket, next) => {

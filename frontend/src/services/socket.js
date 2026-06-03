@@ -24,6 +24,13 @@ export const createDockerProgressSocket = (token) => {
   })
 }
 
+export const createDockerTerminalSocket = (token) => {
+  return io(`${baseUrl}/api/docker/terminal`, {
+    auth: getToken(token) ? { token: getToken(token) } : undefined,
+    withCredentials: true
+  })
+}
+
 export const createMetricsSocket = (token) => {
   return io(baseUrl, {
     auth: getToken(token) ? { token: getToken(token) } : undefined,

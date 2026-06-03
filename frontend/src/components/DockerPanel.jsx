@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { useNavigate } from 'react-router-dom'
 import {
   Activity,
@@ -10,6 +10,7 @@ import {
   Play,
   Square,
   RefreshCw,
+  Terminal,
   Trash2,
   Download,
   Plus,
@@ -26,7 +27,98 @@ import {
 } from 'lucide-react'
 import { Area, AreaChart, ResponsiveContainer, Tooltip as RechartsTooltip } from 'recharts'
 import api, { uploadApi } from '../services/api.js'
-import { createDockerLogsSocket, createDockerProgressSocket } from '../services/socket.js'
+import { createDockerLogsSocket, createDockerProgressSocket, createDockerTerminalSocket } from '../services/socket.js'
+
+const ContainerTerminal = ({ containerId, onClose }) => {
+  const termRef = useRef(null)
+  const socketRef = useRef(null)
+  const inputRef = useRef(null)
+  const [buffer, setBuffer] = useState('')
+  const [connected, setConnected] = useState(false)
+
+  useEffect(() => {
+    if (!containerId) return
+    const socket = createDockerTerminalSocket()
+    socketRef.current = socket
+
+    socket.on('connect', () => {
+      socket.emit('attach', { containerId })
+    })
+    socket.on('ready', () => {
+      setConnected(true)
+      setBuffer('')
+    })
+    socket.on('output', ({ data }) => {
+      setBuffer((prev) => {
+        const next = prev + data
+        return next.length > 50000 ? next.slice(-40000) : next
+      })
+    })
+    socket.on('done', () => {
+      setBuffer((prev) => prev + '\n[Sessão encerrada]\n')
+      setConnected(false)
+    })
+    socket.on('error', ({ message }) => {
+      setBuffer((prev) => prev + `\n[Erro: ${message}]\n`)
+    })
+
+    return () => {
+      socket.disconnect()
+      socketRef.current = null
+    }
+  }, [containerId])
+
+  useEffect(() => {
+    if (termRef.current) {
+      termRef.current.scrollTop = termRef.current.scrollHeight
+    }
+  }, [buffer])
+
+  const handleKeyDown = (e) => {
+    if (!socketRef.current || !connected) return
+    if (e.key === 'Enter') {
+      e.preventDefault()
+      const value = inputRef.current?.value || ''
+      socketRef.current.emit('input', { data: value + '\n' })
+      inputRef.current.value = ''
+    }
+  }
+
+  return (
+    <div className="flex flex-col h-full">
+      <div className="flex items-center justify-between mb-2">
+        <span className="inline-flex items-center gap-2 text-xs font-semibold text-emerald-300">
+          <Terminal size={14} />
+          {connected ? 'Conectado' : 'Desconectado'}
+        </span>
+        <button
+          type="button"
+          onClick={onClose}
+          className="text-xs text-slate-400 hover:text-white"
+        >
+          Fechar terminal
+        </button>
+      </div>
+      <div
+        ref={termRef}
+        className="flex-1 min-h-[200px] max-h-[50vh] overflow-auto rounded-lg bg-black p-3 font-mono text-xs text-green-300 whitespace-pre-wrap break-all"
+      >
+        {buffer || 'Conectando ao container...'}
+      </div>
+      <div className="mt-2">
+        <input
+          ref={inputRef}
+          type="text"
+          className="w-full rounded-lg border border-slate-700 bg-black px-3 py-2 font-mono text-sm text-green-300 outline-none placeholder:text-slate-600 focus:border-emerald-500/50"
+          placeholder={connected ? '$ digite um comando...' : 'Aguardando conexão...'}
+          disabled={!connected}
+          onKeyDown={handleKeyDown}
+          autoFocus
+        />
+      </div>
+    </div>
+  )
+}
 
 // Polyfill para crypto.randomUUID
 const generateUUID = () => {
@@ -1237,6 +1329,7 @@ const DockerPanel = ({ showPageIntro = true }) => {
   const [portAvailability, setPortAvailability] = useState(null)
   const [baseDir, setBaseDir] = useState('')
   const [editDialog, setEditDialog] = useState(null)
+  const [showContainerTerminal, setShowContainerTerminal] = useState(false)
   const [envImportDialog, setEnvImportDialog] = useState(null)
   const [envImportStatus, setEnvImportStatus] = useState(null)
   const [projectUploadStatus, setProjectUploadStatus] = useState(null)
@@ -5084,7 +5177,24 @@ const DockerPanel = ({ showPageIntro = true }) => {
                 )}
               </div>
             )}
+            {showContainerTerminal && editDialog.containerId ? (
+              <div className="mt-4 border border-slate-700 rounded-xl p-3 bg-slate-950">
+                <ContainerTerminal
+                  containerId={editDialog.containerId}
+                  onClose={() => setShowContainerTerminal(false)}
+                />
+              </div>
+            ) : null}
             <div className="flex flex-wrap gap-2 mt-6">
+              {editDialog.containerId && !showContainerTerminal ? (
+                <button
+                  type="button"
+                  className="rounded-xl border border-emerald-500/30 bg-emerald-500/10 px-4 py-2 text-sm font-semibold text-emerald-200 hover:bg-emerald-500/20"
+                  onClick={() => setShowContainerTerminal(true)}
+                >
+                  <span className="inline-flex items-center gap-2"><Terminal size={14} /> Terminal</span>
+                </button>
+              ) : null}
               <button
                 className="rounded-xl border border-slate-600 bg-slate-800 px-4 py-2 text-sm font-semibold text-slate-100 hover:bg-slate-700 disabled:cursor-not-allowed disabled:opacity-60"
                 disabled={editOperationInProgress}
@@ -5127,6 +5237,7 @@ const DockerPanel = ({ showPageIntro = true }) => {
                     { apply: true }
                   );
                   if (updated) {
+                    setShowContainerTerminal(false)
                     setEditDialog(null);
                   }
                 }}
@@ -5138,6 +5249,7 @@ const DockerPanel = ({ showPageIntro = true }) => {
                 disabled={editOperationInProgress}
                 onClick={() => {
                   setServiceUpdateStatus(null)
+                  setShowContainerTerminal(false)
                   setEditDialog(null)
                 }}
               >
