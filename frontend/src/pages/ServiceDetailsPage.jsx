@@ -2087,6 +2087,7 @@ const ServiceSettingsTab = ({ service, settingsState, setSettingsState, onReload
     try {
       await servicesApi.update(service.id, {
         hostPort: settingsState.hostPort ? Number(settingsState.hostPort) : null,
+        containerPort: settingsState.containerPort ? Number(settingsState.containerPort) : null,
         networkName: settingsState.networkName,
         command: settingsState.command,
         bindLocalOnly: settingsState.bindLocalOnly,
@@ -2153,6 +2154,10 @@ const ServiceSettingsTab = ({ service, settingsState, setSettingsState, onReload
             <input className={fieldClass} value={settingsState.hostPort} onChange={(event) => setSettingsState((current) => ({ ...current, hostPort: event.target.value }))} />
           </label>
           <label className="block">
+            <span className="mb-2 block text-xs text-slate-500">Porta do container (expose)</span>
+            <input className={fieldClass} value={settingsState.containerPort} onChange={(event) => setSettingsState((current) => ({ ...current, containerPort: event.target.value }))} placeholder="ex: 8080" />
+          </label>
+          <label className="block">
             <span className="mb-2 block text-xs text-slate-500">Network</span>
             <input className={fieldClass} value={settingsState.networkName} onChange={(event) => setSettingsState((current) => ({ ...current, networkName: event.target.value }))} />
           </label>
@@ -2204,6 +2209,7 @@ const ServiceSettingsTab = ({ service, settingsState, setSettingsState, onReload
 
 const buildSettingsState = (service = {}) => ({
   hostPort: service.hostPort || '',
+  containerPort: service.containerPort || '',
   networkName: service.networkName || 'bridge',
   command: Array.isArray(service.command) ? service.command.join(' ') : service.command || '',
   bindLocalOnly: Boolean(service.bindLocalOnly),
