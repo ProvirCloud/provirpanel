@@ -203,6 +203,50 @@ const getDeploymentLogLines = (deployment = {}) => {
   return lines
 }
 
+const parseEnvFile = async (file) => {
+  const content = await file.text()
+  return content
+    .split('\n')
+    .map((line) => line.trim())
+    .filter((line) => line && !line.startsWith('#'))
+    .map((line) => {
+      const index = line.indexOf('=')
+      if (index === -1) return null
+      const key = line.slice(0, index).trim()
+      let value = line.slice(index + 1).trim()
+      if (
+        (value.startsWith('"') && value.endsWith('"')) ||
+        (value.startsWith("'") && value.endsWith("'"))
+      ) {
+        value = value.slice(1, -1)
+      }
+      return key ? { key, value, secret: false } : null
+    })
+    .filter(Boolean)
+}
+
+const buildEnvMerge = (existing = [], incoming = []) => {
+  const existingMap = new Map(existing.filter((env) => env?.key).map((env) => [env.key, env]))
+  const overwrites = []
+
+  incoming.forEach((env) => {
+    const previous = existingMap.get(env.key)
+    if (previous && previous.value !== env.value) {
+      overwrites.push({
+        key: env.key,
+        previous: previous.value,
+        next: env.value
+      })
+    }
+    existingMap.set(env.key, env)
+  })
+
+  return {
+    merged: Array.from(existingMap.values()),
+    overwrites
+  }
+}
+
 const cloneEnvRows = (rows = []) =>
   rows.map((env) => ({
     key: env.key || '',
@@ -1295,6 +1339,8 @@ const EnvVariablesEditor = ({ rows, onChange }) => {
 const ServiceEnvironmentTab = ({ service, envRows, setEnvRows, onReload }) => {
   const [saving, setSaving] = useState('')
   const [message, setMessage] = useState('')
+  const [importStatus, setImportStatus] = useState('')
+  const [pendingEnvImport, setPendingEnvImport] = useState(null)
 
   const saveEnv = async (apply) => {
     setSaving(apply ? 'apply' : 'save')
@@ -1310,6 +1356,36 @@ const ServiceEnvironmentTab = ({ service, envRows, setEnvRows, onReload }) => {
       setMessage(err.response?.data?.message || err.message || 'Falha ao salvar ENV')
     } finally {
       setSaving('')
+    }
+  }
+
+  const applyEnvImport = (merged) => {
+    setEnvRows(cloneEnvRows(merged))
+    setImportStatus('Variáveis importadas. Clique em Salvar ou Aplicar para gravar.')
+    setPendingEnvImport(null)
+  }
+
+  const handleEnvFileImport = async (event) => {
+    const file = event.target.files?.[0]
+    event.target.value = ''
+    if (!file) return
+    setImportStatus('Lendo arquivo .env...')
+    setPendingEnvImport(null)
+    try {
+      const parsed = await parseEnvFile(file)
+      if (!parsed.length) {
+        setImportStatus('Nenhuma variável válida encontrada no arquivo.')
+        return
+      }
+      const { merged, overwrites } = buildEnvMerge(envRows, parsed)
+      if (overwrites.length) {
+        setPendingEnvImport({ merged, overwrites })
+        setImportStatus(`${overwrites.length} chave(s) já existem. Confirme para sobrescrever.`)
+        return
+      }
+      applyEnvImport(merged)
+    } catch (err) {
+      setImportStatus(err.message || 'Falha ao importar arquivo .env')
     }
   }
 
@@ -1334,6 +1410,49 @@ const ServiceEnvironmentTab = ({ service, envRows, setEnvRows, onReload }) => {
         </div>
       }
     >
+      <div className="mb-4 rounded-lg border border-slate-800 bg-slate-950/70 p-3">
+        <div className="flex flex-col gap-3 md:flex-row md:items-center md:justify-between">
+          <div>
+            <p className="text-sm font-medium text-slate-200">Carregar arquivo .env</p>
+            <p className="mt-1 text-xs text-slate-500">Importa as chaves para o editor abaixo sem aplicar automaticamente.</p>
+          </div>
+          <label className="inline-flex cursor-pointer items-center justify-center gap-2 rounded-lg border border-blue-500/30 bg-blue-500/10 px-3 py-2 text-xs font-medium text-blue-100 transition hover:bg-blue-500/20">
+            <UploadCloud className="h-4 w-4" />
+            Escolher .env
+            <input
+              type="file"
+              accept=".env,.txt,text/plain"
+              className="sr-only"
+              onChange={handleEnvFileImport}
+            />
+          </label>
+        </div>
+        {importStatus ? (
+          <p className="mt-3 rounded-lg border border-slate-800 bg-slate-900 px-3 py-2 text-xs text-slate-300">{importStatus}</p>
+        ) : null}
+        {pendingEnvImport ? (
+          <div className="mt-3 rounded-lg border border-amber-500/30 bg-amber-500/10 p-3">
+            <p className="text-xs font-semibold text-amber-100">As chaves abaixo serão sobrescritas:</p>
+            <div className="mt-2 max-h-48 space-y-2 overflow-auto pr-1">
+              {pendingEnvImport.overwrites.map((item) => (
+                <div key={item.key} className="rounded-md border border-amber-500/20 bg-slate-950/70 px-3 py-2 text-xs">
+                  <p className="font-semibold text-slate-100">{item.key}</p>
+                  <p className="mt-1 break-all text-slate-500">Atual: {item.previous || '(vazio)'}</p>
+                  <p className="mt-1 break-all text-emerald-200">Novo: {item.next || '(vazio)'}</p>
+                </div>
+              ))}
+            </div>
+            <div className="mt-3 flex flex-wrap gap-2">
+              <button className={primaryButtonClass} type="button" onClick={() => applyEnvImport(pendingEnvImport.merged)}>
+                Sobrescrever
+              </button>
+              <button className={smallButtonClass} type="button" onClick={() => { setPendingEnvImport(null); setImportStatus('Importação cancelada.') }}>
+                Cancelar
+              </button>
+            </div>
+          </div>
+        ) : null}
+      </div>
       <EnvVariablesEditor rows={envRows} onChange={setEnvRows} />
       {message ? <p className="mt-3 rounded-lg border border-slate-800 bg-slate-900 px-3 py-2 text-sm text-slate-300">{message}</p> : null}
     </Panel>
