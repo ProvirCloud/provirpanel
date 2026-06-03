@@ -2735,8 +2735,10 @@ const DockerPanel = ({ showPageIntro = true }) => {
       svc.templateId === 'node-app' && isAutoNodeCommandInput(rawCommandInput)
         ? ''
         : formatCommandForInput(rawCommandInput)
+    const resolvedContainerId = svc.containerId || containerLookup.get(svc.name)?.Id || null
     setEditDialog({
       ...svc,
+      containerId: resolvedContainerId,
       newEnvVars: (pending?.envVars || svc.envVars || []).map((env) => ({
         ...env,
         value: env.secret ? '******' : env.value
