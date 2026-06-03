@@ -1647,6 +1647,7 @@ const ServiceDetailsPage = () => {
   useEffect(() => {
     let active = true
     setLoading(true)
+    envInitializedRef.current = false
     loadDetails()
       .catch((err) => {
         if (active) setError(err.response?.data?.message || err.message || 'Falha ao carregar serviço')
@@ -1659,9 +1660,14 @@ const ServiceDetailsPage = () => {
     }
   }, [loadDetails])
 
+  const envInitializedRef = useRef(false)
+
   useEffect(() => {
     if (!service) return
-    setEnvRows(cloneEnvRows(service.envVars || []))
+    if (!envInitializedRef.current) {
+      setEnvRows(cloneEnvRows(service.envVars || []))
+      envInitializedRef.current = true
+    }
     setSettingsState(buildSettingsState(service))
   }, [service])
 
@@ -1736,7 +1742,7 @@ const ServiceDetailsPage = () => {
       {activeTab === 'delivery' ? <ServiceDeliveryTab service={service} onReload={loadDetails} /> : null}
       {activeTab === 'terminal' ? <ServiceTerminalTab service={service} /> : null}
       {activeTab === 'environment' ? (
-        <ServiceEnvironmentTab service={service} envRows={envRows} setEnvRows={setEnvRows} onReload={loadDetails} />
+        <ServiceEnvironmentTab service={service} envRows={envRows} setEnvRows={setEnvRows} onReload={() => { envInitializedRef.current = false; return loadDetails() }} />
       ) : null}
       {activeTab === 'logs' ? <ServiceLogsTab service={service} /> : null}
       {activeTab === 'metrics' ? <ServiceMetricsTab service={service} /> : null}
