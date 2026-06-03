@@ -1,4 +1,4 @@
-import { createElement, useCallback, useEffect, useMemo, useState } from 'react'
+import { createElement, useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { useNavigate, useParams, useSearchParams } from 'react-router-dom'
 import {
   Activity,
@@ -45,11 +45,13 @@ import {
   serviceMetricsApi,
   servicesApi
 } from '../services/serviceDetailsApi.js'
+import { createDockerTerminalSocket } from '../services/socket.js'
 
 const TABS = [
   { id: 'overview', label: 'Overview', icon: Layers },
   { id: 'deploys', label: 'Deploys', icon: UploadCloud },
   { id: 'delivery', label: 'Delivery', icon: GitBranch },
+  { id: 'terminal', label: 'Terminal', icon: Terminal },
   { id: 'environment', label: 'Environment', icon: Lock },
   { id: 'logs', label: 'Logs', icon: Terminal },
   { id: 'metrics', label: 'Metrics', icon: BarChart3 },
@@ -1029,6 +1031,102 @@ const splitRepoFullName = (fullName = '') => {
   return { owner, repo }
 }
 
+const ServiceTerminalTab = ({ service }) => {
+  const termRef = useRef(null)
+  const socketRef = useRef(null)
+  const inputRef = useRef(null)
+  const [buffer, setBuffer] = useState('')
+  const [connected, setConnected] = useState(false)
+  const containerId = service?.containerId
+
+  useEffect(() => {
+    if (!containerId) return
+    const socket = createDockerTerminalSocket()
+    socketRef.current = socket
+
+    socket.on('connect', () => {
+      socket.emit('attach', { containerId })
+    })
+    socket.on('ready', () => {
+      setConnected(true)
+      setBuffer('')
+    })
+    socket.on('output', ({ data }) => {
+      setBuffer((prev) => {
+        const next = prev + data
+        return next.length > 50000 ? next.slice(-40000) : next
+      })
+    })
+    socket.on('done', () => {
+      setBuffer((prev) => prev + '\n[Sess\u00e3o encerrada]\n')
+      setConnected(false)
+    })
+    socket.on('error', ({ message }) => {
+      setBuffer((prev) => prev + `\n[Erro: ${message}]\n`)
+    })
+
+    return () => {
+      socket.disconnect()
+      socketRef.current = null
+    }
+  }, [containerId])
+
+  useEffect(() => {
+    if (termRef.current) {
+      termRef.current.scrollTop = termRef.current.scrollHeight
+    }
+  }, [buffer])
+
+  const handleKeyDown = (e) => {
+    if (!socketRef.current || !connected) return
+    if (e.key === 'Enter') {
+      e.preventDefault()
+      const value = inputRef.current?.value || ''
+      socketRef.current.emit('input', { data: value + '\n' })
+      inputRef.current.value = ''
+    }
+  }
+
+  if (!containerId) {
+    return (
+      <section className="rounded-2xl border border-slate-800 bg-slate-950/80 p-6">
+        <p className="text-sm text-slate-400">Container n\u00e3o dispon\u00edvel. Inicie o servi\u00e7o para acessar o terminal.</p>
+      </section>
+    )
+  }
+
+  return (
+    <section className="rounded-2xl border border-slate-800 bg-slate-950/80 p-4">
+      <div className="flex items-center justify-between mb-3">
+        <h2 className="inline-flex items-center gap-2 text-sm font-semibold text-white">
+          <Terminal className="h-4 w-4 text-emerald-300" />
+          Terminal do Container
+        </h2>
+        <span className={`rounded-full px-2 py-0.5 text-xs font-medium ${connected ? 'bg-emerald-500/10 text-emerald-200 border border-emerald-500/30' : 'bg-slate-800 text-slate-400 border border-slate-700'}`}>
+          {connected ? 'Conectado' : 'Desconectado'}
+        </span>
+      </div>
+      <div
+        ref={termRef}
+        className="min-h-[300px] max-h-[60vh] overflow-auto rounded-lg bg-black p-4 font-mono text-xs text-green-300 whitespace-pre-wrap break-all"
+      >
+        {buffer || 'Conectando ao container...'}
+      </div>
+      <div className="mt-3">
+        <input
+          ref={inputRef}
+          type="text"
+          className="w-full rounded-lg border border-slate-700 bg-black px-4 py-2.5 font-mono text-sm text-green-300 outline-none placeholder:text-slate-600 focus:border-emerald-500/50"
+          placeholder={connected ? '$ digite um comando e pressione Enter...' : 'Aguardando conex\u00e3o...'}
+          disabled={!connected}
+          onKeyDown={handleKeyDown}
+          autoFocus
+        />
+      </div>
+    </section>
+  )
+}
+
 const ServiceDeliveryTab = ({ service, onReload }) => {
   const [connectionState, setConnectionState] = useState({ connections: [], defaultConnectionId: null })
   const [token, setToken] = useState('')
@@ -1648,6 +1746,7 @@ const ServiceDetailsPage = () => {
       {activeTab === 'overview' ? <ServiceOverviewTab service={service} detail={detail} activity={activity} /> : null}
       {activeTab === 'deploys' ? <ServiceDeploysTab service={service} onReload={loadDetails} /> : null}
       {activeTab === 'delivery' ? <ServiceDeliveryTab service={service} onReload={loadDetails} /> : null}
+      {activeTab === 'terminal' ? <ServiceTerminalTab service={service} /> : null}
       {activeTab === 'environment' ? (
         <ServiceEnvironmentTab service={service} envRows={envRows} setEnvRows={setEnvRows} onReload={loadDetails} />
       ) : null}
