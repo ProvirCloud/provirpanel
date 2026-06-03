@@ -2673,6 +2673,7 @@ const DockerPanel = ({ showPageIntro = true }) => {
         : dialog.commandInput || ''
     return {
       hostPort: dialog.newHostPort || dialog.hostPort,
+      containerPort: dialog.newContainerPort ? Number(dialog.newContainerPort) : dialog.containerPort,
       envVars: dialog.newEnvVars || [],
       networkName: dialog.newNetworkName || dialog.networkName,
       command: requestedCommand,
@@ -4389,6 +4390,16 @@ const DockerPanel = ({ showPageIntro = true }) => {
                   value={editDialog.newHostPort ?? editDialog.hostPort ?? ''}
                   onChange={(e) => setEditDialog(prev => ({ ...prev, newHostPort: e.target.value }))}
                 />
+              </div>
+              <div>
+                <label className="block text-sm text-slate-300 mb-2">Porta do Container (expose)</label>
+                <input
+                  type="number"
+                  className="w-full rounded-xl border border-slate-700 bg-slate-800 px-3 py-2 text-sm text-white"
+                  value={editDialog.newContainerPort ?? editDialog.containerPort ?? ''}
+                  onChange={(e) => setEditDialog(prev => ({ ...prev, newContainerPort: e.target.value }))}
+                />
+                <p className="text-xs text-slate-400 mt-1">Porta que a aplicação escuta dentro do container</p>
               </div>
               <div>
                 <label className="block text-sm text-slate-300 mb-2">Rede Docker</label>

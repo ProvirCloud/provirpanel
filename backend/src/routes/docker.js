@@ -3896,6 +3896,7 @@ router.put('/services/:id', async (req, res, next) => {
     const applyConfig = parseBooleanOption(requestBody.apply, true);
     const configKeys = [
       'hostPort',
+      'containerPort',
       'envVars',
       'networkName',
       'command',
@@ -3917,6 +3918,7 @@ router.put('/services/:id', async (req, res, next) => {
       : requestBody;
     const {
       hostPort,
+      containerPort: requestedContainerPort,
       envVars = [],
       networkName,
       command,
@@ -3945,6 +3947,7 @@ router.put('/services/:id', async (req, res, next) => {
       pendingConfig?.envVars || service.envVars || []
     );
     const savedPort = Number(hostPort) || service.hostPort;
+    const savedContainerPort = Number(requestedContainerPort) || service.containerPort;
     const savedBindLocal = bindLocalOnly ?? service.bindLocalOnly ?? false;
     const savedNetwork = networkName || service.networkName || 'provirpanel';
     const requestedSavedCommand = command ?? pendingConfig?.command ?? stringifyCommand(service.command);
@@ -3959,6 +3962,7 @@ router.put('/services/:id', async (req, res, next) => {
         ...service,
         pendingConfig: {
           hostPort: savedPort,
+          containerPort: savedContainerPort,
           envVars: savedEnvVars,
           networkName: savedNetwork,
           command: savedCommand,
@@ -4170,6 +4174,8 @@ router.put('/services/:id', async (req, res, next) => {
       }
     }
 
+    service.containerPort = savedContainerPort;
+
     const containerConfig = {
       name: service.name,
       Labels: buildServiceLabels({
@@ -4235,6 +4241,7 @@ router.put('/services/:id', async (req, res, next) => {
       ...service,
       containerId: container.Id,
       hostPort: resolvedPort,
+      containerPort: savedContainerPort,
       envVars: resolvedEnvVars,
       command: isNodeSitesMode || autoProjectLaunch ? null : containerCmd || null,
       autoCommandType: autoProjectLaunch ? autoProjectLaunch.type : null,
