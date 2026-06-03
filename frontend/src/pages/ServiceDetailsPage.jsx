@@ -165,6 +165,27 @@ const getLastDeployment = (service = {}) => {
     .sort((a, b) => new Date(b.finishedAt || b.updatedAt || b.createdAt || 0) - new Date(a.finishedAt || a.updatedAt || a.createdAt || 0))[0]
 }
 
+const getActiveDeployment = (service = {}) => {
+  const deployments = Array.isArray(service.deployments) ? service.deployments : []
+  const activeId = service.activeDeploymentId
+  return (
+    deployments.find((deployment) => activeId && deployment.id === activeId) ||
+    deployments.find((deployment) => deployment.status === 'active') ||
+    (activeId ? { id: activeId, versionLabel: activeId, status: 'active' } : null)
+  )
+}
+
+const formatDeploymentLabel = (deployment) =>
+  deployment?.versionLabel || deployment?.label || deployment?.version || deployment?.id || '-'
+
+const formatDeploymentStatus = (deployment, active = false) => {
+  if (active) return 'ativa agora'
+  if (deployment?.status === 'failed') return 'falhou'
+  if (deployment?.status === 'active') return 'ativa'
+  if (deployment?.status === 'available') return 'disponível'
+  return deployment?.status || 'disponível'
+}
+
 const cloneEnvRows = (rows = []) =>
   rows.map((env) => ({
     key: env.key || '',
@@ -175,6 +196,206 @@ const cloneEnvRows = (rows = []) =>
 const fieldClass = 'rounded-lg border border-slate-700 bg-slate-950 px-3 py-2 text-sm text-white outline-none transition placeholder:text-slate-600 focus:border-blue-500/60'
 const smallButtonClass = 'inline-flex items-center justify-center gap-2 rounded-lg border border-slate-700 bg-slate-950 px-3 py-2 text-xs font-medium text-slate-200 transition hover:border-blue-500/40 hover:text-white disabled:cursor-not-allowed disabled:opacity-50'
 const primaryButtonClass = 'inline-flex items-center justify-center gap-2 rounded-lg border border-blue-500/40 bg-blue-600 px-3 py-2 text-xs font-semibold text-white transition hover:bg-blue-500 disabled:cursor-not-allowed disabled:opacity-50'
+
+const DEPLOY_PHASE_META = {
+  init: { label: 'Preparando' },
+  upload: { label: 'Subindo arquivos' },
+  process: { label: 'Processando' },
+  prepare: { label: 'Preparando publicação' },
+  extract: { label: 'Extraindo pacote' },
+  candidate: { label: 'Criando versão candidata' },
+  compile: { label: 'Compilando versão' },
+  healthcheck: { label: 'Testando healthcheck' },
+  cleanup: { label: 'Limpando temporários' },
+  promote: { label: 'Ativando versão' },
+  rollback: { label: 'Rollback automático' },
+  done: { label: 'Concluído' },
+  error: { label: 'Erro' }
+}
+
+const DEPLOY_RUNNING_STATUSES = new Set(['initializing', 'uploading', 'queued', 'running', 'processing'])
+const DEPLOY_SUCCESS_STATUSES = new Set(['success', 'completed'])
+const DEPLOY_ERROR_STATUSES = new Set(['error', 'failed'])
+
+const clampDeployProgress = (value, fallback = 0) => {
+  const number = Number(value)
+  if (!Number.isFinite(number)) return fallback
+  return Math.max(0, Math.min(100, Math.round(number)))
+}
+
+const isDeployRunning = (progress) => DEPLOY_RUNNING_STATUSES.has(progress?.status)
+const isDeploySuccess = (progress) => DEPLOY_SUCCESS_STATUSES.has(progress?.status)
+const isDeployError = (progress) => DEPLOY_ERROR_STATUSES.has(progress?.status)
+
+const mergeDeployProgress = (current, incoming) => {
+  const resolved = typeof incoming === 'function' ? incoming(current) : incoming
+  if (!resolved) return resolved
+  const reset = Boolean(resolved.reset) || (
+    resolved.progressSessionId &&
+    current?.progressSessionId &&
+    resolved.progressSessionId !== current.progressSessionId
+  )
+  const base = reset ? null : current
+  const currentProgress = clampDeployProgress(base?.progress)
+  const incomingProgress = clampDeployProgress(resolved.progress ?? resolved.progressPercent, currentProgress)
+  const finished = isDeploySuccess(resolved)
+  const progress = finished
+    ? 100
+    : reset
+      ? incomingProgress
+      : Math.max(currentProgress, incomingProgress)
+  const { reset: _reset, progressPercent: _progressPercent, ...payload } = resolved
+  return {
+    ...(base || {}),
+    ...payload,
+    progress,
+    updatedAt: payload.updatedAt || new Date().toISOString()
+  }
+}
+
+const getDeployPhaseLabel = (phase) => DEPLOY_PHASE_META[phase]?.label || phase || 'Processando'
+
+const formatDeployEvent = (event) => {
+  if (!event) return ''
+  if (typeof event === 'string') return event
+  return event.message || event.error || JSON.stringify(event)
+}
+
+const getDeployTone = (progress) => {
+  if (isDeployError(progress)) {
+    return {
+      border: 'border-rose-500/30',
+      bg: 'bg-rose-500/10',
+      text: 'text-rose-100',
+      muted: 'text-rose-200/80',
+      bar: 'bg-rose-500',
+      iconBg: 'bg-rose-500/15 text-rose-200',
+      icon: AlertTriangle
+    }
+  }
+  if (isDeploySuccess(progress)) {
+    return {
+      border: 'border-emerald-500/30',
+      bg: 'bg-emerald-500/10',
+      text: 'text-emerald-100',
+      muted: 'text-emerald-200/80',
+      bar: 'bg-emerald-500',
+      iconBg: 'bg-emerald-500/15 text-emerald-200',
+      icon: CheckCircle2
+    }
+  }
+  return {
+    border: 'border-blue-500/30',
+    bg: 'bg-blue-500/10',
+    text: 'text-blue-100',
+    muted: 'text-blue-200/80',
+    bar: 'bg-blue-500',
+    iconBg: 'bg-blue-500/15 text-blue-200',
+    icon: Loader2
+  }
+}
+
+const DeployProgressPanel = ({ progress, error, compact = false, onOpenDeploys, onDismiss }) => {
+  if (!progress && !error) return null
+  const normalized = progress || { status: 'error', phase: 'error', progress: 0, message: error }
+  const tone = getDeployTone(normalized)
+  const Icon = tone.icon
+  const running = isDeployRunning(normalized)
+  const failed = isDeployError(normalized)
+  const success = isDeploySuccess(normalized)
+  const progressValue = clampDeployProgress(normalized.progress)
+  const message = error || normalized.error || normalized.message || 'Publicação em andamento...'
+  const title = failed ? 'Falha no deploy' : success ? 'Deploy concluído' : 'Deploy em andamento'
+  const events = Array.isArray(normalized.events) ? normalized.events.map(formatDeployEvent).filter(Boolean).slice(-6) : []
+
+  return (
+    <div className={`rounded-xl border ${tone.border} ${tone.bg} p-3 ${tone.text}`}>
+      <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
+        <div className="flex min-w-0 gap-3">
+          <span className={`mt-0.5 inline-flex h-9 w-9 shrink-0 items-center justify-center rounded-lg ${tone.iconBg}`}>
+            <Icon className={`h-4 w-4 ${running ? 'animate-spin' : ''}`} />
+          </span>
+          <div className="min-w-0">
+            <div className="flex flex-wrap items-center gap-2">
+              <p className="text-sm font-semibold text-white">{title}</p>
+              <span className="rounded-full border border-white/10 bg-black/20 px-2 py-0.5 text-[11px] uppercase">
+                {getDeployPhaseLabel(normalized.phase)}
+              </span>
+              {normalized.jobId ? (
+                <span className="rounded-full border border-white/10 bg-black/20 px-2 py-0.5 text-[11px] text-slate-300">
+                  Job {String(normalized.jobId).slice(0, 8)}
+                </span>
+              ) : null}
+            </div>
+            <p className={`mt-1 break-words text-sm ${tone.muted}`}>{message}</p>
+            {normalized.uploadProgress !== undefined && !failed && !success ? (
+              <p className="mt-1 text-xs text-slate-400">Upload do pacote: {clampDeployProgress(normalized.uploadProgress)}%</p>
+            ) : null}
+          </div>
+        </div>
+        <div className="flex shrink-0 items-center gap-2">
+          <span className="min-w-12 text-right text-sm font-semibold text-white">{progressValue}%</span>
+          {onOpenDeploys ? (
+            <button className={smallButtonClass} type="button" onClick={onOpenDeploys}>
+              Ver deploy
+            </button>
+          ) : null}
+          {onDismiss && !running ? (
+            <button className={smallButtonClass} type="button" onClick={onDismiss} aria-label="Fechar status de deploy">
+              <X className="h-4 w-4" />
+            </button>
+          ) : null}
+        </div>
+      </div>
+      <div className="relative mt-3 h-2 overflow-hidden rounded-full bg-slate-950/80">
+        <div className={`h-full rounded-full transition-all duration-500 ${tone.bar}`} style={{ width: `${progressValue}%` }} />
+        {running ? <div className="absolute inset-0 animate-pulse bg-white/10" /> : null}
+      </div>
+      {!compact && events.length ? (
+        <div className="mt-3 max-h-40 overflow-auto rounded-lg border border-white/5 bg-slate-950/80 p-2 font-mono text-[11px] leading-5 text-slate-400">
+          {events.map((event, index) => (
+            <p key={`${event}-${index}`}>{event}</p>
+          ))}
+        </div>
+      ) : null}
+    </div>
+  )
+}
+
+const DeployNotification = ({ notification, onClose, onOpenDeploys }) => {
+  if (!notification) return null
+  const progress = {
+    status: notification.type === 'success' ? 'success' : notification.type === 'error' ? 'error' : 'processing',
+    phase: notification.phase || (notification.type === 'success' ? 'done' : notification.type === 'error' ? 'error' : 'process')
+  }
+  const tone = getDeployTone(progress)
+  const Icon = tone.icon
+
+  return (
+    <div className={`fixed bottom-4 right-4 z-50 w-[calc(100vw-2rem)] max-w-md rounded-xl border ${tone.border} bg-slate-950 p-4 shadow-2xl shadow-black/40`} role={notification.type === 'error' ? 'alert' : 'status'}>
+      <div className="flex items-start gap-3">
+        <span className={`inline-flex h-9 w-9 shrink-0 items-center justify-center rounded-lg ${tone.iconBg}`}>
+          <Icon className={`h-4 w-4 ${notification.type === 'info' ? 'animate-spin' : ''}`} />
+        </span>
+        <div className="min-w-0 flex-1">
+          <p className="text-sm font-semibold text-white">{notification.title}</p>
+          <p className="mt-1 break-words text-sm text-slate-300">{notification.message}</p>
+          <div className="mt-3 flex flex-wrap gap-2">
+            <button className={smallButtonClass} type="button" onClick={onOpenDeploys}>
+              Ver deploy
+            </button>
+            <button className={smallButtonClass} type="button" onClick={onClose}>
+              Fechar
+            </button>
+          </div>
+        </div>
+        <button className="text-slate-500 hover:text-white" type="button" onClick={onClose} aria-label="Fechar notificação">
+          <X className="h-4 w-4" />
+        </button>
+      </div>
+    </div>
+  )
+}
 
 const ServiceStatusBadge = ({ service }) => {
   const state = normalizeRuntimeState(service)
@@ -218,6 +439,7 @@ const ServiceHeader = ({ service, actionState, onBack, onDeploy, onEdit, onResta
   const isRunning = runtime === 'running'
   const publicUrl = resolvePublicUrl(service)
   const lastDeployment = getLastDeployment(service)
+  const activeDeployment = getActiveDeployment(service)
   return (
     <section className="rounded-2xl border border-slate-800 bg-slate-950/80 p-4 shadow-2xl shadow-slate-950/20">
       <div className="flex flex-col gap-4 lg:flex-row lg:items-start lg:justify-between">
@@ -236,6 +458,14 @@ const ServiceHeader = ({ service, actionState, onBack, onDeploy, onEdit, onResta
             <HealthBadge service={service} />
             <span className="rounded-full border border-slate-700 bg-slate-900 px-2.5 py-1 text-xs text-slate-300">
               {resolveEnvironmentLabel(service)}
+            </span>
+            <span className={`inline-flex items-center gap-1.5 rounded-full border px-2.5 py-1 text-xs font-medium ${
+              activeDeployment
+                ? 'border-emerald-500/30 bg-emerald-500/10 text-emerald-200'
+                : 'border-amber-500/30 bg-amber-500/10 text-amber-200'
+            }`}>
+              {activeDeployment ? <CheckCircle2 className="h-3.5 w-3.5" /> : <AlertTriangle className="h-3.5 w-3.5" />}
+              Versão ativa: {activeDeployment ? formatDeploymentLabel(activeDeployment) : 'não definida'}
             </span>
           </div>
           <div className="mt-3 grid gap-2 text-xs text-slate-400 sm:grid-cols-2 xl:grid-cols-4">
@@ -290,6 +520,67 @@ const ServiceHeader = ({ service, actionState, onBack, onDeploy, onEdit, onResta
   )
 }
 
+const ActiveDeploymentBanner = ({ service, onOpenDeploys }) => {
+  const activeDeployment = getActiveDeployment(service)
+  const deploymentLabel = formatDeploymentLabel(activeDeployment)
+  const publishedAt = activeDeployment
+    ? formatDateTime(activeDeployment.promotedAt || activeDeployment.finishedAt || activeDeployment.updatedAt || activeDeployment.createdAt)
+    : '-'
+
+  if (!activeDeployment) {
+    return (
+      <section className="rounded-xl border border-amber-500/30 bg-amber-500/10 p-3 text-amber-100">
+        <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+          <div className="flex min-w-0 items-start gap-3">
+            <span className="inline-flex h-9 w-9 shrink-0 items-center justify-center rounded-lg bg-amber-500/15 text-amber-200">
+              <AlertTriangle className="h-4 w-4" />
+            </span>
+            <div className="min-w-0">
+              <p className="text-sm font-semibold text-white">Nenhuma versão ativa registrada</p>
+              <p className="mt-1 text-sm text-amber-100/80">O serviço está sem uma publicação marcada como ativa no histórico.</p>
+            </div>
+          </div>
+          <button className={smallButtonClass} type="button" onClick={onOpenDeploys}>
+            Ver versões
+          </button>
+        </div>
+      </section>
+    )
+  }
+
+  return (
+    <section className="rounded-xl border border-emerald-500/30 bg-emerald-500/10 p-3 text-emerald-100">
+      <div className="flex flex-col gap-3 lg:flex-row lg:items-center lg:justify-between">
+        <div className="flex min-w-0 items-start gap-3">
+          <span className="inline-flex h-10 w-10 shrink-0 items-center justify-center rounded-lg bg-emerald-500/15 text-emerald-200">
+            <CheckCircle2 className="h-5 w-5" />
+          </span>
+          <div className="min-w-0">
+            <div className="flex flex-wrap items-center gap-2">
+              <p className="text-sm font-semibold text-white">Versão publicada e ativa</p>
+              <span className="rounded-full border border-emerald-400/30 bg-emerald-400/10 px-2 py-0.5 text-[11px] font-semibold uppercase text-emerald-100">
+                Em produção
+              </span>
+            </div>
+            <p className="mt-1 truncate text-xl font-semibold text-white" title={deploymentLabel}>{deploymentLabel}</p>
+            <p className="mt-1 truncate text-xs text-emerald-100/75">
+              Publicada em {publishedAt} · {activeDeployment.archiveName || activeDeployment.projectDir || activeDeployment.id}
+            </p>
+          </div>
+        </div>
+        <div className="flex shrink-0 flex-wrap gap-2">
+          <span className="inline-flex items-center rounded-lg border border-emerald-400/20 bg-slate-950/40 px-3 py-2 text-xs text-emerald-100">
+            ID {String(activeDeployment.id || '').slice(0, 12)}
+          </span>
+          <button className={smallButtonClass} type="button" onClick={onOpenDeploys}>
+            Ver versões
+          </button>
+        </div>
+      </div>
+    </section>
+  )
+}
+
 const SummaryCard = ({ icon, label, value, detail, tone = 'slate' }) => {
   const toneClass = {
     slate: 'border-slate-800 bg-slate-950/70 text-slate-300',
@@ -312,7 +603,7 @@ const SummaryCard = ({ icon, label, value, detail, tone = 'slate' }) => {
 
 const ServiceSummaryCards = ({ service, metrics }) => {
   const current = metrics?.current || {}
-  const lastDeployment = getLastDeployment(service)
+  const activeDeployment = getActiveDeployment(service)
   const recentErrors = (service.deployments || []).filter((deployment) => deployment.status === 'failed').length
   return (
     <section className="grid gap-3 md:grid-cols-2 xl:grid-cols-7">
@@ -320,7 +611,7 @@ const ServiceSummaryCards = ({ service, metrics }) => {
       <SummaryCard icon={Database} label="Memória" value={formatBytes(current.memoryUsage)} detail={`${current.memoryPercent ?? 0}% do limite`} />
       <SummaryCard icon={Activity} label="Req/min" value={current.requestsPerMinute ?? '-'} detail="aguardando métrica HTTP" />
       <SummaryCard icon={Clock3} label="Uptime" value={formatUptime(current.uptimeSeconds)} detail={`${current.restartCount ?? 0} restart(s)`} tone="green" />
-      <SummaryCard icon={UploadCloud} label="Último deploy" value={lastDeployment?.versionLabel || lastDeployment?.status || '-'} detail={formatDateTime(lastDeployment?.finishedAt || lastDeployment?.createdAt)} />
+      <SummaryCard icon={UploadCloud} label="Versão ativa" value={formatDeploymentLabel(activeDeployment)} detail={activeDeployment ? formatDateTime(activeDeployment.promotedAt || activeDeployment.finishedAt || activeDeployment.createdAt) : 'nenhuma versão ativa'} tone={activeDeployment ? 'green' : 'amber'} />
       <SummaryCard icon={AlertTriangle} label="Erros" value={recentErrors} detail="deploys com falha" tone={recentErrors ? 'rose' : 'slate'} />
       <SummaryCard icon={Zap} label="Custo" value={service.estimatedCost || '-'} detail="não configurado" tone="amber" />
     </section>
@@ -501,8 +792,19 @@ const DeployHistory = ({ service, busyVersionId, onRollback, onDownload, onRemov
             const active = deployment.id === service.activeDeploymentId || deployment.status === 'active'
             const busy = busyVersionId === deployment.id
             return (
-              <tr key={deployment.id} className="border-t border-slate-800">
-                <td className="px-3 py-3 text-white">{deployment.versionLabel || deployment.id}</td>
+              <tr key={deployment.id} className={`border-t ${active ? 'border-emerald-500/30 bg-emerald-500/5' : 'border-slate-800'}`}>
+                <td className="px-3 py-3">
+                  <div className="flex min-w-0 flex-wrap items-center gap-2">
+                    <span className="truncate font-medium text-white">{formatDeploymentLabel(deployment)}</span>
+                    {active ? (
+                      <span className="inline-flex items-center gap-1 rounded-full border border-emerald-400/30 bg-emerald-400/10 px-2 py-0.5 text-[11px] font-semibold text-emerald-100">
+                        <CheckCircle2 className="h-3 w-3" />
+                        ATIVA
+                      </span>
+                    ) : null}
+                  </div>
+                  <p className="mt-1 truncate text-xs text-slate-500">{deployment.id}</p>
+                </td>
                 <td className="px-3 py-3">
                   <span className={`rounded-full border px-2 py-1 text-xs ${
                     deployment.status === 'failed'
@@ -511,7 +813,7 @@ const DeployHistory = ({ service, busyVersionId, onRollback, onDownload, onRemov
                         ? 'border-emerald-500/30 bg-emerald-500/10 text-emerald-200'
                         : 'border-slate-700 bg-slate-900 text-slate-300'
                   }`}>
-                    {active ? 'active' : deployment.status || 'available'}
+                    {formatDeploymentStatus(deployment, active)}
                   </span>
                 </td>
                 <td className="max-w-xs truncate px-3 py-3 text-slate-400">{deployment.archiveName || deployment.projectDir || '-'}</td>
@@ -541,15 +843,46 @@ const DeployHistory = ({ service, busyVersionId, onRollback, onDownload, onRemov
   )
 }
 
-const ServiceDeploysTab = ({ service, onReload }) => {
+const ServiceDeploysTab = ({
+  service,
+  onReload,
+  deployProgress,
+  onDeployProgressChange = () => {},
+  onDeployNotification = () => {}
+}) => {
   const [file, setFile] = useState(null)
   const [versionMode, setVersionMode] = useState('auto')
   const [versionAppVersion, setVersionAppVersion] = useState('')
   const [versionBuildNumber, setVersionBuildNumber] = useState('')
   const [versionChangeType, setVersionChangeType] = useState('fix')
-  const [progress, setProgress] = useState(null)
   const [error, setError] = useState('')
   const [busyVersionId, setBusyVersionId] = useState('')
+  const mountedRef = useRef(true)
+  const progress = deployProgress
+  const deployRunning = isDeployRunning(progress)
+
+  useEffect(() => () => {
+    mountedRef.current = false
+  }, [])
+
+  const setDeployError = useCallback((message) => {
+    if (mountedRef.current) setError(message)
+  }, [])
+
+  const clearSelectedFile = useCallback(() => {
+    if (mountedRef.current) setFile(null)
+  }, [])
+
+  const publishProgress = useCallback((nextProgress) => {
+    onDeployProgressChange((current) => {
+      const resolved = typeof nextProgress === 'function' ? nextProgress(current) : nextProgress
+      if (!resolved) return resolved
+      return {
+        serviceId: service.id,
+        ...resolved
+      }
+    })
+  }, [onDeployProgressChange, service.id])
 
   const versionMetadata = useMemo(() => ({
     mode: versionMode,
@@ -558,38 +891,88 @@ const ServiceDeploysTab = ({ service, onReload }) => {
     changeType: versionChangeType
   }), [versionMode, versionAppVersion, versionBuildNumber, versionChangeType])
 
-  const monitorJob = useCallback(async (jobId) => {
+  const monitorJob = useCallback(async (jobId, progressSessionId) => {
     if (!jobId) return
     let keepPolling = true
-    while (keepPolling) {
-      await new Promise((resolve) => setTimeout(resolve, 2200))
-      const payload = await servicesApi.getDeployJob(service.id, jobId)
-      const job = payload.job || payload
-      setProgress({
-        status: job.status,
-        phase: job.phase,
-        progress: job.progressPercent ?? 80,
-        message: job.message || 'Publicação em andamento...',
-        events: job.progress || []
-      })
-      keepPolling = ['queued', 'running', 'processing'].includes(job.status)
-      if (job.status === 'success' || job.status === 'completed') {
-        setProgress({
-          status: 'success',
-          phase: 'done',
-          progress: 100,
-          message: 'Versão publicada com sucesso.',
-          events: job.progress || []
+    try {
+      while (keepPolling) {
+        await new Promise((resolve) => setTimeout(resolve, 2200))
+        const payload = await servicesApi.getDeployJob(service.id, jobId)
+        const job = payload.job || payload
+        publishProgress({
+          progressSessionId,
+          jobId,
+          status: job.status,
+          phase: job.phase,
+          progress: job.progressPercent ?? 80,
+          message: job.message || 'Publicação em andamento...',
+          error: job.error || null,
+          events: job.progress || [],
+          updatedAt: job.updatedAt
         })
-        await onReload()
-        break
+        keepPolling = ['queued', 'running', 'processing'].includes(job.status)
+        if (job.status === 'success' || job.status === 'completed') {
+          publishProgress({
+            progressSessionId,
+            jobId,
+            status: 'success',
+            phase: 'done',
+            progress: 100,
+            message: 'Versão publicada com sucesso.',
+            events: job.progress || []
+          })
+          onDeployNotification({
+            type: 'success',
+            title: 'Deploy concluído',
+            message: 'A nova versão foi publicada e o serviço foi atualizado.',
+            serviceId: service.id
+          })
+          clearSelectedFile()
+          await onReload()
+          break
+        }
+        if (job.status === 'error' || job.status === 'failed') {
+          const message = job.error || job.message || 'Falha na publicação'
+          setDeployError(message)
+          publishProgress({
+            progressSessionId,
+            jobId,
+            status: 'error',
+            phase: 'error',
+            progress: job.progressPercent,
+            message,
+            error: message,
+            events: job.progress || []
+          })
+          onDeployNotification({
+            type: 'error',
+            title: 'Falha no deploy',
+            message,
+            serviceId: service.id
+          })
+          await onReload()
+          break
+        }
       }
-      if (job.status === 'error' || job.status === 'failed') {
-        setError(job.error || job.message || 'Falha na publicação')
-        break
-      }
+    } catch (err) {
+      const message = err.response?.data?.message || err.message || 'Falha ao acompanhar o job de publicação'
+      setDeployError(message)
+      publishProgress({
+        progressSessionId,
+        jobId,
+        status: 'error',
+        phase: 'error',
+        message,
+        error: message
+      })
+      onDeployNotification({
+        type: 'error',
+        title: 'Falha ao acompanhar deploy',
+        message,
+        serviceId: service.id
+      })
     }
-  }, [onReload, service.id])
+  }, [clearSelectedFile, onDeployNotification, onReload, publishProgress, service.id, setDeployError])
 
   const handleDeploy = async () => {
     setError('')
@@ -597,8 +980,23 @@ const ServiceDeploysTab = ({ service, onReload }) => {
       setError('Selecione o pacote da versão.')
       return
     }
+    const progressSessionId = `${service.id}-${Date.now()}`
+    publishProgress({
+      reset: true,
+      progressSessionId,
+      status: 'uploading',
+      phase: 'upload',
+      progress: 1,
+      uploadProgress: 0,
+      message: `Preparando upload de ${file.name}...`
+    })
+    onDeployNotification({
+      type: 'info',
+      title: 'Deploy iniciado',
+      message: `Publicando ${file.name}. Acompanhe o progresso nesta página.`,
+      serviceId: service.id
+    })
     try {
-      const progressSessionId = `${service.id}-${Date.now()}`
       const response = await servicesApi.deployProjectArchive(
         service.id,
         {
@@ -610,37 +1008,57 @@ const ServiceDeploysTab = ({ service, onReload }) => {
           nodeServiceMode: service.nodeServiceMode,
           nodeSiteConfig: service.nodeSiteConfig
         },
-        setProgress
+        publishProgress
       )
-      const jobId = response.data?.jobId || response.data?.job?.id
+      const job = response.data?.job || {}
+      const jobId = response.data?.jobId || job.id
       if (response.status === 202 || response.data?.accepted) {
-        setProgress((current) => ({
+        publishProgress((current) => ({
           ...(current || {}),
+          progressSessionId,
+          jobId,
           status: 'processing',
-          phase: 'process',
-          progress: Math.max(current?.progress || 0, 55),
-          message: response.data?.message || 'Publicação em andamento no servidor...'
+          phase: job.phase || 'process',
+          progress: job.progressPercent ?? 34,
+          message: response.data?.message || 'Publicação em andamento no servidor...',
+          events: response.data?.progress || current?.events || []
         }))
-        await monitorJob(jobId)
+        await monitorJob(jobId, progressSessionId)
         return
       }
-      setProgress({
+      publishProgress({
+        progressSessionId,
+        jobId,
         status: 'success',
         phase: 'done',
         progress: 100,
         message: 'Versão publicada com sucesso.',
         events: response.data?.progress || []
       })
-      setFile(null)
+      onDeployNotification({
+        type: 'success',
+        title: 'Deploy concluído',
+        message: 'A nova versão foi publicada com sucesso.',
+        serviceId: service.id
+      })
+      clearSelectedFile()
       await onReload()
     } catch (err) {
-      setError(err.response?.data?.message || err.message || 'Falha na publicação')
-      setProgress((current) => ({
-        ...(current || {}),
+      const message = err.response?.data?.message || err.message || 'Falha na publicação'
+      setDeployError(message)
+      publishProgress({
+        progressSessionId,
         status: 'error',
         phase: 'error',
-        message: err.response?.data?.message || err.message || 'Falha na publicação'
-      }))
+        message,
+        error: message
+      })
+      onDeployNotification({
+        type: 'error',
+        title: 'Falha no deploy',
+        message,
+        serviceId: service.id
+      })
     }
   }
 
@@ -721,29 +1139,11 @@ const ServiceDeploysTab = ({ service, onReload }) => {
             Healthcheck: {service.healthcheck?.enabled ? `${service.healthcheck.target} / ${service.healthcheck.retries} tentativa(s)` : 'não configurado'}.
             Rollback automático: {service.autoRollback === false ? 'desativado' : 'ativado'}.
           </div>
-          <button className={primaryButtonClass} type="button" onClick={handleDeploy} disabled={progress?.status === 'uploading' || progress?.status === 'processing'}>
-            <UploadCloud className="h-4 w-4" />
-            Publicar versão
+          <button className={primaryButtonClass} type="button" onClick={handleDeploy} disabled={deployRunning}>
+            {deployRunning ? <Loader2 className="h-4 w-4 animate-spin" /> : <UploadCloud className="h-4 w-4" />}
+            {deployRunning ? 'Publicando...' : 'Publicar versão'}
           </button>
-          {progress ? (
-            <div className="rounded-lg border border-blue-500/20 bg-blue-500/10 p-3">
-              <div className="flex items-center justify-between gap-3 text-xs text-blue-100">
-                <span>{progress.message || 'Processando...'}</span>
-                <span>{progress.progress ?? 0}%</span>
-              </div>
-              <div className="mt-2 h-2 overflow-hidden rounded-full bg-slate-900">
-                <div className="h-full rounded-full bg-blue-500" style={{ width: `${Math.min(100, progress.progress || 0)}%` }} />
-              </div>
-              {progress.events?.length ? (
-                <div className="mt-3 max-h-36 overflow-auto rounded bg-slate-950 p-2 font-mono text-[11px] text-slate-400">
-                  {progress.events.slice(-8).map((event, index) => (
-                    <p key={`${event}-${index}`}>{typeof event === 'string' ? event : event.message || JSON.stringify(event)}</p>
-                  ))}
-                </div>
-              ) : null}
-            </div>
-          ) : null}
-          {error ? <p className="rounded-lg border border-rose-500/30 bg-rose-500/10 px-3 py-2 text-sm text-rose-200">{error}</p> : null}
+          <DeployProgressPanel progress={progress} error={error || progress?.error} />
         </div>
       </Panel>
       <Panel title="Versões publicadas" icon={History}>
@@ -1614,6 +2014,8 @@ const ServiceDetailsPage = () => {
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState('')
   const [actionState, setActionState] = useState('')
+  const [deployProgress, setDeployProgress] = useState(null)
+  const [deployNotification, setDeployNotification] = useState(null)
 
   const service = detail?.service
 
@@ -1622,6 +2024,17 @@ const ServiceDetailsPage = () => {
     nextParams.set('tab', tabId)
     setSearchParams(nextParams, { replace: true })
   }, [searchParams, setSearchParams])
+
+  const handleDeployProgressChange = useCallback((nextProgress) => {
+    setDeployProgress((current) => mergeDeployProgress(current, nextProgress))
+  }, [])
+
+  const handleDeployNotification = useCallback((notification) => {
+    setDeployNotification({
+      id: `${Date.now()}-${notification.type || 'info'}`,
+      ...notification
+    })
+  }, [])
 
   const loadDetails = useCallback(async () => {
     setError('')
@@ -1685,6 +2098,13 @@ const ServiceDetailsPage = () => {
     serviceActivityApi.list(serviceId).then(setActivity).catch(() => {})
   }, [serviceId])
 
+  useEffect(() => {
+    if (!deployNotification) return undefined
+    const timeout = deployNotification.type === 'error' ? 14000 : deployNotification.type === 'success' ? 9000 : 6000
+    const timer = window.setTimeout(() => setDeployNotification(null), timeout)
+    return () => window.clearTimeout(timer)
+  }, [deployNotification])
+
   const runServiceAction = async (label, action) => {
     setActionState(label)
     setError('')
@@ -1720,6 +2140,7 @@ const ServiceDetailsPage = () => {
   }
 
   if (!service) return null
+  const currentDeployProgress = deployProgress?.serviceId === service.id ? deployProgress : null
 
   return (
     <div className="space-y-4">
@@ -1733,12 +2154,35 @@ const ServiceDetailsPage = () => {
         onStop={() => runServiceAction('Parando serviço...', () => servicesApi.stop(service.id))}
         onRestart={() => runServiceAction('Reiniciando serviço...', () => servicesApi.restart(service.id))}
       />
+      <DeployNotification
+        notification={deployNotification?.serviceId && deployNotification.serviceId !== service.id ? null : deployNotification}
+        onClose={() => setDeployNotification(null)}
+        onOpenDeploys={() => setActiveTab('deploys')}
+      />
       {error ? <div className="rounded-xl border border-rose-500/30 bg-rose-500/10 p-3 text-sm text-rose-100">{error}</div> : null}
+      <ActiveDeploymentBanner service={service} onOpenDeploys={() => setActiveTab('deploys')} />
+      {currentDeployProgress && activeTab !== 'deploys' ? (
+        <DeployProgressPanel
+          progress={currentDeployProgress}
+          error={currentDeployProgress.error}
+          compact
+          onOpenDeploys={() => setActiveTab('deploys')}
+          onDismiss={!isDeployRunning(currentDeployProgress) ? () => setDeployProgress(null) : null}
+        />
+      ) : null}
       <ServiceSummaryCards service={service} metrics={metrics} />
       <ServiceTabs activeTab={activeTab} onChange={setActiveTab} />
 
       {activeTab === 'overview' ? <ServiceOverviewTab service={service} detail={detail} activity={activity} /> : null}
-      {activeTab === 'deploys' ? <ServiceDeploysTab service={service} onReload={loadDetails} /> : null}
+      {activeTab === 'deploys' ? (
+        <ServiceDeploysTab
+          service={service}
+          onReload={loadDetails}
+          deployProgress={currentDeployProgress}
+          onDeployProgressChange={handleDeployProgressChange}
+          onDeployNotification={handleDeployNotification}
+        />
+      ) : null}
       {activeTab === 'delivery' ? <ServiceDeliveryTab service={service} onReload={loadDetails} /> : null}
       {activeTab === 'terminal' ? <ServiceTerminalTab service={service} /> : null}
       {activeTab === 'environment' ? (

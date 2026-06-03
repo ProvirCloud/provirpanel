@@ -2,6 +2,54 @@ import api, { uploadApi } from './api.js'
 
 const CHUNKED_UPLOAD_THRESHOLD_BYTES = 50 * 1024 * 1024
 const UPLOAD_CHUNK_SIZE_BYTES = 25 * 1024 * 1024
+const DEPLOY_UPLOAD_PROGRESS_CEILING = 30
+const DEPLOY_PHASE_PROGRESS = {
+  init: 0,
+  upload: 18,
+  process: 24,
+  prepare: 34,
+  extract: 46,
+  candidate: 58,
+  compile: 68,
+  healthcheck: 80,
+  cleanup: 86,
+  promote: 92,
+  rollback: 95,
+  done: 100,
+  error: 100
+}
+
+const clampProgress = (value, fallback = 0) => {
+  const number = Number(value)
+  if (!Number.isFinite(number)) return fallback
+  return Math.max(0, Math.min(100, Math.round(number)))
+}
+
+const toUploadDeployProgress = (uploadPercent) =>
+  clampProgress((clampProgress(uploadPercent) / 100) * DEPLOY_UPLOAD_PROGRESS_CEILING, 1)
+
+const resolveDeployErrorMessage = (err) =>
+  err?.response?.data?.message || err?.message || 'Falha na publicação'
+
+const notifyDeployProgress = (onProgress, payload = {}) => {
+  if (typeof onProgress !== 'function') return null
+  const phase = payload.phase || 'process'
+  const status =
+    payload.status ||
+    (phase === 'done' ? 'success' : phase === 'error' ? 'error' : 'processing')
+  const fallbackProgress = DEPLOY_PHASE_PROGRESS[phase] ?? 0
+  const progress = clampProgress(payload.progress ?? payload.progressPercent, fallbackProgress)
+  const nextPayload = {
+    ...payload,
+    status,
+    phase,
+    progress,
+    message: payload.message || 'Publicação em andamento...',
+    updatedAt: payload.updatedAt || new Date().toISOString()
+  }
+  onProgress(nextPayload)
+  return nextPayload
+}
 
 const postUploadChunk = async (url, buildFormData, config = {}) => {
   let lastError = null
@@ -24,10 +72,11 @@ const uploadFileInChunks = async ({
   onProgress
 }) => {
   const totalChunks = Math.ceil(file.size / UPLOAD_CHUNK_SIZE_BYTES)
-  onProgress?.({
+  notifyDeployProgress(onProgress, {
     status: 'initializing',
     phase: 'init',
     progress: 0,
+    progressSessionId: metadata.progressSessionId,
     message: 'Inicializando upload em partes...'
   })
   const initResponse = await uploadApi.post(`/docker/services/${serviceId}/project-upload/init`, {
@@ -60,15 +109,17 @@ const uploadFileInChunks = async ({
         headers: { 'Content-Type': 'multipart/form-data' },
         onUploadProgress: (event) => {
           const loaded = uploadedBefore + (event.loaded || 0)
-          const progress = Math.min(99, Math.round((loaded / file.size) * 100))
-          onProgress?.({
-            status: progress >= 99 ? 'processing' : 'uploading',
-            phase: progress >= 99 ? 'process' : 'upload',
-            progress,
+          const uploadProgress = Math.min(100, Math.round((loaded / file.size) * 100))
+          notifyDeployProgress(onProgress, {
+            status: uploadProgress >= 100 ? 'processing' : 'uploading',
+            phase: uploadProgress >= 100 ? 'process' : 'upload',
+            progress: uploadProgress >= 100 ? DEPLOY_UPLOAD_PROGRESS_CEILING : toUploadDeployProgress(uploadProgress),
+            uploadProgress,
+            progressSessionId: metadata.progressSessionId,
             message:
-              progress >= 99
+              uploadProgress >= 100
                 ? 'Arquivo enviado. Processando no servidor...'
-                : `Enviando arquivo em partes (${chunkIndex + 1}/${totalChunks})...`,
+                : `Enviando arquivo em partes (${chunkIndex + 1}/${totalChunks}) - ${uploadProgress}%`,
             chunkIndex: chunkIndex + 1,
             totalChunks
           })
@@ -76,20 +127,30 @@ const uploadFileInChunks = async ({
       }
     )
 
-    const progress = Math.min(99, Math.round((end / file.size) * 100))
-    onProgress?.({
-      status: progress >= 99 ? 'processing' : 'uploading',
-      phase: progress >= 99 ? 'process' : 'upload',
-      progress,
+    const uploadProgress = Math.min(100, Math.round((end / file.size) * 100))
+    notifyDeployProgress(onProgress, {
+      status: uploadProgress >= 100 ? 'processing' : 'uploading',
+      phase: uploadProgress >= 100 ? 'process' : 'upload',
+      progress: uploadProgress >= 100 ? DEPLOY_UPLOAD_PROGRESS_CEILING : toUploadDeployProgress(uploadProgress),
+      uploadProgress,
+      progressSessionId: metadata.progressSessionId,
       message:
-        progress >= 99
+        uploadProgress >= 100
           ? 'Arquivo enviado. Processando no servidor...'
-          : `Enviando arquivo em partes (${chunkIndex + 1}/${totalChunks})...`,
+          : `Enviando arquivo em partes (${chunkIndex + 1}/${totalChunks}) - ${uploadProgress}%`,
       chunkIndex: chunkIndex + 1,
       totalChunks
     })
   }
 
+  notifyDeployProgress(onProgress, {
+    status: 'processing',
+    phase: 'process',
+    progress: DEPLOY_UPLOAD_PROGRESS_CEILING,
+    uploadProgress: 100,
+    progressSessionId: metadata.progressSessionId,
+    message: 'Upload finalizado. Iniciando publicação no servidor...'
+  })
   return uploadApi.post(`/docker/services/${serviceId}/project-upload/complete`, { uploadId }, { timeout: 900000 })
 }
 
@@ -134,6 +195,15 @@ export const servicesApi = {
 
   async deployProjectArchive(serviceId, { file, ...options }, onProgress) {
     if (!file) throw new Error('Selecione um arquivo para publicar')
+    let lastProgress = 0
+    const emitProgress = (payload = {}) => {
+      const nextPayload = notifyDeployProgress(onProgress, {
+        progressSessionId: options.progressSessionId,
+        ...payload
+      })
+      if (nextPayload) lastProgress = nextPayload.progress
+      return nextPayload
+    }
     const metadata = {}
     if (Array.isArray(options.envVars)) metadata.envVars = options.envVars
     if (options.healthcheck) metadata.healthcheck = options.healthcheck
@@ -143,35 +213,72 @@ export const servicesApi = {
     if (options.nodeSiteConfig) metadata.nodeSiteConfig = options.nodeSiteConfig
     if (options.progressSessionId) metadata.progressSessionId = options.progressSessionId
 
-    onProgress?.({
-      status: 'uploading',
-      phase: 'upload',
-      progress: 0,
-      message: 'Subindo arquivos...'
-    })
+    try {
+      emitProgress({
+        status: 'uploading',
+        phase: 'upload',
+        progress: 0,
+        uploadProgress: 0,
+        message: 'Subindo arquivos...'
+      })
 
-    if (file.size > CHUNKED_UPLOAD_THRESHOLD_BYTES) {
-      return uploadFileInChunks({ serviceId, file, metadata, onProgress })
-    }
-
-    const formData = buildDeployFormData({ file, ...options })
-    return uploadApi.post(`/docker/services/${serviceId}/project-upload`, formData, {
-      headers: { 'Content-Type': 'multipart/form-data' },
-      onUploadProgress: (event) => {
-        const total = event.total || 0
-        const progress = total ? Math.round((event.loaded / total) * 100) : 0
-        onProgress?.({
-          status: total && event.loaded >= total ? 'processing' : 'uploading',
-          phase: total && event.loaded >= total ? 'process' : 'upload',
-          progress,
-          message:
-            total && event.loaded >= total
-              ? 'Arquivo enviado. Processando no servidor...'
-              : 'Subindo arquivos...'
+      if (file.size > CHUNKED_UPLOAD_THRESHOLD_BYTES) {
+        const response = await uploadFileInChunks({ serviceId, file, metadata, onProgress: emitProgress })
+        const job = response.data?.job || {}
+        emitProgress({
+          status: response.status === 202 || response.data?.accepted ? 'processing' : 'success',
+          phase: response.status === 202 || response.data?.accepted ? job.phase || 'prepare' : 'done',
+          progress: response.status === 202 || response.data?.accepted ? job.progressPercent ?? 34 : 100,
+          uploadProgress: 100,
+          jobId: response.data?.jobId || job.id,
+          events: response.data?.progress || [],
+          message: response.data?.message || 'Publicação recebida pelo servidor.'
         })
-      },
-      timeout: 900000
-    })
+        return response
+      }
+
+      const formData = buildDeployFormData({ file, ...options })
+      const fileSize = file.size || 1
+      const response = await uploadApi.post(`/docker/services/${serviceId}/project-upload`, formData, {
+        headers: { 'Content-Type': 'multipart/form-data' },
+        onUploadProgress: (event) => {
+          const total = event.total || fileSize
+          const uploadProgress = Math.min(100, Math.round((event.loaded / total) * 100))
+          emitProgress({
+            status: uploadProgress >= 100 ? 'processing' : 'uploading',
+            phase: uploadProgress >= 100 ? 'process' : 'upload',
+            progress: uploadProgress >= 100 ? DEPLOY_UPLOAD_PROGRESS_CEILING : toUploadDeployProgress(uploadProgress),
+            uploadProgress,
+            message:
+              uploadProgress >= 100
+                ? 'Arquivo enviado. Processando no servidor...'
+                : `Enviando arquivo... ${uploadProgress}%`
+          })
+        },
+        timeout: 900000
+      })
+      const job = response.data?.job || {}
+      emitProgress({
+        status: response.status === 202 || response.data?.accepted ? 'processing' : 'success',
+        phase: response.status === 202 || response.data?.accepted ? job.phase || 'prepare' : 'done',
+        progress: response.status === 202 || response.data?.accepted ? job.progressPercent ?? 34 : 100,
+        uploadProgress: 100,
+        jobId: response.data?.jobId || job.id,
+        events: response.data?.progress || [],
+        message: response.data?.message || 'Publicação recebida pelo servidor.'
+      })
+      return response
+    } catch (err) {
+      const message = resolveDeployErrorMessage(err)
+      emitProgress({
+        status: 'error',
+        phase: 'error',
+        progress: lastProgress || 1,
+        message,
+        error: message
+      })
+      throw err
+    }
   },
 
   async getDeployJob(serviceId, jobId) {

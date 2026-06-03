@@ -1713,15 +1713,110 @@ const writeEnvFile = (projectPath, envVars = [], templateEnv = []) => {
 
 const delay = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 
-const buildHealthcheckTargetUrl = (healthcheck, hostPort) => {
+const LOCAL_HEALTHCHECK_HOSTS = new Set(['localhost', '127.0.0.1', '0.0.0.0', '::1']);
+
+const formatHealthcheckHost = (host) => {
+  const value = String(host || '127.0.0.1').trim() || '127.0.0.1';
+  return value.includes(':') && !value.startsWith('[') ? `[${value}]` : value;
+};
+
+const buildHealthcheckTargetUrl = (healthcheck, hostPort, options = {}) => {
   const target = String(healthcheck?.target || '/').trim() || '/';
+  const host = String(options.host || '127.0.0.1').trim() || '127.0.0.1';
+  const port = options.port || hostPort;
   if (/^https?:\/\//i.test(target)) {
-    return target
-      .replace(/\{host\}/g, '127.0.0.1')
-      .replace(/\{port\}/g, String(hostPort));
+    if (target.includes('{host}') || target.includes('{port}')) {
+      return target
+        .replace(/\{host\}/g, formatHealthcheckHost(host))
+        .replace(/\{port\}/g, String(port));
+    }
+    try {
+      const parsed = new URL(target);
+      if (options.rewriteLocalUrl && LOCAL_HEALTHCHECK_HOSTS.has(String(parsed.hostname || '').toLowerCase())) {
+        parsed.hostname = host;
+        parsed.port = String(port);
+        return parsed.toString();
+      }
+    } catch (err) {
+      return target;
+    }
+    return target;
   }
   const pathTarget = target.startsWith('/') ? target : `/${target}`;
-  return `http://127.0.0.1:${hostPort}${pathTarget}`;
+  return `http://${formatHealthcheckHost(host)}:${port}${pathTarget}`;
+};
+
+const resolveContainerHealthcheckHost = async (containerId, preferredNetwork = '') => {
+  if (!containerId) return null;
+  try {
+    const inspect = await dockerManager.docker.getContainer(containerId).inspect();
+    const networks = inspect?.NetworkSettings?.Networks || {};
+    const candidates = [
+      preferredNetwork && networks[preferredNetwork],
+      ...Object.values(networks),
+      inspect?.NetworkSettings
+    ].filter(Boolean);
+    for (const networkInfo of candidates) {
+      const ipAddress = networkInfo.IPAddress || networkInfo.GlobalIPv6Address;
+      if (ipAddress) return ipAddress;
+    }
+  } catch (err) {
+    appendServiceLog('warn', `Nao foi possivel resolver IP interno do container ${containerId}: ${err.message}`);
+  }
+  return null;
+};
+
+const buildHealthcheckEndpoints = async ({
+  config,
+  hostPort,
+  containerId = '',
+  containerPort = null,
+  networkName = '',
+  preferContainer = false
+}) => {
+  const endpoints = [];
+  const addEndpoint = (endpoint) => {
+    if (!endpoint?.targetUrl) return;
+    if (endpoints.some((entry) => entry.targetUrl === endpoint.targetUrl)) return;
+    endpoints.push(endpoint);
+  };
+
+  const containerPortNumber = Number(containerPort);
+  if (containerId && Number.isFinite(containerPortNumber) && containerPortNumber > 0) {
+    const containerHost = await resolveContainerHealthcheckHost(containerId, networkName);
+    if (containerHost) {
+      const containerEndpoint = {
+        label: `porta interna ${containerPortNumber}`,
+        targetUrl: buildHealthcheckTargetUrl(config, containerPortNumber, {
+          host: containerHost,
+          port: containerPortNumber,
+          rewriteLocalUrl: true
+        })
+      };
+      if (preferContainer) addEndpoint(containerEndpoint);
+      else endpoints.push(containerEndpoint);
+    }
+  }
+
+  if (hostPort) {
+    const publishedEndpoint = {
+      label: `porta publicada ${hostPort}`,
+      targetUrl: buildHealthcheckTargetUrl(config, hostPort, {
+        host: '127.0.0.1',
+        port: hostPort,
+        rewriteLocalUrl: true
+      })
+    };
+    if (preferContainer) addEndpoint(publishedEndpoint);
+    else endpoints.unshift(publishedEndpoint);
+  }
+
+  return endpoints.length
+    ? endpoints
+    : [{
+        label: 'endpoint configurado',
+        targetUrl: buildHealthcheckTargetUrl(config, hostPort)
+      }];
 };
 
 const requestHealthcheckUrl = (targetUrl, timeoutSeconds) =>
@@ -1768,6 +1863,10 @@ const waitForServiceHealth = async ({
   serviceName,
   healthcheck,
   hostPort,
+  containerId = '',
+  containerPort = null,
+  networkName = '',
+  preferContainerHealthcheck = false,
   onProgress = null,
   onAttemptFailure = null
 }) => {
@@ -1777,7 +1876,6 @@ const waitForServiceHealth = async ({
     return { skipped: true };
   }
 
-  const targetUrl = buildHealthcheckTargetUrl(config, hostPort);
   if (config.startPeriodSeconds > 0) {
     appendServiceLog(
       'info',
@@ -1789,40 +1887,56 @@ const waitForServiceHealth = async ({
     await delay(config.startPeriodSeconds * 1000);
   }
 
+  const endpoints = await buildHealthcheckEndpoints({
+    config,
+    hostPort,
+    containerId,
+    containerPort,
+    networkName,
+    preferContainer: preferContainerHealthcheck
+  });
+  if (onProgress && endpoints.length > 1) {
+    onProgress(`Healthcheck ${serviceName} usará ${endpoints.map((endpoint) => endpoint.label).join(' e ')}.`);
+  }
+
   let lastError = null;
   for (let attempt = 1; attempt <= config.retries; attempt += 1) {
-    try {
+    const attemptErrors = [];
+    for (const endpoint of endpoints) {
       if (onProgress) {
-        onProgress(`Healthcheck ${serviceName} tentativa ${attempt}/${config.retries}: ${targetUrl}`);
+        onProgress(`Healthcheck ${serviceName} tentativa ${attempt}/${config.retries} (${endpoint.label}): ${endpoint.targetUrl}`);
       }
       appendServiceLog(
         'info',
-        `Healthcheck ${serviceName} tentativa ${attempt}/${config.retries}: ${targetUrl}`
+        `Healthcheck ${serviceName} tentativa ${attempt}/${config.retries} (${endpoint.label}): ${endpoint.targetUrl}`
       );
-      const result = await requestHealthcheckUrl(targetUrl, config.timeoutSeconds);
-      appendServiceLog(
-        'info',
-        `Healthcheck ${serviceName} OK com status ${result.statusCode}`
-      );
-      if (onProgress) {
-        onProgress(`Healthcheck ${serviceName} OK com status ${result.statusCode}.`);
+      try {
+        const result = await requestHealthcheckUrl(endpoint.targetUrl, config.timeoutSeconds);
+        appendServiceLog(
+          'info',
+          `Healthcheck ${serviceName} OK com status ${result.statusCode} em ${endpoint.label}`
+        );
+        if (onProgress) {
+          onProgress(`Healthcheck ${serviceName} OK com status ${result.statusCode} em ${endpoint.label}.`);
+        }
+        return { ok: true, targetUrl: endpoint.targetUrl, statusCode: result.statusCode, endpoint: endpoint.label };
+      } catch (err) {
+        attemptErrors.push(`${endpoint.label}: ${err.message}`);
+        appendServiceLog(
+          'warn',
+          `Healthcheck ${serviceName} falhou na tentativa ${attempt}/${config.retries} (${endpoint.label}): ${err.message}`
+        );
       }
-      return { ok: true, targetUrl, statusCode: result.statusCode };
-    } catch (err) {
-      lastError = err;
-      appendServiceLog(
-        'warn',
-        `Healthcheck ${serviceName} falhou na tentativa ${attempt}/${config.retries}: ${err.message}`
-      );
-      if (onProgress) {
-        onProgress(`Healthcheck ${serviceName} falhou na tentativa ${attempt}/${config.retries}: ${err.message}`);
-      }
-      if (onAttemptFailure) {
-        await onAttemptFailure(err, attempt, config.retries);
-      }
-      if (attempt < config.retries) {
-        await delay(config.intervalSeconds * 1000);
-      }
+    }
+    lastError = new Error(attemptErrors.join(' | ') || 'sem resposta');
+    if (onProgress) {
+      onProgress(`Healthcheck ${serviceName} falhou na tentativa ${attempt}/${config.retries}: ${lastError.message}`);
+    }
+    if (onAttemptFailure) {
+      await onAttemptFailure(lastError, attempt, config.retries);
+    }
+    if (attempt < config.retries) {
+      await delay(config.intervalSeconds * 1000);
     }
   }
 
@@ -4603,6 +4717,10 @@ const promoteProjectDeployment = async ({
       serviceName: `${service.name} candidato`,
       healthcheck,
       hostPort: candidatePort,
+      containerId: candidateContainer?.Id,
+      containerPort: service.containerPort,
+      networkName,
+      preferContainerHealthcheck: true,
       onProgress: (message) => pushProgress(message, 'healthcheck'),
       onAttemptFailure: emitCandidateLogs
     });
