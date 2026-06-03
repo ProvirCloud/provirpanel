@@ -270,7 +270,7 @@ const PROJECT_DEPLOY_PHASE_PROGRESS = {
   promote: 92,
   rollback: 95,
   done: 100,
-  error: 0
+  error: 100
 };
 
 const pushDeploymentProgress = (progress, sessionId, message, phase = 'process', extra = {}) => {
@@ -1897,6 +1897,38 @@ const inspectContainerState = async (containerId) => {
   }
 };
 
+const describeStoppedContainer = (serviceName, state = {}) => {
+  const exitCode = state.ExitCode ?? 'desconhecido';
+  const details = [];
+  if (state.OOMKilled) details.push('OOMKilled=true');
+  if (state.Error) details.push(`erro Docker: ${state.Error}`);
+  const detailText = details.length ? `, ${details.join(', ')}` : '';
+  return `Container ${serviceName} encerrou antes do healthcheck (exit ${exitCode}${detailText})`;
+};
+
+const collectStoppedContainerLogsAndThrow = async ({
+  serviceName,
+  state,
+  onProgress = null,
+  onAttemptFailure = null,
+  attempt = 1,
+  total = 1
+}) => {
+  const message = describeStoppedContainer(serviceName, state);
+  if (onProgress) {
+    onProgress(`${message}. Coletando últimas linhas do container...`);
+  }
+  if (onAttemptFailure) {
+    await delay(500);
+    await onAttemptFailure(new Error(message), attempt, total, {
+      terminal: true,
+      tail: 800,
+      maxLines: 120
+    });
+  }
+  throw createHttpError(`${message}. Últimas linhas anexadas ao log do deploy.`, 502);
+};
+
 const waitForRuntimeReadinessBeforeHealth = async ({
   serviceName,
   containerId,
@@ -1921,12 +1953,14 @@ const waitForRuntimeReadinessBeforeHealth = async ({
   while (Date.now() < deadline) {
     const state = await inspectContainerState(containerId);
     if (state && state.Running === false) {
-      const exitCode = state.ExitCode ?? 'desconhecido';
-      const reason = state.Error || state.OOMKilled ? 'erro/OOM' : 'processo encerrado';
-      throw createHttpError(
-        `Container ${serviceName} encerrou antes do healthcheck (${reason}, exit ${exitCode})`,
-        502
-      );
+      await collectStoppedContainerLogsAndThrow({
+        serviceName,
+        state,
+        onProgress,
+        onAttemptFailure,
+        attempt: probe,
+        total: graceSeconds
+      });
     }
 
     const attemptErrors = [];
@@ -2023,6 +2057,18 @@ const waitForServiceHealth = async ({
 
   let lastError = null;
   for (let attempt = 1; attempt <= config.retries; attempt += 1) {
+    const state = await inspectContainerState(containerId);
+    if (state && state.Running === false) {
+      await collectStoppedContainerLogsAndThrow({
+        serviceName,
+        state,
+        onProgress,
+        onAttemptFailure,
+        attempt,
+        total: config.retries
+      });
+    }
+
     const attemptErrors = [];
     for (const endpoint of endpoints) {
       if (onProgress) {
@@ -2110,14 +2156,20 @@ const readContainerLogLines = async (containerId, tail = 40) => {
 
 const createDeploymentLogEmitter = ({ containerId, pushProgress, phase = 'compile', label = 'container' }) => {
   const emitted = new Set();
-  return async () => {
-    const lines = await readContainerLogLines(containerId, 200);
+  return async (_err = null, _attempt = null, _total = null, emitOptions = {}) => {
+    const terminal = Boolean(emitOptions.terminal);
+    const lines = await readContainerLogLines(containerId, emitOptions.tail || (terminal ? 800 : 300));
     const fresh = lines.filter((line) => {
       if (emitted.has(line)) return false;
       emitted.add(line);
       return true;
     });
-    fresh.slice(-30).forEach((line) => {
+    const selected = fresh.slice(-(emitOptions.maxLines || (terminal ? 120 : 40)));
+    if (terminal && !selected.length) {
+      pushProgress(`${label}: nenhuma nova linha encontrada no log final do container.`, phase);
+      return;
+    }
+    selected.forEach((line) => {
       pushProgress(`${label}: ${line}`, phase);
     });
   };
@@ -5136,7 +5188,7 @@ const publishProjectArchive = async (serviceId, file, options = {}) => {
   const resolvedEnvVars = Array.isArray(options.envVars)
     ? mergeEnvVars(options.envVars, service.envVars || [])
     : service.envVars || [];
-  pushProgress(`Variáveis de ambiente preparadas: ${resolvedEnvVars.map((entry) => entry.key).join(', ') || 'nenhuma'}.`, 'prepare');
+  pushProgress(`Variáveis de ambiente preparadas: ${resolvedEnvVars.length || 0} chave(s).`, 'prepare');
   const versionMetadata = buildDeploymentVersionMetadata(
     options.versionMetadata,
     service.deployments || []
@@ -5259,10 +5311,15 @@ const startProjectPublishJob = ({
       });
     } catch (err) {
       const message = err?.message || 'Erro ao publicar projeto';
+      const currentJob = projectDeployJobs.get(jobId) || job;
+      const failedProgress = Math.max(
+        Number(currentJob.progressPercent || 0),
+        PROJECT_DEPLOY_PHASE_PROGRESS.error
+      );
       updateJob({
         status: 'error',
         phase: 'error',
-        progressPercent: PROJECT_DEPLOY_PHASE_PROGRESS.error,
+        progressPercent: failedProgress,
         message,
         error: message,
         updatedAt: new Date().toISOString(),

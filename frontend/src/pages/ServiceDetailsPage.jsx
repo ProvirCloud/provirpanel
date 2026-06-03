@@ -367,7 +367,7 @@ const DeployProgressPanel = ({ progress, error, compact = false, onOpenDeploys, 
   const progressValue = clampDeployProgress(normalized.progress)
   const message = error || normalized.error || normalized.message || 'Publicação em andamento...'
   const title = failed ? 'Falha no deploy' : success ? 'Deploy concluído' : 'Deploy em andamento'
-  const events = Array.isArray(normalized.events) ? normalized.events.map(formatDeployEvent).filter(Boolean).slice(-6) : []
+  const events = Array.isArray(normalized.events) ? normalized.events.map(formatDeployEvent).filter(Boolean).slice(-25) : []
 
   return (
     <div className={`rounded-xl border ${tone.border} ${tone.bg} p-3 ${tone.text}`}>
@@ -413,7 +413,7 @@ const DeployProgressPanel = ({ progress, error, compact = false, onOpenDeploys, 
         {running ? <div className="absolute inset-0 animate-pulse bg-white/10" /> : null}
       </div>
       {!compact && events.length ? (
-        <div className="mt-3 max-h-40 overflow-auto rounded-lg border border-white/5 bg-slate-950/80 p-2 font-mono text-[11px] leading-5 text-slate-400">
+        <div className="mt-3 max-h-72 overflow-auto rounded-lg border border-white/5 bg-slate-950/80 p-2 font-mono text-[11px] leading-5 text-slate-400">
           {events.map((event, index) => (
             <p key={`${event}-${index}`}>{event}</p>
           ))}
