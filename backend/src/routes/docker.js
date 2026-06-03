@@ -2111,13 +2111,13 @@ const readContainerLogLines = async (containerId, tail = 40) => {
 const createDeploymentLogEmitter = ({ containerId, pushProgress, phase = 'compile', label = 'container' }) => {
   const emitted = new Set();
   return async () => {
-    const lines = await readContainerLogLines(containerId, 60);
+    const lines = await readContainerLogLines(containerId, 200);
     const fresh = lines.filter((line) => {
       if (emitted.has(line)) return false;
       emitted.add(line);
       return true;
     });
-    fresh.slice(-6).forEach((line) => {
+    fresh.slice(-30).forEach((line) => {
       pushProgress(`${label}: ${line}`, phase);
     });
   };
@@ -4858,6 +4858,10 @@ const promoteProjectDeployment = async ({
   } catch (err) {
     const errorMessage = err.message || 'Falha na versão candidata';
     const failedAt = new Date().toISOString();
+    // Emit final container logs before removing so user can see the crash reason
+    try {
+      await emitCandidateLogs();
+    } catch (logErr) { /* ignore */ }
     await stopAndRemoveContainer(candidateContainer?.Id, candidateName);
     pushProgress(`Versão candidata falhou: ${errorMessage}`, 'error');
     saveServiceDeploymentState(service, {
