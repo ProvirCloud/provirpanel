@@ -32,90 +32,74 @@ import { createDockerLogsSocket, createDockerProgressSocket, createDockerTermina
 const ContainerTerminal = ({ containerId, onClose }) => {
   const termRef = useRef(null)
   const socketRef = useRef(null)
-  const inputRef = useRef(null)
-  const [buffer, setBuffer] = useState('')
+  const xtermRef = useRef(null)
   const [connected, setConnected] = useState(false)
 
   useEffect(() => {
-    if (!containerId) return
-    const socket = createDockerTerminalSocket()
-    socketRef.current = socket
+    let term = null
+    let fit = null
+    const initXterm = async () => {
+      const { Terminal } = await import('xterm')
+      const { FitAddon } = await import('@xterm/addon-fit')
+      await import('xterm/css/xterm.css')
+      term = new Terminal({ cursorBlink: true, fontSize: 13, theme: { background: '#0a0a0a' } })
+      fit = new FitAddon()
+      term.loadAddon(fit)
+      if (termRef.current) {
+        term.open(termRef.current)
+        fit.fit()
+      }
+      xtermRef.current = { term, fit }
 
-    socket.on('connect', () => {
-      socket.emit('attach', { containerId })
-    })
-    socket.on('ready', () => {
-      setConnected(true)
-      setBuffer('')
-    })
-    socket.on('output', ({ data }) => {
-      setBuffer((prev) => {
-        const next = prev + data
-        return next.length > 50000 ? next.slice(-40000) : next
+      const socket = createDockerTerminalSocket()
+      socketRef.current = socket
+
+      socket.on('connect', () => {
+        socket.emit('attach', { containerId })
       })
-    })
-    socket.on('done', () => {
-      setBuffer((prev) => prev + '\n[Sessão encerrada]\n')
-      setConnected(false)
-    })
-    socket.on('error', ({ message }) => {
-      setBuffer((prev) => prev + `\n[Erro: ${message}]\n`)
-    })
+      socket.on('ready', () => setConnected(true))
+      socket.on('output', ({ data }) => term.write(data))
+      socket.on('done', () => {
+        term.write('\r\n[Sessão encerrada]\r\n')
+        setConnected(false)
+      })
+      socket.on('error', ({ message }) => term.write(`\r\n[Erro: ${message}]\r\n`))
+
+      term.onData((data) => {
+        if (socket.connected) socket.emit('input', { data })
+      })
+      term.onResize(({ cols, rows }) => {
+        if (socket.connected) socket.emit('resize', { cols, rows })
+      })
+    }
+    if (containerId) initXterm()
 
     return () => {
-      socket.disconnect()
+      socketRef.current?.disconnect()
       socketRef.current = null
+      xtermRef.current?.term?.dispose()
+      xtermRef.current = null
     }
   }, [containerId])
 
   useEffect(() => {
-    if (termRef.current) {
-      termRef.current.scrollTop = termRef.current.scrollHeight
-    }
-  }, [buffer])
-
-  const handleKeyDown = (e) => {
-    if (!socketRef.current || !connected) return
-    if (e.key === 'Enter') {
-      e.preventDefault()
-      const value = inputRef.current?.value || ''
-      socketRef.current.emit('input', { data: value + '\n' })
-      inputRef.current.value = ''
-    }
-  }
+    const handleResize = () => xtermRef.current?.fit?.fit()
+    window.addEventListener('resize', handleResize)
+    return () => window.removeEventListener('resize', handleResize)
+  }, [])
 
   return (
     <div className="flex flex-col h-full">
       <div className="flex items-center justify-between mb-2">
         <span className="inline-flex items-center gap-2 text-xs font-semibold text-emerald-300">
           <Terminal size={14} />
-          {connected ? 'Conectado' : 'Desconectado'}
+          {connected ? 'Conectado' : 'Conectando...'}
         </span>
-        <button
-          type="button"
-          onClick={onClose}
-          className="text-xs text-slate-400 hover:text-white"
-        >
+        <button type="button" onClick={onClose} className="text-xs text-slate-400 hover:text-white">
           Fechar terminal
         </button>
       </div>
-      <div
-        ref={termRef}
-        className="flex-1 min-h-[200px] max-h-[50vh] overflow-auto rounded-lg bg-black p-3 font-mono text-xs text-green-300 whitespace-pre-wrap break-all"
-      >
-        {buffer || 'Conectando ao container...'}
-      </div>
-      <div className="mt-2">
-        <input
-          ref={inputRef}
-          type="text"
-          className="w-full rounded-lg border border-slate-700 bg-black px-3 py-2 font-mono text-sm text-green-300 outline-none placeholder:text-slate-600 focus:border-emerald-500/50"
-          placeholder={connected ? '$ digite um comando...' : 'Aguardando conexão...'}
-          disabled={!connected}
-          onKeyDown={handleKeyDown}
-          autoFocus
-        />
-      </div>
+      <div ref={termRef} className="flex-1 min-h-[250px] rounded-lg overflow-hidden" />
     </div>
   )
 }
