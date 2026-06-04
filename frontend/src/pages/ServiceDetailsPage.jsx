@@ -2288,6 +2288,7 @@ const ServiceDetailsPage = () => {
     let active = true
     setLoading(true)
     envInitializedRef.current = false
+    settingsInitializedRef.current = false
     loadDetails()
       .catch((err) => {
         if (active) setError(err.response?.data?.message || err.message || 'Falha ao carregar serviço')
@@ -2301,6 +2302,7 @@ const ServiceDetailsPage = () => {
   }, [loadDetails])
 
   const envInitializedRef = useRef(false)
+  const settingsInitializedRef = useRef(false)
 
   useEffect(() => {
     if (!service) return
@@ -2308,7 +2310,10 @@ const ServiceDetailsPage = () => {
       setEnvRows(cloneEnvRows(service.envVars || []))
       envInitializedRef.current = true
     }
-    setSettingsState(buildSettingsState(service))
+    if (!settingsInitializedRef.current) {
+      setSettingsState(buildSettingsState(service))
+      settingsInitializedRef.current = true
+    }
   }, [service])
 
   useEffect(() => {
@@ -2423,7 +2428,7 @@ const ServiceDetailsPage = () => {
           service={service}
           settingsState={settingsState}
           setSettingsState={setSettingsState}
-          onReload={loadDetails}
+          onReload={() => { settingsInitializedRef.current = false; return loadDetails() }}
         />
       ) : null}
     </div>
