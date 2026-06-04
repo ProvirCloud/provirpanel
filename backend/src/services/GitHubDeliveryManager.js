@@ -162,8 +162,11 @@ class GitHubDeliveryManager {
       return response;
     } catch (err) {
       const status = err.response?.status;
-      const message = err.response?.data?.message || err.message || 'Erro ao chamar GitHub';
-      const wrapped = new Error(`GitHub: ${message}`);
+      const ghMessage = err.response?.data?.message || err.message || 'Erro ao chamar GitHub';
+      const detail = status === 403
+        ? `${ghMessage}. Verifique se o token tem permissão Workflows (Read & Write) e se o repositório está acessível. Endpoint: ${method} ${endpoint}`
+        : ghMessage;
+      const wrapped = new Error(`GitHub: ${detail}`);
       wrapped.status = status || 502;
       throw wrapped;
     }
@@ -653,7 +656,15 @@ class GitHubDeliveryManager {
       );
       sha = existing.data?.sha || null;
     } catch (err) {
-      if (err.status !== 404) throw err;
+      if (err.status !== 404) {
+        if (err.status === 403) {
+          const hint = `Falha ao acessar ${owner}/${repo} (branch ${branch}). Verifique se o token tem acesso ao reposit\u00f3rio e permiss\u00e3o Contents + Workflows (Read & Write).`;
+          const wrapped = new Error(`GitHub: ${hint}`);
+          wrapped.status = 403;
+          throw wrapped;
+        }
+        throw err;
+      }
     }
 
     const response = await this.githubRequest(
