@@ -2069,8 +2069,55 @@ const ServiceDeliveryTab = ({ service, onReload }) => {
           {workflow?.content ? (
             <textarea className={`${fieldClass} h-80 w-full font-mono text-xs`} value={workflow.content} readOnly />
           ) : null}
+
+          {service.delivery?.workflowUpdatedAt || service.delivery?.lastWorkflowDispatchAt ? (
+            <div className="rounded-lg border border-slate-800 bg-slate-900/40 p-3 text-xs text-slate-400 space-y-1">
+              {service.delivery.workflowUpdatedAt ? <p>Workflow atualizado: {new Date(service.delivery.workflowUpdatedAt).toLocaleString()}</p> : null}
+              {service.delivery.lastWorkflowDispatchAt ? <p>Último dispatch: {new Date(service.delivery.lastWorkflowDispatchAt).toLocaleString()}</p> : null}
+              {service.delivery.workflowHtmlUrl ? <p><a href={service.delivery.workflowHtmlUrl} target="_blank" rel="noreferrer" className="text-blue-400 underline hover:text-blue-300">Ver workflow no GitHub</a></p> : null}
+            </div>
+          ) : null}
         </div>
       </Panel>
+
+      {(service.deployments || []).length > 0 ? (
+        <Panel title="Histórico de publicações" icon={History} className="xl:col-span-2">
+          <div className="max-h-[400px] overflow-auto space-y-2">
+            {(service.deployments || []).slice(0, 20).map((deployment) => (
+              <div key={deployment.id} className={`rounded-lg border p-3 text-sm ${
+                deployment.status === 'active' ? 'border-emerald-500/20 bg-emerald-500/5' :
+                deployment.status === 'failed' ? 'border-rose-500/20 bg-rose-500/5' :
+                'border-slate-800 bg-slate-900/40'
+              }`}>
+                <div className="flex items-center justify-between gap-3">
+                  <div className="flex items-center gap-2">
+                    <span className={`inline-block h-2 w-2 rounded-full ${
+                      deployment.status === 'active' ? 'bg-emerald-400' :
+                      deployment.status === 'failed' ? 'bg-rose-400' :
+                      'bg-slate-500'
+                    }`} />
+                    <span className="font-medium text-white">{deployment.versionLabel || deployment.id?.slice(0, 8)}</span>
+                    <span className="text-xs text-slate-500">{deployment.status}</span>
+                  </div>
+                  <span className="text-xs text-slate-500">
+                    {deployment.finishedAt ? new Date(deployment.finishedAt).toLocaleString() : deployment.createdAt ? new Date(deployment.createdAt).toLocaleString() : ''}
+                  </span>
+                </div>
+                {deployment.error ? (
+                  <p className="mt-2 text-xs text-rose-300 break-all">{deployment.error}</p>
+                ) : null}
+                {deployment.progress?.length ? (
+                  <div className="mt-2 max-h-24 overflow-auto rounded bg-slate-950 p-2 font-mono text-[11px] text-slate-400">
+                    {deployment.progress.slice(-10).map((event, idx) => (
+                      <p key={idx}>{typeof event === 'string' ? event : event.message || JSON.stringify(event)}</p>
+                    ))}
+                  </div>
+                ) : null}
+              </div>
+            ))}
+          </div>
+        </Panel>
+      ) : null}
     </div>
   )
 }
