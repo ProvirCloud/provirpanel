@@ -848,6 +848,53 @@ const setPhpTablePrefix = (content, tablePrefix) => {
   return `${content.trimEnd()}\n${line}\n`;
 };
 
+const normalizeDbHost = (host) => {
+  const value = String(host || '').trim();
+  if (!value) return '';
+  return value.includes(':') ? value : `${value}:3306`;
+};
+
+const resolveSiteDatabaseHost = async (site) => {
+  const explicitHost = normalizeDbHost(site.database?.host || site.database?.dbHost);
+  if (explicitHost) return explicitHost;
+
+  const services = dockerManager.readRegistry();
+  const databaseService = services.find((service) =>
+    service.id === site.services?.database ||
+    (service.siteId === site.id && service.siteRole === 'database')
+  );
+  if (databaseService?.name) {
+    return normalizeDbHost(databaseService.name);
+  }
+
+  if (site.containers?.database) {
+    try {
+      const inspect = await dockerManager.docker.getContainer(site.containers.database).inspect();
+      const containerName = String(inspect?.Name || '').replace(/^\//, '');
+      if (containerName) return normalizeDbHost(containerName);
+    } catch {
+      // Fall back to the deterministic container name below.
+    }
+  }
+
+  return normalizeDbHost(`site-${slugify(site.slug || site.name, 'wordpress')}-${String(site.id || '').slice(0, 8)}-db`);
+};
+
+const patchWordPressDatabaseDefines = async (site, content) => {
+  const db = site.database || {};
+  const dbPassword = db.password || '';
+  if (!dbPassword || dbPassword === SECRET_MASK) {
+    throw createHttpError('Senha do banco indisponível para atualizar wp-config.php', 400);
+  }
+
+  let nextContent = content;
+  nextContent = upsertPhpDefine(nextContent, 'DB_NAME', db.name || 'wordpress');
+  nextContent = upsertPhpDefine(nextContent, 'DB_USER', db.user || 'wordpress');
+  nextContent = upsertPhpDefine(nextContent, 'DB_PASSWORD', dbPassword);
+  nextContent = upsertPhpDefine(nextContent, 'DB_HOST', await resolveSiteDatabaseHost(site));
+  return nextContent;
+};
+
 const writeWordPressConfigFile = async (site, content) => {
   const configPath = path.join(site.paths?.wordpress || '', 'wp-config.php');
   try {
@@ -881,6 +928,7 @@ const patchWordPressConfigForHostChange = async (site) => {
   }
 
   let content = fs.readFileSync(configPath, 'utf8');
+  content = await patchWordPressDatabaseDefines(site, content);
   const multisite = parsePhpDefineValue(content, 'MULTISITE') === true || Boolean(site.wordpress?.multisite);
   const targetUrl = getSiteUrl(site);
   const targetPath = site.domain ? '/' : normalizeWordPressPath(getSiteProxyPath(site));
@@ -910,6 +958,7 @@ const patchWordPressConfigForRestore = async (site, restoreConfig = {}) => {
     return { patched: false, message: 'wp-config.php não encontrado para ajustar prefixo/multisite' };
   }
   let content = fs.readFileSync(configPath, 'utf8');
+  content = await patchWordPressDatabaseDefines(site, content);
   content = setPhpTablePrefix(content, restoreConfig.tablePrefix || getSafeTablePrefix(site));
   if (restoreConfig.multisite) {
     const currentSitePath = site.domain
