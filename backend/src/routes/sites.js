@@ -388,6 +388,47 @@ const detectTablePrefixFromTables = (tableNames = []) => {
   return null;
 };
 
+const isSubsiteTablePrefix = (prefix = '') => /\d_$/.test(String(prefix || ''));
+
+const stripSubsiteTablePrefix = (prefix = '') => String(prefix || '').replace(/\d+_$/, '');
+
+const resolveWordPressTablePrefix = (tables = [], detectedPrefix = 'wp_') => {
+  const detected = /^[a-zA-Z0-9_]+$/.test(detectedPrefix || '') ? detectedPrefix : 'wp_';
+  const tableSet = new Set(tables);
+  const candidates = [];
+
+  const detectedBase = isSubsiteTablePrefix(detected) ? stripSubsiteTablePrefix(detected) : detected;
+  if (detectedBase) candidates.push(detectedBase);
+
+  const inferred = detectTablePrefixFromTables(tables);
+  if (inferred) candidates.push(inferred);
+
+  const subsiteOptionPrefixes = tables
+    .map((tableName) => String(tableName || '').match(/^([a-zA-Z0-9_]+?)\d+_options$/)?.[1])
+    .filter(Boolean);
+  candidates.push(...subsiteOptionPrefixes);
+  candidates.push(detected);
+  candidates.push('wp_');
+
+  for (const prefix of Array.from(new Set(candidates.filter(Boolean)))) {
+    if (
+      tableSet.has(`${prefix}blogs`) &&
+      tableSet.has(`${prefix}site`) &&
+      tableSet.has(`${prefix}sitemeta`)
+    ) {
+      return prefix;
+    }
+  }
+
+  for (const prefix of Array.from(new Set(candidates.filter(Boolean)))) {
+    if (!isSubsiteTablePrefix(prefix) && hasWordPressCoreTables(tables, prefix)) {
+      return prefix;
+    }
+  }
+
+  return detectedBase || detected || 'wp_';
+};
+
 const detectTablePrefixFromSql = (sqlFile) => {
   if (!sqlFile || !fs.existsSync(sqlFile)) return 'wp_';
   const fd = fs.openSync(sqlFile, 'r');
@@ -957,6 +998,7 @@ const patchWordPressConfigForHostChange = async (site) => {
 
   let content = configFile.content;
   content = await patchWordPressDatabaseDefines(site, content);
+  content = setPhpTablePrefix(content, getSafeTablePrefix(site));
   const multisite = parsePhpDefineValue(content, 'MULTISITE') === true || Boolean(site.wordpress?.multisite);
   const targetUrl = getSiteUrl(site);
   const targetPath = site.domain ? '/' : normalizeWordPressPath(getSiteProxyPath(site));
@@ -1082,7 +1124,7 @@ const replaceDomainSuffix = (domain, oldPrimaryDomain, newPrimaryDomain) => {
 };
 
 const updateMultisiteUrls = async (site, tables = [], restoreConfig = {}) => {
-  const prefix = getSafeTablePrefix(site);
+  const prefix = resolveWordPressTablePrefix(tables, restoreConfig.tablePrefix || getSafeTablePrefix(site));
   const siteTable = `${prefix}site`;
   const blogsTable = `${prefix}blogs`;
   const sitemetaTable = `${prefix}sitemeta`;
@@ -1160,8 +1202,8 @@ const updateMultisiteUrls = async (site, tables = [], restoreConfig = {}) => {
 };
 
 const updateWordPressUrls = async (site, restoreConfig = {}) => {
-  const prefix = getSafeTablePrefix(site);
   const tables = await listDatabaseTables(site);
+  const prefix = resolveWordPressTablePrefix(tables, restoreConfig.tablePrefix || getSafeTablePrefix(site));
   const url = getSiteUrl(site);
   const optionsTable = `${prefix}options`;
   if (!hasTable(tables, optionsTable)) {
@@ -1170,7 +1212,7 @@ const updateWordPressUrls = async (site, restoreConfig = {}) => {
   await updateOptionTableUrls(site, optionsTable, url, tables);
   const multisite = restoreConfig.multisite || site.wordpress?.multisite || isMultisiteDatabase(tables, prefix);
   if (multisite) {
-    await updateMultisiteUrls(site, tables, restoreConfig);
+    await updateMultisiteUrls(site, tables, { ...restoreConfig, tablePrefix: prefix });
   }
   return { tablePrefix: prefix, multisite, url };
 };
@@ -1854,9 +1896,7 @@ const processMigrationArchive = async (siteId, file) => {
       const detectedTablePrefix = detectTablePrefixFromSql(sqlFile);
       await importSqlFile(site, sqlFile);
       const tables = await listDatabaseTables(site);
-      const tablePrefix = hasWordPressCoreTables(tables, detectedTablePrefix)
-        ? detectedTablePrefix
-        : detectTablePrefixFromTables(tables) || detectedTablePrefix;
+      const tablePrefix = resolveWordPressTablePrefix(tables, detectedTablePrefix);
       const multisite = wordpressConfigMetadata.multisite || isMultisiteDatabase(tables, tablePrefix);
       const subdomainInstall = wordpressConfigMetadata.subdomainInstall ?? (
         multisite ? await inferSubdomainInstallFromDatabase(site, tables, tablePrefix) : false
