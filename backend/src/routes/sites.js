@@ -167,6 +167,19 @@ const normalizeOptionalDomain = (domain) => {
   return value ? normalizeDomain(value) : '';
 };
 
+const normalizeProxyPath = (proxyPath) => {
+  const raw = String(proxyPath || '').trim();
+  if (!raw) return '/';
+  const withoutQuery = raw.split(/[?#]/)[0].trim();
+  const normalized = `/${withoutQuery.replace(/^\/+/, '')}`
+    .replace(/\/{2,}/g, '/')
+    .replace(/\/+$/, '') || '/';
+  if (normalized !== '/' && (!/^\/[a-zA-Z0-9._~/-]+$/.test(normalized) || normalized.includes('/../') || normalized.endsWith('/..'))) {
+    throw createHttpError('Path do proxy inválido. Use caminhos simples, por exemplo /bio', 400);
+  }
+  return normalized;
+};
+
 const buildSiteProxyHost = (slug, shortId) =>
   `${slugify(slug, 'site')}-${String(shortId || '').slice(0, 8)}.${sitesProxyBaseDomain}`;
 
@@ -421,33 +434,67 @@ const getSafeTablePrefix = (site) => {
   return /^[a-zA-Z0-9_]+$/.test(prefix) ? prefix : 'wp_';
 };
 
-const getSiteUrl = (site) => `${getSiteScheme(site)}://${getSitePrimaryHost(site)}`;
+const getSiteBaseUrl = (site) => `${getSiteScheme(site)}://${getSitePrimaryHost(site)}`;
 
-const getSiteServerNames = (site = {}) => {
-  const names = [site.domain, getSiteProxyHost(site)]
-    .map((name) => String(name || '').trim())
-    .filter(Boolean);
-  return Array.from(new Set(names));
+const getSiteProxyPath = (site = {}) => normalizeProxyPath(site.proxyPath || '/');
+
+const getSitePublicPath = (site = {}) => site.domain ? '/' : getSiteProxyPath(site);
+
+const getSiteUrl = (site) => {
+  const publicPath = getSitePublicPath(site);
+  return publicPath === '/' ? getSiteBaseUrl(site) : `${getSiteBaseUrl(site)}${publicPath}`;
 };
 
-const buildNginxConfig = (site, hostPort) => `server {
-    listen 80;
-    server_name ${getSiteServerNames(site).join(' ') || '_'};
-    client_max_body_size 800m;
-
-    location / {
-        proxy_pass http://127.0.0.1:${hostPort};
-        proxy_http_version 1.1;
+const buildNginxProxyHeaders = (extraHeaders = '') => `        proxy_http_version 1.1;
         proxy_set_header Host $host;
         proxy_set_header X-Real-IP $remote_addr;
         proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
         proxy_set_header X-Forwarded-Proto $scheme;
-        proxy_read_timeout 300s;
+${extraHeaders}        proxy_read_timeout 300s;
         proxy_send_timeout 300s;
-        proxy_buffering off;
+        proxy_buffering off;`;
+
+const buildNginxProxyLocation = (hostPort, proxyPath = '/') => {
+  const normalizedPath = normalizeProxyPath(proxyPath);
+  if (normalizedPath === '/') {
+    return `    location / {
+        proxy_pass http://127.0.0.1:${hostPort};
+${buildNginxProxyHeaders()}    }`;
+  }
+  return `    location = ${normalizedPath} {
+        return 301 ${normalizedPath}/;
     }
+
+    location ${normalizedPath}/ {
+        proxy_pass http://127.0.0.1:${hostPort}/;
+${buildNginxProxyHeaders(`        proxy_set_header X-Forwarded-Prefix ${normalizedPath};\n`)}    }
+
+    location ~ ^/(wp-admin|wp-login\\.php|wp-content|wp-includes|wp-json|xmlrpc\\.php)(/|$) {
+        return 302 ${normalizedPath}$request_uri;
+    }
+
+    location = / {
+        return 302 ${normalizedPath}/;
+    }`;
+};
+
+const buildNginxServerBlock = (serverNames, hostPort, proxyPath = '/') => `server {
+    listen 80;
+    server_name ${serverNames.join(' ') || '_'};
+    client_max_body_size 800m;
+
+${buildNginxProxyLocation(hostPort, proxyPath)}
 }
 `;
+
+const buildNginxConfig = (site, hostPort) => {
+  const blocks = [];
+  if (site.domain) {
+    blocks.push(buildNginxServerBlock([site.domain], hostPort, '/'));
+  }
+  blocks.push(buildNginxServerBlock([getSiteProxyHost(site)], hostPort, getSiteProxyPath(site)));
+  return blocks.join('\n');
+};
 
 const writeNginxSite = (site, warnings) => {
   const configSlug = slugify(site.domain || getSiteProxyHost(site), 'site');
@@ -605,8 +652,14 @@ const sanitizeSiteForClient = (site) => ({
 const decorateSite = async (site) => {
   const wordpressStatus = await inspectContainerStatus(site.containers?.wordpress);
   const databaseStatus = await inspectContainerStatus(site.containers?.database);
-  return sanitizeSiteForClient({
+  const normalizedSite = {
     ...site,
+    proxyHost: site.proxyHost || getSiteProxyHost(site),
+    proxyPath: getSiteProxyPath(site)
+  };
+  return sanitizeSiteForClient({
+    ...normalizedSite,
+    url: getSiteUrl(normalizedSite),
     status: wordpressStatus === 'running' && databaseStatus === 'running' ? 'running' : 'attention',
     wordpressStatus,
     databaseStatus
@@ -721,7 +774,7 @@ const normalizeWordPressPath = (value = '/') => {
 };
 
 const buildWordPressUrl = (site, pathname = '/') => {
-  const base = getSiteUrl(site);
+  const base = getSiteBaseUrl(site);
   const normalizedPath = normalizeWordPressPath(pathname);
   if (normalizedPath === '/') return base;
   return `${base}${normalizedPath.replace(/\/$/, '')}`;
@@ -798,11 +851,14 @@ const patchWordPressConfigForRestore = async (site, restoreConfig = {}) => {
   let content = fs.readFileSync(configPath, 'utf8');
   content = setPhpTablePrefix(content, restoreConfig.tablePrefix || getSafeTablePrefix(site));
   if (restoreConfig.multisite) {
+    const currentSitePath = site.domain
+      ? normalizeWordPressPath(restoreConfig.pathCurrentSite || '/')
+      : normalizeWordPressPath(getSiteProxyPath(site));
     content = upsertPhpDefine(content, 'WP_ALLOW_MULTISITE', true);
     content = upsertPhpDefine(content, 'MULTISITE', true);
     content = upsertPhpDefine(content, 'SUBDOMAIN_INSTALL', Boolean(restoreConfig.subdomainInstall));
     content = upsertPhpDefine(content, 'DOMAIN_CURRENT_SITE', getSitePrimaryHost(site));
-    content = upsertPhpDefine(content, 'PATH_CURRENT_SITE', normalizeWordPressPath(restoreConfig.pathCurrentSite || '/'));
+    content = upsertPhpDefine(content, 'PATH_CURRENT_SITE', currentSitePath);
     content = upsertPhpDefine(content, 'SITE_ID_CURRENT_SITE', Number(restoreConfig.siteIdCurrentSite || 1));
     content = upsertPhpDefine(content, 'BLOG_ID_CURRENT_SITE', Number(restoreConfig.blogIdCurrentSite || 1));
   }
@@ -861,7 +917,9 @@ const updateMultisiteUrls = async (site, tables = [], restoreConfig = {}) => {
   const siteTable = `${prefix}site`;
   const blogsTable = `${prefix}blogs`;
   const sitemetaTable = `${prefix}sitemeta`;
-  const currentSitePath = normalizeWordPressPath(restoreConfig.pathCurrentSite || '/');
+  const currentSitePath = site.domain
+    ? normalizeWordPressPath(restoreConfig.pathCurrentSite || '/')
+    : normalizeWordPressPath(getSiteProxyPath(site));
   const targetHost = getSitePrimaryHost(site);
   let oldPrimaryDomain = restoreConfig.domainCurrentSite || '';
 
@@ -1064,6 +1122,7 @@ const createWordPressSite = async (body = {}) => {
   const shortId = id.slice(0, 8);
   const domain = normalizeOptionalDomain(body.domain);
   const proxyHost = buildSiteProxyHost(slug, shortId);
+  const proxyPath = normalizeProxyPath(body.proxyPath);
   const siteDir = path.join(sitesBaseDir, `${slug}-${shortId}`);
   const wordpressDir = path.join(siteDir, 'wordpress');
   const databaseDir = path.join(siteDir, 'database');
@@ -1107,10 +1166,11 @@ const createWordPressSite = async (body = {}) => {
     slug,
     domain,
     proxyHost,
+    proxyPath,
     proxyMode: !domain,
     port,
     ssl: domain ? Boolean(body.ssl) : false,
-    url: getSiteUrl({ domain, proxyHost, ssl: domain ? Boolean(body.ssl) : false }),
+    url: getSiteUrl({ domain, proxyHost, proxyPath, ssl: domain ? Boolean(body.ssl) : false }),
     localUrl: `http://localhost:${port}`,
     networkName: buildSiteNetworkName(slug, shortId),
     siteDir,
@@ -1280,6 +1340,20 @@ const getSiteOr404 = (siteId) => {
   return site;
 };
 
+const syncSiteWordPressServiceUrl = (site) => {
+  const services = dockerManager.readRegistry();
+  const wordpressService = services.find((service) =>
+    service.id === site.services?.wordpress ||
+    (service.siteId === site.id && service.siteRole === 'wordpress')
+  );
+  if (!wordpressService) return false;
+  dockerManager.saveService({
+    ...wordpressService,
+    externalUrl: getSiteUrl(site)
+  });
+  return true;
+};
+
 const buildWpContentStorageId = (site) => `site-${site.id}-wp-content`;
 
 const ensureWpContentStorageEnvironment = async (site) => {
@@ -1402,7 +1476,7 @@ UPDATE wp_options SET option_value='https://novo-dominio.com.br' WHERE option_na
 10. Aponte o Nginx/Apache para a nova raiz pública e valide o acesso ao \`/wp-admin\`.
 
 Arquivo: ${filename}
-Host original: ${getSitePrimaryHost(site)}
+URL original: ${getSiteUrl(site)}
 `;
 
 const dumpDatabaseToFile = async (site, sqlFile) => {
@@ -1741,7 +1815,9 @@ router.post('/:id/domain', async (req, res, next) => {
     const site = getSiteOr404(req.params.id);
     const oldConfigName = site.nginxConfigName;
     const nextDomain = normalizeOptionalDomain(req.body?.domain);
+    const nextProxyPath = normalizeProxyPath(req.body?.proxyPath ?? site.proxyPath);
     site.proxyHost = site.proxyHost || buildSiteProxyHost(site.slug || site.name, site.id);
+    site.proxyPath = nextProxyPath;
     site.domain = nextDomain;
     site.proxyMode = !nextDomain;
     if (req.body?.ssl !== undefined) site.ssl = nextDomain ? Boolean(req.body.ssl) : false;
@@ -1762,6 +1838,11 @@ router.post('/:id/domain', async (req, res, next) => {
       await updateWordPressUrls(site);
     } catch (err) {
       warnings.push(`Host salvo, mas não foi possível ajustar siteurl/home no banco: ${err.message}`);
+    }
+    try {
+      syncSiteWordPressServiceUrl(site);
+    } catch (err) {
+      warnings.push(`Host salvo, mas a URL externa do serviço não foi sincronizada: ${err.message}`);
     }
     saveSite(site);
     res.json({ site: await decorateSite(site), warnings });
