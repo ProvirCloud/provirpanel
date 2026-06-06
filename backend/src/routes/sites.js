@@ -895,15 +895,43 @@ const patchWordPressDatabaseDefines = async (site, content) => {
   return nextContent;
 };
 
+const readWordPressConfigFile = async (site) => {
+  const configPath = path.join(site.paths?.wordpress || '', 'wp-config.php');
+  if (site.paths?.wordpress && fs.existsSync(configPath)) {
+    try {
+      return { content: fs.readFileSync(configPath, 'utf8'), source: 'host' };
+    } catch (err) {
+      if (!site.containers?.wordpress) throw err;
+    }
+  }
+
+  if (!site.containers?.wordpress) {
+    return { content: '', source: 'missing' };
+  }
+
+  const result = await dockerExecRootShell(
+    site.containers.wordpress,
+    '[ -f /var/www/html/wp-config.php ] && cat /var/www/html/wp-config.php || true'
+  );
+  const content = String(result.stdout || '');
+  return { content, source: content ? 'container' : 'missing' };
+};
+
 const writeWordPressConfigFile = async (site, content) => {
   const configPath = path.join(site.paths?.wordpress || '', 'wp-config.php');
-  try {
-    fs.writeFileSync(configPath, content, 'utf8');
-    return;
-  } catch (err) {
-    if (!['EACCES', 'EPERM'].includes(err.code) || !site.containers?.wordpress) {
-      throw err;
+  if (site.paths?.wordpress && fs.existsSync(path.dirname(configPath))) {
+    try {
+      fs.writeFileSync(configPath, content, 'utf8');
+      return;
+    } catch (err) {
+      if (!['EACCES', 'EPERM', 'ENOENT'].includes(err.code) || !site.containers?.wordpress) {
+        throw err;
+      }
     }
+  }
+
+  if (!site.containers?.wordpress) {
+    throw createHttpError('Container WordPress indisponível para atualizar wp-config.php', 400);
   }
 
   const encoded = Buffer.from(content, 'utf8').toString('base64');
@@ -922,12 +950,12 @@ const writeWordPressConfigFile = async (site, content) => {
 };
 
 const patchWordPressConfigForHostChange = async (site) => {
-  const configPath = path.join(site.paths?.wordpress || '', 'wp-config.php');
-  if (!site.paths?.wordpress || !fs.existsSync(configPath)) {
+  const configFile = await readWordPressConfigFile(site);
+  if (!configFile.content) {
     return { patched: false, message: 'wp-config.php não encontrado para ajustar domínio' };
   }
 
-  let content = fs.readFileSync(configPath, 'utf8');
+  let content = configFile.content;
   content = await patchWordPressDatabaseDefines(site, content);
   const multisite = parsePhpDefineValue(content, 'MULTISITE') === true || Boolean(site.wordpress?.multisite);
   const targetUrl = getSiteUrl(site);
@@ -949,15 +977,15 @@ const patchWordPressConfigForHostChange = async (site) => {
 
   await writeWordPressConfigFile(site, content);
   await repairWordPressFilesystemPermissions(site);
-  return { patched: true };
+  return { patched: true, source: configFile.source };
 };
 
 const patchWordPressConfigForRestore = async (site, restoreConfig = {}) => {
-  const configPath = path.join(site.paths?.wordpress || '', 'wp-config.php');
-  if (!site.paths?.wordpress || !fs.existsSync(configPath)) {
+  const configFile = await readWordPressConfigFile(site);
+  if (!configFile.content) {
     return { patched: false, message: 'wp-config.php não encontrado para ajustar prefixo/multisite' };
   }
-  let content = fs.readFileSync(configPath, 'utf8');
+  let content = configFile.content;
   content = await patchWordPressDatabaseDefines(site, content);
   content = setPhpTablePrefix(content, restoreConfig.tablePrefix || getSafeTablePrefix(site));
   if (restoreConfig.multisite) {
@@ -974,7 +1002,38 @@ const patchWordPressConfigForRestore = async (site, restoreConfig = {}) => {
   }
   await writeWordPressConfigFile(site, content);
   await repairWordPressFilesystemPermissions(site);
-  return { patched: true };
+  return { patched: true, source: configFile.source };
+};
+
+const verifyWordPressDatabaseConnection = async (site) => {
+  if (!site.containers?.wordpress) {
+    return { ok: false, message: 'Container WordPress indisponível para validar conexão com banco' };
+  }
+  const script = [
+    'set -e',
+    'php -r \'',
+    '$c = file_get_contents("/var/www/html/wp-config.php");',
+    'function wpdef($c, $name) {',
+    '  if (preg_match("/define\\\\s*\\\\(\\\\s*[\\\\\\\"\\\\\\x27]".$name."[\\\\\\\"\\\\\\x27]\\\\s*,\\\\s*[\\\\\\\"\\\\\\x27]([^\\\\\\\"\\\\\\x27]*)[\\\\\\\"\\\\\\x27]\\\\s*\\\\)/i", $c, $m)) return $m[1];',
+    '  return "";',
+    '}',
+    '$host = wpdef($c, "DB_HOST");',
+    '$name = wpdef($c, "DB_NAME");',
+    '$user = wpdef($c, "DB_USER");',
+    '$pass = wpdef($c, "DB_PASSWORD");',
+    '$port = 3306;',
+    'if (strpos($host, ":") !== false) { [$host, $port] = explode(":", $host, 2); $port = (int)$port; }',
+    '$mysqli = @mysqli_init();',
+    'if (!$mysqli || !@$mysqli->real_connect($host, $user, $pass, $name, $port)) { fwrite(STDERR, "DB_CONNECT_FAILED host=".$host." db=".$name." user=".$user." error=".mysqli_connect_error()); exit(12); }',
+    'echo "DB_CONNECT_OK host=".$host." db=".$name." user=".$user;',
+    '\''
+  ].join('\n');
+  try {
+    const result = await dockerExecShell(site.containers.wordpress, script, {}, { timeout: 30000 });
+    return { ok: true, message: String(result.stdout || '').trim() || 'DB_CONNECT_OK' };
+  } catch (err) {
+    return { ok: false, message: err.message };
+  }
 };
 
 const updateOptionTableUrls = async (site, tableName, url, tables = null) => {
@@ -1832,6 +1891,10 @@ const processMigrationArchive = async (siteId, file) => {
             ? `wp-config.php ajustado para prefixo ${tablePrefix}${multisite ? ' e multisite' : ''}`
             : patchResult.message
         );
+        if (patchResult.patched) {
+          const dbCheck = await verifyWordPressDatabaseConnection(site);
+          actions.push(dbCheck.ok ? `Conexão WordPress -> banco validada (${dbCheck.message})` : `Conexão WordPress -> banco falhou: ${dbCheck.message}`);
+        }
       } catch (err) {
         actions.push(`Banco importado, mas o ajuste do wp-config.php falhou: ${err.message}`);
       }
@@ -1960,6 +2023,11 @@ router.post('/:id/domain', async (req, res, next) => {
       const patchResult = await patchWordPressConfigForHostChange(site);
       if (!patchResult.patched) {
         warnings.push(patchResult.message);
+      } else {
+        const dbCheck = await verifyWordPressDatabaseConnection(site);
+        if (!dbCheck.ok) {
+          warnings.push(`wp-config.php ajustado, mas a conexão WordPress -> banco falhou: ${dbCheck.message}`);
+        }
       }
     } catch (err) {
       warnings.push(`Host salvo, mas não foi possível ajustar wp-config.php: ${err.message}`);
