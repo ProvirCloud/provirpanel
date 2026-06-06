@@ -829,6 +829,11 @@ const upsertPhpDefine = (content, constantName, value) => {
   return `${content.trimEnd()}\n${line}\n`;
 };
 
+const hasPhpDefine = (content = '', constantName) => {
+  const regex = new RegExp(`define\\s*\\(\\s*['"]${constantName}['"]\\s*,`, 'i');
+  return regex.test(content);
+};
+
 const setPhpTablePrefix = (content, tablePrefix) => {
   const safePrefix = /^[a-zA-Z0-9_]+$/.test(tablePrefix) ? tablePrefix : 'wp_';
   const line = `$table_prefix = '${safePrefix}';`;
@@ -841,6 +846,62 @@ const setPhpTablePrefix = (content, tablePrefix) => {
     return `${content.slice(0, markerIndex).trimEnd()}\n${line}\n\n${content.slice(markerIndex)}`;
   }
   return `${content.trimEnd()}\n${line}\n`;
+};
+
+const writeWordPressConfigFile = async (site, content) => {
+  const configPath = path.join(site.paths?.wordpress || '', 'wp-config.php');
+  try {
+    fs.writeFileSync(configPath, content, 'utf8');
+    return;
+  } catch (err) {
+    if (!['EACCES', 'EPERM'].includes(err.code) || !site.containers?.wordpress) {
+      throw err;
+    }
+  }
+
+  const encoded = Buffer.from(content, 'utf8').toString('base64');
+  const script = [
+    'set -e',
+    'CONFIG=/var/www/html/wp-config.php',
+    'TMPF=$(mktemp)',
+    'printf "%s" "$PROVIR_CONFIG_B64" | base64 -d > "$TMPF"',
+    'chown www-data:www-data "$TMPF" 2>/dev/null || true',
+    'chmod 660 "$TMPF" 2>/dev/null || true',
+    'mv "$TMPF" "$CONFIG"'
+  ].join('\n');
+  await dockerExecRootShell(site.containers.wordpress, script, {
+    PROVIR_CONFIG_B64: encoded
+  });
+};
+
+const patchWordPressConfigForHostChange = async (site) => {
+  const configPath = path.join(site.paths?.wordpress || '', 'wp-config.php');
+  if (!site.paths?.wordpress || !fs.existsSync(configPath)) {
+    return { patched: false, message: 'wp-config.php não encontrado para ajustar domínio' };
+  }
+
+  let content = fs.readFileSync(configPath, 'utf8');
+  const multisite = parsePhpDefineValue(content, 'MULTISITE') === true || Boolean(site.wordpress?.multisite);
+  const targetUrl = getSiteUrl(site);
+  const targetPath = site.domain ? '/' : normalizeWordPressPath(getSiteProxyPath(site));
+
+  if (multisite) {
+    content = upsertPhpDefine(content, 'WP_ALLOW_MULTISITE', true);
+    content = upsertPhpDefine(content, 'MULTISITE', true);
+    content = upsertPhpDefine(content, 'DOMAIN_CURRENT_SITE', getSitePrimaryHost(site));
+    content = upsertPhpDefine(content, 'PATH_CURRENT_SITE', targetPath);
+    content = upsertPhpDefine(content, 'SITE_ID_CURRENT_SITE', Number(parsePhpDefineValue(content, 'SITE_ID_CURRENT_SITE') || 1));
+    content = upsertPhpDefine(content, 'BLOG_ID_CURRENT_SITE', Number(parsePhpDefineValue(content, 'BLOG_ID_CURRENT_SITE') || 1));
+    if (hasPhpDefine(content, 'WP_HOME')) content = upsertPhpDefine(content, 'WP_HOME', targetUrl);
+    if (hasPhpDefine(content, 'WP_SITEURL')) content = upsertPhpDefine(content, 'WP_SITEURL', targetUrl);
+  } else {
+    content = upsertPhpDefine(content, 'WP_HOME', targetUrl);
+    content = upsertPhpDefine(content, 'WP_SITEURL', targetUrl);
+  }
+
+  await writeWordPressConfigFile(site, content);
+  await repairWordPressFilesystemPermissions(site);
+  return { patched: true };
 };
 
 const patchWordPressConfigForRestore = async (site, restoreConfig = {}) => {
@@ -862,7 +923,7 @@ const patchWordPressConfigForRestore = async (site, restoreConfig = {}) => {
     content = upsertPhpDefine(content, 'SITE_ID_CURRENT_SITE', Number(restoreConfig.siteIdCurrentSite || 1));
     content = upsertPhpDefine(content, 'BLOG_ID_CURRENT_SITE', Number(restoreConfig.blogIdCurrentSite || 1));
   }
-  fs.writeFileSync(configPath, content, 'utf8');
+  await writeWordPressConfigFile(site, content);
   await repairWordPressFilesystemPermissions(site);
   return { patched: true };
 };
@@ -999,9 +1060,11 @@ const updateWordPressUrls = async (site, restoreConfig = {}) => {
     throw createHttpError(`Tabela ${optionsTable} não encontrada após importação. Verifique table_prefix/wp-config.php.`, 400);
   }
   await updateOptionTableUrls(site, optionsTable, url, tables);
-  if (restoreConfig.multisite || site.wordpress?.multisite || isMultisiteDatabase(tables, prefix)) {
+  const multisite = restoreConfig.multisite || site.wordpress?.multisite || isMultisiteDatabase(tables, prefix);
+  if (multisite) {
     await updateMultisiteUrls(site, tables, restoreConfig);
   }
+  return { tablePrefix: prefix, multisite, url };
 };
 
 const repairWordPressFilesystemPermissions = async (site) => {
@@ -1835,9 +1898,22 @@ router.post('/:id/domain', async (req, res, next) => {
       }
     }
     try {
-      await updateWordPressUrls(site);
+      const urlUpdate = await updateWordPressUrls(site);
+      site.wordpress = {
+        ...(site.wordpress || {}),
+        tablePrefix: urlUpdate.tablePrefix,
+        multisite: Boolean(urlUpdate.multisite)
+      };
     } catch (err) {
       warnings.push(`Host salvo, mas não foi possível ajustar siteurl/home no banco: ${err.message}`);
+    }
+    try {
+      const patchResult = await patchWordPressConfigForHostChange(site);
+      if (!patchResult.patched) {
+        warnings.push(patchResult.message);
+      }
+    } catch (err) {
+      warnings.push(`Host salvo, mas não foi possível ajustar wp-config.php: ${err.message}`);
     }
     try {
       syncSiteWordPressServiceUrl(site);
