@@ -38,6 +38,9 @@ const defaultCreateForm = {
   ssl: true,
 }
 
+const getSiteDisplayHost = (site = {}) => site.domain || site.proxyHost || site.localUrl || 'proxy pendente'
+const isProxyMode = (site = {}) => Boolean(site.proxyMode || (!site.domain && site.proxyHost))
+
 const serviceOptions = [
   { id: 'wordpress', label: 'WordPress', icon: Globe, active: true, accent: 'text-cyan-300' },
   { id: 'static', label: 'Site estático', icon: Server, active: false, accent: 'text-emerald-300' },
@@ -305,10 +308,13 @@ const SitesPanel = () => {
   const submitDomain = async (event) => {
     event.preventDefault()
     if (!selectedSite) return
+    const nextDomain = domainForm.domain.trim()
     const confirmed = await askConfirm({
       title: 'Alterar domínio',
-      message: `Aplicar o domínio ${domainForm.domain} no site ${selectedSite.name}? O painel também tentará atualizar siteurl/home no WordPress.`,
-      confirmText: 'Aplicar domínio',
+      message: nextDomain
+        ? `Aplicar o domínio ${nextDomain} no site ${selectedSite.name}? O painel também tentará atualizar siteurl/home no WordPress.`
+        : `Remover o domínio público de ${selectedSite.name} e usar o proxy temporário ${selectedSite.proxyHost || 'gerado pelo painel'}?`,
+      confirmText: nextDomain ? 'Aplicar domínio' : 'Usar proxy',
       variant: 'warning',
     })
     if (!confirmed) return
@@ -619,7 +625,7 @@ const SitesPanel = () => {
             {sites.length === 0 ? <option value="">Nenhum site</option> : null}
             {sites.map((site) => (
               <option key={site.id} value={site.id}>
-                {site.name} - {site.domain}
+                {site.name} - {getSiteDisplayHost(site)}
               </option>
             ))}
           </select>
@@ -635,6 +641,10 @@ const SitesPanel = () => {
               <div className="flex items-center justify-between gap-3">
                 <span>Porta local</span>
                 <span className="font-mono text-[var(--color-text)]">{selectedSite.port}</span>
+              </div>
+              <div className="flex items-center justify-between gap-3">
+                <span>{isProxyMode(selectedSite) ? 'Proxy temporário' : 'Domínio'}</span>
+                <span className="truncate font-mono text-xs text-[var(--color-text)]">{getSiteDisplayHost(selectedSite)}</span>
               </div>
               <div className="flex items-center justify-between gap-3">
                 <span>Volume</span>
@@ -704,8 +714,9 @@ const SitesPanel = () => {
                       <div className="flex flex-wrap items-center gap-x-4 gap-y-2 text-sm text-[var(--color-text-muted)]">
                         <span className="inline-flex items-center gap-1">
                           <Globe size={14} />
-                          {site.domain}
+                          {getSiteDisplayHost(site)}
                         </span>
+                        {isProxyMode(site) ? <span className="rounded-full bg-blue-500/12 px-2 py-0.5 text-xs font-semibold text-blue-200">Proxy temporário</span> : null}
                         <span className="font-mono text-xs">:{site.port}</span>
                         <span>Criado {formatDateTime(site.createdAt)}</span>
                         <span>Backup {formatDateTime(site.lastBackup?.createdAt)}</span>
@@ -843,7 +854,10 @@ const SitesPanel = () => {
                 <Input value={createForm.name} onChange={(event) => handleCreateChange('name', event.target.value)} placeholder="cliente-site" required />
               </Field>
               <Field label="Domínio">
-                <Input value={createForm.domain} onChange={(event) => handleCreateChange('domain', event.target.value)} placeholder="site.com.br" required />
+                <Input value={createForm.domain} onChange={(event) => handleCreateChange('domain', event.target.value)} placeholder="opcional: site.com.br" />
+                <p className="text-xs text-[var(--color-text-soft)]">
+                  Deixe vazio para criar com proxy temporário até apontar o domínio real.
+                </p>
               </Field>
               <Field label="Usuário admin">
                 <Input value={createForm.adminUser} onChange={(event) => handleCreateChange('adminUser', event.target.value)} placeholder="admin" />
@@ -973,9 +987,17 @@ const SitesPanel = () => {
             {selectedSite ? (
               <div className="space-y-4">
                 <div className="rounded-lg border border-[var(--color-border-subtle)] bg-[var(--color-box-muted)] p-4">
+                  {isProxyMode(selectedSite) ? (
+                    <div className="mb-3 rounded-lg border border-blue-500/20 bg-blue-500/10 px-3 py-2 text-xs text-blue-100">
+                      Sem domínio público definido. O site está configurado pelo proxy temporário <span className="font-mono text-white">{selectedSite.proxyHost}</span>.
+                    </div>
+                  ) : null}
                   <form className="grid gap-3 lg:grid-cols-[minmax(0,1fr)_160px]" onSubmit={submitDomain}>
                     <Field label="Domínio">
-                      <Input value={domainForm.domain} onChange={(event) => setDomainForm({ domain: event.target.value })} required />
+                      <Input value={domainForm.domain} onChange={(event) => setDomainForm({ domain: event.target.value })} placeholder={selectedSite.proxyHost || 'proxy temporário'} />
+                      <p className="text-xs text-[var(--color-text-soft)]">
+                        Deixe vazio para manter o site pelo proxy temporário.
+                      </p>
                     </Field>
                     <div className="flex items-end">
                       <Button type="submit" variant="secondary" className="w-full" leadingIcon={<Globe size={16} />} loading={busy === 'domain'}>
@@ -1102,6 +1124,9 @@ const SitesPanel = () => {
                 <div className="rounded-lg border border-[var(--color-border-subtle)] bg-[var(--color-box-muted)] p-3">
                   <p className="text-xs text-[var(--color-text-soft)]">Nginx</p>
                   <p className="mt-2 font-mono text-xs text-[var(--color-text)]">{selectedSite.nginxConfigName || 'pendente'}</p>
+                  {selectedSite.proxyHost ? (
+                    <p className="mt-1 break-all font-mono text-[10px] text-[var(--color-text-soft)]">Proxy: {selectedSite.proxyHost}</p>
+                  ) : null}
                 </div>
                 <div className="rounded-lg border border-[var(--color-border-subtle)] bg-[var(--color-box-muted)] p-3">
                   <p className="text-xs text-[var(--color-text-soft)]">wp-content</p>

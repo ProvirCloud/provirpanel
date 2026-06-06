@@ -32,6 +32,11 @@ const configuredSitesBaseDir =
 let sitesBaseDir = configuredSitesBaseDir;
 const legacySitesNetworkName = process.env.SITES_DOCKER_NETWORK || 'provirpanel';
 const sitesNetworkPrefix = process.env.SITES_DOCKER_NETWORK_PREFIX || legacySitesNetworkName;
+const sitesProxyBaseDomain = String(process.env.SITES_PROXY_BASE_DOMAIN || 'localhost')
+  .trim()
+  .toLowerCase()
+  .replace(/^https?:\/\//, '')
+  .replace(/\/.*$/, '') || 'localhost';
 const wordpressImage = process.env.WORDPRESS_IMAGE || 'wordpress:latest';
 const configuredDatabaseImage = process.env.WORDPRESS_DB_IMAGE || 'mariadb:11';
 const fallbackDatabaseImages = process.env.WORDPRESS_DB_FALLBACK_IMAGES
@@ -156,6 +161,23 @@ const normalizeDomain = (domain) => {
   }
   return value;
 };
+
+const normalizeOptionalDomain = (domain) => {
+  const value = String(domain || '').trim();
+  return value ? normalizeDomain(value) : '';
+};
+
+const buildSiteProxyHost = (slug, shortId) =>
+  `${slugify(slug, 'site')}-${String(shortId || '').slice(0, 8)}.${sitesProxyBaseDomain}`;
+
+const getSiteProxyHost = (site = {}) =>
+  site.proxyHost || buildSiteProxyHost(site.slug || site.name || 'site', site.id || crypto.randomUUID());
+
+const getSitePrimaryHost = (site = {}) =>
+  site.domain || getSiteProxyHost(site);
+
+const getSiteScheme = (site = {}) =>
+  site.domain && site.ssl ? 'https' : 'http';
 
 const safeUploadFilename = (filename, fallback = 'wordpress-backup.zip') => {
   const base = path.basename(String(filename || fallback)).replace(/[^a-zA-Z0-9._-]/g, '_');
@@ -340,13 +362,31 @@ const findWordPressRoot = (rootDir) =>
     return null;
   });
 
+const detectTablePrefixFromTables = (tableNames = []) => {
+  const suffixes = ['users', 'usermeta', 'sitemeta', 'blogs', 'blogmeta', 'site', 'options'];
+  for (const suffix of suffixes) {
+    const tableName = tableNames.find((name) => String(name || '').endsWith(suffix));
+    if (!tableName) continue;
+    const prefix = String(tableName).slice(0, -suffix.length);
+    if (/^[a-zA-Z0-9_]+$/.test(prefix) && !/\d_$/.test(prefix)) {
+      return prefix;
+    }
+  }
+  return null;
+};
+
 const detectTablePrefixFromSql = (sqlFile) => {
   if (!sqlFile || !fs.existsSync(sqlFile)) return 'wp_';
   const fd = fs.openSync(sqlFile, 'r');
   try {
-    const buffer = Buffer.alloc(Math.min(fs.statSync(sqlFile).size, 1024 * 1024));
+    const buffer = Buffer.alloc(Math.min(fs.statSync(sqlFile).size, 8 * 1024 * 1024));
     fs.readSync(fd, buffer, 0, buffer.length, 0);
     const sample = buffer.toString('utf8');
+    const tableNames = Array.from(sample.matchAll(/(?:CREATE TABLE|INSERT INTO|DROP TABLE IF EXISTS)\s+`?([a-zA-Z0-9_]+)`?/gi))
+      .map((match) => match[1])
+      .filter(Boolean);
+    const detected = detectTablePrefixFromTables(tableNames);
+    if (detected) return detected;
     const match =
       sample.match(/CREATE TABLE\s+`?([a-zA-Z0-9_]+)options`?/i) ||
       sample.match(/INSERT INTO\s+`?([a-zA-Z0-9_]+)options`?/i);
@@ -368,16 +408,31 @@ const escapeSql = (value) =>
     .replace(/\\/g, '\\\\')
     .replace(/'/g, "\\'");
 
+const quoteSqlIdentifier = (identifier) => {
+  const value = String(identifier || '');
+  if (!/^[a-zA-Z0-9_]+$/.test(value)) {
+    throw createHttpError(`Identificador SQL inválido: ${value}`, 400);
+  }
+  return `\`${value}\``;
+};
+
 const getSafeTablePrefix = (site) => {
   const prefix = site.wordpress?.tablePrefix || 'wp_';
   return /^[a-zA-Z0-9_]+$/.test(prefix) ? prefix : 'wp_';
 };
 
-const getSiteUrl = (site) => `${site.ssl ? 'https' : 'http'}://${site.domain}`;
+const getSiteUrl = (site) => `${getSiteScheme(site)}://${getSitePrimaryHost(site)}`;
+
+const getSiteServerNames = (site = {}) => {
+  const names = [site.domain, getSiteProxyHost(site)]
+    .map((name) => String(name || '').trim())
+    .filter(Boolean);
+  return Array.from(new Set(names));
+};
 
 const buildNginxConfig = (site, hostPort) => `server {
     listen 80;
-    server_name ${site.domain};
+    server_name ${getSiteServerNames(site).join(' ') || '_'};
     client_max_body_size 800m;
 
     location / {
@@ -395,7 +450,8 @@ const buildNginxConfig = (site, hostPort) => `server {
 `;
 
 const writeNginxSite = (site, warnings) => {
-  const filename = site.nginxConfigName || `site-${slugify(site.domain)}-${site.id.slice(0, 8)}.conf`;
+  const configSlug = slugify(site.domain || getSiteProxyHost(site), 'site');
+  const filename = site.nginxConfigName || `site-${configSlug}-${site.id.slice(0, 8)}.conf`;
   const content = buildNginxConfig(site, site.port);
   try {
     nginxManager.saveConfig(filename, content, { skipValidation: true });
@@ -575,6 +631,34 @@ const runSql = async (site, sql) => {
   });
 };
 
+const runSqlRows = async (site, sql) => {
+  if (!site.containers?.database) {
+    throw createHttpError('Container de banco não encontrado para este site', 400);
+  }
+  const db = site.database || {};
+  const script = [
+    'set -e',
+    'CLIENT="$(command -v mariadb || command -v mysql)"',
+    '"$CLIENT" -N -B -u"$PROVIR_DB_USER" -p"$PROVIR_DB_PASS" "$PROVIR_DB_NAME" -e "$PROVIR_SQL"'
+  ].join('\n');
+  const result = await dockerExecShell(site.containers.database, script, {
+    PROVIR_DB_USER: db.user || 'wordpress',
+    PROVIR_DB_PASS: db.password || '',
+    PROVIR_DB_NAME: db.name || 'wordpress',
+    PROVIR_SQL: sql
+  });
+  return String(result.stdout || '')
+    .split(/\r?\n/)
+    .map((line) => line.trim())
+    .filter(Boolean)
+    .map((line) => line.split('\t'));
+};
+
+const listDatabaseTables = async (site) =>
+  (await runSqlRows(site, 'SHOW TABLES;')).map((row) => row[0]).filter(Boolean);
+
+const hasTable = (tables = [], tableName) => tables.includes(tableName);
+
 const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 
 const waitForDatabase = async (site, progress) => {
@@ -629,10 +713,237 @@ const importSqlFile = async (site, sqlFile) => {
   });
 };
 
-const updateWordPressUrls = async (site) => {
+const normalizeWordPressPath = (value = '/') => {
+  let normalized = String(value || '/').trim() || '/';
+  if (!normalized.startsWith('/')) normalized = `/${normalized}`;
+  if (!normalized.endsWith('/')) normalized = `${normalized}/`;
+  return normalized.replace(/\/{2,}/g, '/');
+};
+
+const buildWordPressUrl = (site, pathname = '/') => {
+  const base = getSiteUrl(site);
+  const normalizedPath = normalizeWordPressPath(pathname);
+  if (normalizedPath === '/') return base;
+  return `${base}${normalizedPath.replace(/\/$/, '')}`;
+};
+
+const parsePhpDefineValue = (content = '', constantName) => {
+  const regex = new RegExp(`define\\s*\\(\\s*['"]${constantName}['"]\\s*,\\s*([^;]+)\\)`, 'i');
+  const match = content.match(regex);
+  if (!match) return null;
+  const raw = match[1].trim();
+  if (/^true$/i.test(raw)) return true;
+  if (/^false$/i.test(raw)) return false;
+  if (/^\d+$/.test(raw)) return Number(raw);
+  const stringMatch = raw.match(/^['"]([\s\S]*)['"]$/);
+  return stringMatch ? stringMatch[1] : raw;
+};
+
+const readWordPressConfigMetadata = (wordpressRoot) => {
+  if (!wordpressRoot) return {};
+  const configPath = path.join(wordpressRoot, 'wp-config.php');
+  if (!fs.existsSync(configPath)) return {};
+  const content = fs.readFileSync(configPath, 'utf8');
+  return {
+    multisite: parsePhpDefineValue(content, 'MULTISITE') === true,
+    subdomainInstall: parsePhpDefineValue(content, 'SUBDOMAIN_INSTALL'),
+    domainCurrentSite: parsePhpDefineValue(content, 'DOMAIN_CURRENT_SITE'),
+    pathCurrentSite: parsePhpDefineValue(content, 'PATH_CURRENT_SITE'),
+    siteIdCurrentSite: parsePhpDefineValue(content, 'SITE_ID_CURRENT_SITE'),
+    blogIdCurrentSite: parsePhpDefineValue(content, 'BLOG_ID_CURRENT_SITE')
+  };
+};
+
+const formatPhpValue = (value) => {
+  if (typeof value === 'boolean') return value ? 'true' : 'false';
+  if (typeof value === 'number' && Number.isFinite(value)) return String(value);
+  return `'${String(value ?? '').replace(/\\/g, '\\\\').replace(/'/g, "\\'")}'`;
+};
+
+const upsertPhpDefine = (content, constantName, value) => {
+  const line = `define('${constantName}', ${formatPhpValue(value)});`;
+  const regex = new RegExp(`define\\s*\\(\\s*['"]${constantName}['"]\\s*,\\s*[^;]+\\);`, 'i');
+  if (regex.test(content)) return content.replace(regex, line);
+  const marker = '/* That\'s all, stop editing!';
+  const markerIndex = content.indexOf(marker);
+  if (markerIndex >= 0) {
+    return `${content.slice(0, markerIndex).trimEnd()}\n${line}\n\n${content.slice(markerIndex)}`;
+  }
+  const requireMatch = content.match(/require_once\s+ABSPATH\s*\.\s*['"]wp-settings\.php['"]\s*;/i);
+  if (requireMatch?.index !== undefined) {
+    return `${content.slice(0, requireMatch.index).trimEnd()}\n${line}\n\n${content.slice(requireMatch.index)}`;
+  }
+  return `${content.trimEnd()}\n${line}\n`;
+};
+
+const setPhpTablePrefix = (content, tablePrefix) => {
+  const safePrefix = /^[a-zA-Z0-9_]+$/.test(tablePrefix) ? tablePrefix : 'wp_';
+  const line = `$table_prefix = '${safePrefix}';`;
+  if (/\$table_prefix\s*=\s*[^;]+;/i.test(content)) {
+    return content.replace(/\$table_prefix\s*=\s*[^;]+;/i, line);
+  }
+  const marker = '/* That\'s all, stop editing!';
+  const markerIndex = content.indexOf(marker);
+  if (markerIndex >= 0) {
+    return `${content.slice(0, markerIndex).trimEnd()}\n${line}\n\n${content.slice(markerIndex)}`;
+  }
+  return `${content.trimEnd()}\n${line}\n`;
+};
+
+const patchWordPressConfigForRestore = async (site, restoreConfig = {}) => {
+  const configPath = path.join(site.paths?.wordpress || '', 'wp-config.php');
+  if (!site.paths?.wordpress || !fs.existsSync(configPath)) {
+    return { patched: false, message: 'wp-config.php não encontrado para ajustar prefixo/multisite' };
+  }
+  let content = fs.readFileSync(configPath, 'utf8');
+  content = setPhpTablePrefix(content, restoreConfig.tablePrefix || getSafeTablePrefix(site));
+  if (restoreConfig.multisite) {
+    content = upsertPhpDefine(content, 'WP_ALLOW_MULTISITE', true);
+    content = upsertPhpDefine(content, 'MULTISITE', true);
+    content = upsertPhpDefine(content, 'SUBDOMAIN_INSTALL', Boolean(restoreConfig.subdomainInstall));
+    content = upsertPhpDefine(content, 'DOMAIN_CURRENT_SITE', getSitePrimaryHost(site));
+    content = upsertPhpDefine(content, 'PATH_CURRENT_SITE', normalizeWordPressPath(restoreConfig.pathCurrentSite || '/'));
+    content = upsertPhpDefine(content, 'SITE_ID_CURRENT_SITE', Number(restoreConfig.siteIdCurrentSite || 1));
+    content = upsertPhpDefine(content, 'BLOG_ID_CURRENT_SITE', Number(restoreConfig.blogIdCurrentSite || 1));
+  }
+  fs.writeFileSync(configPath, content, 'utf8');
+  await repairWordPressFilesystemPermissions(site);
+  return { patched: true };
+};
+
+const updateOptionTableUrls = async (site, tableName, url, tables = null) => {
+  if (tables && !hasTable(tables, tableName)) return false;
+  await runSql(
+    site,
+    `UPDATE ${quoteSqlIdentifier(tableName)} SET option_value='${escapeSql(url)}' WHERE option_name IN ('siteurl','home');`
+  );
+  return true;
+};
+
+const isMultisiteDatabase = (tables = [], prefix = 'wp_') =>
+  hasTable(tables, `${prefix}site`) &&
+  hasTable(tables, `${prefix}blogs`) &&
+  hasTable(tables, `${prefix}sitemeta`);
+
+const hasWordPressCoreTables = (tables = [], prefix = 'wp_') =>
+  hasTable(tables, `${prefix}options`) ||
+  hasTable(tables, `${prefix}users`) ||
+  hasTable(tables, `${prefix}blogs`);
+
+const inferSubdomainInstallFromDatabase = async (site, tables = [], prefix = 'wp_') => {
+  const blogsTable = `${prefix}blogs`;
+  if (!hasTable(tables, blogsTable)) return false;
+  const blogs = (await runSqlRows(
+    site,
+    `SELECT blog_id,domain,path FROM ${quoteSqlIdentifier(blogsTable)} ORDER BY blog_id;`
+  )).map(([blogId, domain, blogPath]) => ({
+    blogId: Number(blogId),
+    domain: String(domain || ''),
+    path: normalizeWordPressPath(blogPath || '/')
+  }));
+  const primary = blogs.find((blog) => blog.blogId === 1) || blogs[0];
+  if (!primary) return false;
+  return blogs.some((blog) => blog.blogId > 1 && blog.domain && blog.domain !== primary.domain);
+};
+
+const replaceDomainSuffix = (domain, oldPrimaryDomain, newPrimaryDomain) => {
+  const current = String(domain || '').trim();
+  if (!current || !oldPrimaryDomain) return current || newPrimaryDomain;
+  if (current === oldPrimaryDomain) return newPrimaryDomain;
+  if (current.endsWith(`.${oldPrimaryDomain}`)) {
+    return `${current.slice(0, -oldPrimaryDomain.length)}${newPrimaryDomain}`;
+  }
+  return current;
+};
+
+const updateMultisiteUrls = async (site, tables = [], restoreConfig = {}) => {
   const prefix = getSafeTablePrefix(site);
+  const siteTable = `${prefix}site`;
+  const blogsTable = `${prefix}blogs`;
+  const sitemetaTable = `${prefix}sitemeta`;
+  const currentSitePath = normalizeWordPressPath(restoreConfig.pathCurrentSite || '/');
+  const targetHost = getSitePrimaryHost(site);
+  let oldPrimaryDomain = restoreConfig.domainCurrentSite || '';
+
+  if (hasTable(tables, siteTable)) {
+    const rows = await runSqlRows(
+      site,
+      `SELECT domain,path FROM ${quoteSqlIdentifier(siteTable)} ORDER BY id LIMIT 1;`
+    );
+    oldPrimaryDomain = oldPrimaryDomain || rows[0]?.[0] || '';
+    await runSql(
+      site,
+      `UPDATE ${quoteSqlIdentifier(siteTable)} SET domain='${escapeSql(targetHost)}', path='${escapeSql(currentSitePath)}' ORDER BY id LIMIT 1;`
+    );
+  }
+
+  let blogs = [];
+  if (hasTable(tables, blogsTable)) {
+    blogs = (await runSqlRows(
+      site,
+      `SELECT blog_id,domain,path FROM ${quoteSqlIdentifier(blogsTable)} ORDER BY blog_id;`
+    )).map(([blogId, domain, blogPath]) => ({
+      blogId: Number(blogId),
+      domain,
+      path: normalizeWordPressPath(blogPath || '/')
+    })).filter((blog) => Number.isFinite(blog.blogId) && blog.blogId > 0);
+
+    for (const blog of blogs) {
+      const nextDomain = blog.blogId === 1
+        ? targetHost
+        : replaceDomainSuffix(blog.domain, oldPrimaryDomain, targetHost);
+      const nextPath = blog.blogId === 1 ? currentSitePath : blog.path;
+      await runSql(
+        site,
+        `UPDATE ${quoteSqlIdentifier(blogsTable)} SET domain='${escapeSql(nextDomain)}', path='${escapeSql(nextPath)}' WHERE blog_id=${blog.blogId};`
+      );
+      blog.domain = nextDomain;
+      blog.path = nextPath;
+    }
+  }
+
+  if (hasTable(tables, sitemetaTable)) {
+    const networkUrl = `${buildWordPressUrl(site, currentSitePath)}/`.replace(/([^/])\/+$/, '$1/');
+    await runSql(
+      site,
+      `UPDATE ${quoteSqlIdentifier(sitemetaTable)} SET meta_value='${escapeSql(networkUrl)}' WHERE meta_key='siteurl';`
+    );
+  }
+
+  const optionTables = new Set([`${prefix}options`]);
+  blogs.forEach((blog) => {
+    const tableName = blog.blogId === 1 ? `${prefix}options` : `${prefix}${blog.blogId}_options`;
+    optionTables.add(tableName);
+  });
+  tables
+    .filter((tableName) => new RegExp(`^${prefix.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}\\d+_options$`).test(tableName))
+    .forEach((tableName) => optionTables.add(tableName));
+
+  for (const tableName of optionTables) {
+    if (!hasTable(tables, tableName)) continue;
+    const blogMatch = tableName.match(new RegExp(`^${prefix.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}(\\d+)_options$`));
+    const blog = blogMatch
+      ? blogs.find((entry) => entry.blogId === Number(blogMatch[1]))
+      : blogs.find((entry) => entry.blogId === 1);
+    const url = blog
+      ? buildWordPressUrl({ ...site, domain: blog.domain }, blog.path)
+      : buildWordPressUrl(site, currentSitePath);
+    await updateOptionTableUrls(site, tableName, url, tables);
+  }
+};
+
+const updateWordPressUrls = async (site, restoreConfig = {}) => {
+  const prefix = getSafeTablePrefix(site);
+  const tables = await listDatabaseTables(site);
   const url = getSiteUrl(site);
-  await runSql(site, `UPDATE ${prefix}options SET option_value='${escapeSql(url)}' WHERE option_name IN ('siteurl','home');`);
+  const optionsTable = `${prefix}options`;
+  if (!hasTable(tables, optionsTable)) {
+    throw createHttpError(`Tabela ${optionsTable} não encontrada após importação. Verifique table_prefix/wp-config.php.`, 400);
+  }
+  await updateOptionTableUrls(site, optionsTable, url, tables);
+  if (restoreConfig.multisite || site.wordpress?.multisite || isMultisiteDatabase(tables, prefix)) {
+    await updateMultisiteUrls(site, tables, restoreConfig);
+  }
 };
 
 const repairWordPressFilesystemPermissions = async (site) => {
@@ -748,10 +1059,11 @@ const createWordPressSite = async (body = {}) => {
   if (!name) {
     throw createHttpError('Nome do site obrigatório', 400);
   }
-  const domain = normalizeDomain(body.domain);
   const id = crypto.randomUUID();
   const slug = slugify(name, 'wordpress');
   const shortId = id.slice(0, 8);
+  const domain = normalizeOptionalDomain(body.domain);
+  const proxyHost = buildSiteProxyHost(slug, shortId);
   const siteDir = path.join(sitesBaseDir, `${slug}-${shortId}`);
   const wordpressDir = path.join(siteDir, 'wordpress');
   const databaseDir = path.join(siteDir, 'database');
@@ -794,9 +1106,11 @@ const createWordPressSite = async (body = {}) => {
     name,
     slug,
     domain,
+    proxyHost,
+    proxyMode: !domain,
     port,
-    ssl: Boolean(body.ssl),
-    url: getSiteUrl({ domain, ssl: Boolean(body.ssl) }),
+    ssl: domain ? Boolean(body.ssl) : false,
+    url: getSiteUrl({ domain, proxyHost, ssl: domain ? Boolean(body.ssl) : false }),
     localUrl: `http://localhost:${port}`,
     networkName: buildSiteNetworkName(slug, shortId),
     siteDir,
@@ -1077,11 +1391,18 @@ mysql -u USUARIO -p NOME_DO_BANCO < database/wordpress.sql
 UPDATE wp_options SET option_value='https://novo-dominio.com.br' WHERE option_name IN ('siteurl','home');
 \`\`\`
 
-8. Limpe caches de plugins e, se necessário, gere novamente links permanentes no painel do WordPress.
-9. Aponte o Nginx/Apache para a nova raiz pública e valide o acesso ao \`/wp-admin\`.
+8. Se o backup for WordPress Multisite, valide também:
+
+- \`wp-config.php\` precisa manter \`MULTISITE\`, \`SUBDOMAIN_INSTALL\`, \`DOMAIN_CURRENT_SITE\`, \`PATH_CURRENT_SITE\`, \`SITE_ID_CURRENT_SITE\` e \`BLOG_ID_CURRENT_SITE\`.
+- O \`$table_prefix\` do \`wp-config.php\` precisa bater com as tabelas importadas.
+- Atualize \`wp_site\`, \`wp_blogs\`, \`wp_sitemeta.siteurl\` e as tabelas \`wp_2_options\`, \`wp_3_options\` etc. quando existirem.
+- Preserve \`wp-content/uploads/sites/{ID}\`, pois os uploads dos sites filhos ficam nessa estrutura.
+
+9. Limpe caches de plugins e, se necessário, gere novamente links permanentes no painel do WordPress.
+10. Aponte o Nginx/Apache para a nova raiz pública e valide o acesso ao \`/wp-admin\`.
 
 Arquivo: ${filename}
-Domínio original: ${site.domain}
+Host original: ${getSitePrimaryHost(site)}
 `;
 
 const dumpDatabaseToFile = async (site, sqlFile) => {
@@ -1272,6 +1593,7 @@ const processMigrationArchive = async (siteId, file) => {
 
     const wpContentDir = fs.existsSync(extractionDir) ? findWpContentDir(extractionDir) : null;
     const wordpressRoot = fs.existsSync(extractionDir) ? findWordPressRoot(extractionDir) : null;
+    const wordpressConfigMetadata = readWordPressConfigMetadata(wordpressRoot);
 
     if (wpContentDir) {
       copyDirectoryContents(wpContentDir, path.join(site.paths.wordpress, 'wp-content'));
@@ -1284,16 +1606,56 @@ const processMigrationArchive = async (siteId, file) => {
     }
 
     if (sqlFile) {
-      const tablePrefix = detectTablePrefixFromSql(sqlFile);
+      const detectedTablePrefix = detectTablePrefixFromSql(sqlFile);
       await importSqlFile(site, sqlFile);
+      const tables = await listDatabaseTables(site);
+      const tablePrefix = hasWordPressCoreTables(tables, detectedTablePrefix)
+        ? detectedTablePrefix
+        : detectTablePrefixFromTables(tables) || detectedTablePrefix;
+      const multisite = wordpressConfigMetadata.multisite || isMultisiteDatabase(tables, tablePrefix);
+      const subdomainInstall = wordpressConfigMetadata.subdomainInstall ?? (
+        multisite ? await inferSubdomainInstallFromDatabase(site, tables, tablePrefix) : false
+      );
+      const restoreConfig = {
+        ...wordpressConfigMetadata,
+        tablePrefix,
+        multisite,
+        subdomainInstall,
+        pathCurrentSite: normalizeWordPressPath(wordpressConfigMetadata.pathCurrentSite || '/'),
+        siteIdCurrentSite: Number(wordpressConfigMetadata.siteIdCurrentSite || 1),
+        blogIdCurrentSite: Number(wordpressConfigMetadata.blogIdCurrentSite || 1)
+      };
       site.wordpress = {
         ...(site.wordpress || {}),
-        tablePrefix
+        tablePrefix,
+        multisite,
+        multisiteConfig: multisite
+          ? {
+              subdomainInstall: Boolean(restoreConfig.subdomainInstall),
+              pathCurrentSite: restoreConfig.pathCurrentSite,
+              siteIdCurrentSite: restoreConfig.siteIdCurrentSite,
+              blogIdCurrentSite: restoreConfig.blogIdCurrentSite
+            }
+          : null
       };
-      actions.push(`Banco importado com prefixo ${tablePrefix}`);
+      actions.push(`Banco importado com prefixo ${tablePrefix}${multisite ? ' (multisite detectado)' : ''}`);
       try {
-        await updateWordPressUrls(site);
-        actions.push(`siteurl/home ajustados para ${getSiteUrl(site)}`);
+        const patchResult = await patchWordPressConfigForRestore(site, restoreConfig);
+        actions.push(
+          patchResult.patched
+            ? `wp-config.php ajustado para prefixo ${tablePrefix}${multisite ? ' e multisite' : ''}`
+            : patchResult.message
+        );
+      } catch (err) {
+        actions.push(`Banco importado, mas o ajuste do wp-config.php falhou: ${err.message}`);
+      }
+      try {
+        await updateWordPressUrls(site, restoreConfig);
+        actions.push(
+          multisite
+            ? `URLs do multisite ajustadas para ${getSiteUrl(site)}`
+            : `siteurl/home ajustados para ${getSiteUrl(site)}`
+        );
       } catch (err) {
         actions.push(`Banco importado, mas o ajuste de domínio falhou: ${err.message}`);
       }
@@ -1323,6 +1685,7 @@ const processMigrationArchive = async (siteId, file) => {
       sqlFound: Boolean(sqlFile),
       wpContentFound: Boolean(wpContentDir),
       wordpressRootFound: Boolean(wordpressRoot),
+      multisite: Boolean(site.wordpress?.multisite),
       actions,
       createdAt: new Date().toISOString()
     };
@@ -1377,12 +1740,16 @@ router.post('/:id/domain', async (req, res, next) => {
   try {
     const site = getSiteOr404(req.params.id);
     const oldConfigName = site.nginxConfigName;
-    site.domain = normalizeDomain(req.body?.domain);
-    if (req.body?.ssl !== undefined) site.ssl = Boolean(req.body.ssl);
+    const nextDomain = normalizeOptionalDomain(req.body?.domain);
+    site.proxyHost = site.proxyHost || buildSiteProxyHost(site.slug || site.name, site.id);
+    site.domain = nextDomain;
+    site.proxyMode = !nextDomain;
+    if (req.body?.ssl !== undefined) site.ssl = nextDomain ? Boolean(req.body.ssl) : false;
+    if (!nextDomain) site.ssl = false;
     site.url = getSiteUrl(site);
     site.updatedAt = new Date().toISOString();
     const warnings = [];
-    site.nginxConfigName = `site-${slugify(site.domain)}-${site.id.slice(0, 8)}.conf`;
+    site.nginxConfigName = `site-${slugify(nextDomain || getSiteProxyHost(site))}-${site.id.slice(0, 8)}.conf`;
     writeNginxSite(site, warnings);
     if (oldConfigName && oldConfigName !== site.nginxConfigName) {
       try {
@@ -1394,7 +1761,7 @@ router.post('/:id/domain', async (req, res, next) => {
     try {
       await updateWordPressUrls(site);
     } catch (err) {
-      warnings.push(`Domínio salvo, mas não foi possível ajustar siteurl/home no banco: ${err.message}`);
+      warnings.push(`Host salvo, mas não foi possível ajustar siteurl/home no banco: ${err.message}`);
     }
     saveSite(site);
     res.json({ site: await decorateSite(site), warnings });
