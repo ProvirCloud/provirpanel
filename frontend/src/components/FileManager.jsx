@@ -167,6 +167,7 @@ const FileManager = ({ showPageIntro = true }) => {
   const [copyTargetEnvironmentId, setCopyTargetEnvironmentId] = useState('')
   const [copyTargetPath, setCopyTargetPath] = useState('/')
   const [unsupportedEnvironmentMessage, setUnsupportedEnvironmentMessage] = useState('')
+  const [uploadProgress, setUploadProgress] = useState(null)
   const uploadRef = useRef(null)
   const socketRef = useRef(null)
   const treeRequestRef = useRef(0)
@@ -531,19 +532,71 @@ const FileManager = ({ showPageIntro = true }) => {
     }
   }, [preview, previewType, selectedEnvironmentId])
 
-  const handleUpload = async (files) => {
-    if (!files?.length || !selectedEnvironmentId) return
-    const formData = new FormData()
-    Array.from(files).forEach((file) => formData.append('files', file))
-    formData.append('path', path)
-    formData.append('environmentId', selectedEnvironmentId)
-    try {
+  const CHUNK_SIZE = 25 * 1024 * 1024
+
+  const uploadSingleFile = async (file, destination, envId) => {
+    if (file.size <= CHUNK_SIZE) {
+      const formData = new FormData()
+      formData.append('files', file)
+      formData.append('path', destination)
+      formData.append('environmentId', envId)
       await api.post('/storage/upload', formData, {
         headers: { 'Content-Type': 'multipart/form-data' },
+        onUploadProgress: (event) => {
+          const total = event.total || file.size || 1
+          setUploadProgress((prev) => ({ ...prev, progress: Math.min(99, Math.round((event.loaded / total) * 100)) }))
+        }
       })
+      return
+    }
+    const totalChunks = Math.ceil(file.size / CHUNK_SIZE)
+    const initRes = await api.post('/storage/upload/init', {
+      filename: file.name,
+      size: file.size,
+      totalChunks,
+      path: destination,
+      environmentId: envId
+    })
+    const uploadId = initRes.data?.uploadId
+    for (let i = 0; i < totalChunks; i++) {
+      const start = i * CHUNK_SIZE
+      const end = Math.min(start + CHUNK_SIZE, file.size)
+      const chunk = file.slice(start, end)
+      const chunkForm = new FormData()
+      chunkForm.append('uploadId', uploadId)
+      chunkForm.append('chunkIndex', String(i))
+      chunkForm.append('chunk', chunk, `${file.name}.part-${i}`)
+      chunkForm.append('environmentId', envId)
+      await api.post('/storage/upload/chunk', chunkForm, {
+        headers: { 'Content-Type': 'multipart/form-data' }
+      })
+      setUploadProgress((prev) => ({ ...prev, progress: Math.min(95, Math.round(((i + 1) / totalChunks) * 100)) }))
+    }
+    setUploadProgress((prev) => ({ ...prev, progress: 98, message: 'Finalizando...' }))
+    await api.post('/storage/upload/complete', { uploadId, environmentId: envId })
+  }
+
+  const handleUpload = async (files) => {
+    if (!files?.length || !selectedEnvironmentId) return
+    const fileList = Array.from(files)
+    const totalSize = fileList.reduce((sum, f) => sum + f.size, 0)
+    setUploadProgress({ progress: 0, message: `Enviando ${fileList.length} arquivo(s)...`, total: fileList.length, current: 0 })
+    try {
+      for (let idx = 0; idx < fileList.length; idx++) {
+        setUploadProgress((prev) => ({
+          ...prev,
+          current: idx + 1,
+          message: `Enviando ${fileList[idx].name} (${idx + 1}/${fileList.length})...`,
+          progress: Math.round((idx / fileList.length) * 100)
+        }))
+        await uploadSingleFile(fileList[idx], path, selectedEnvironmentId)
+      }
+      setUploadProgress({ progress: 100, message: 'Upload concluído!' })
       setToast('Upload concluído')
       await refreshEnvironment(selectedEnvironmentId, path)
+      setTimeout(() => setUploadProgress(null), 3000)
     } catch (err) {
+      setUploadProgress(null)
       setToast(err.response?.data?.message || 'Erro no upload')
     }
   }
@@ -788,6 +841,18 @@ const FileManager = ({ showPageIntro = true }) => {
           </button>
         </div>
       </div>
+
+      {uploadProgress ? (
+        <div className="rounded-xl border border-blue-500/20 bg-blue-500/10 px-4 py-3">
+          <div className="flex items-center justify-between text-xs text-blue-100">
+            <span>{uploadProgress.message || 'Enviando...'}</span>
+            <span>{uploadProgress.progress}%</span>
+          </div>
+          <div className="mt-2 h-2 overflow-hidden rounded-full bg-slate-900">
+            <div className="h-full rounded-full bg-blue-500 transition-all" style={{ width: `${uploadProgress.progress}%` }} />
+          </div>
+        </div>
+      ) : null}
 
       <div className="rounded-2xl border border-slate-800 bg-slate-900/60 p-3">
         <div className="flex flex-wrap gap-2">

@@ -14,9 +14,13 @@ const storageManager = new StorageManager();
 const environmentManager = new StorageEnvironmentManager();
 const multiStorage = new MultiStorageService({ environmentManager });
 const upload = multer({ storage: multer.memoryStorage() });
+const chunkUpload = multer({ dest: path.join(require('os').tmpdir(), 'provirpanel-storage-chunks') });
 const EMAIL_ASSETS_DIR = '/email-assets';
 const MAX_IMAGE_BYTES = 5 * 1024 * 1024;
 const ALLOWED_IMAGE_EXT = ['.png', '.jpg', '.jpeg', '.gif', '.webp', '.svg'];
+const crypto = require('crypto');
+const storageChunkRoot = path.join(require('os').tmpdir(), 'provirpanel-storage-chunks');
+fs.mkdirSync(storageChunkRoot, { recursive: true });
 
 const sanitizeFilename = (name) => {
   const base = path.basename(name || 'image');
@@ -195,6 +199,73 @@ router.post('/upload', upload.array('files'), withEnvironment(async (req, res) =
   const destination = req.body.path || '/';
   const files = req.files || [];
   const uploaded = await multiStorage.uploadFiles(environment.id, files, destination);
+  res.json({ uploaded, environment });
+}));
+
+// Chunked upload endpoints for large files
+router.post('/upload/init', withEnvironment(async (req, res) => {
+  assertPermission(req, 'upload');
+  const totalChunks = Number(req.body?.totalChunks || 0);
+  if (!Number.isInteger(totalChunks) || totalChunks < 1) {
+    return res.status(400).json({ message: 'totalChunks inv\u00e1lido' });
+  }
+  const uploadId = crypto.randomUUID();
+  const uploadDir = path.join(storageChunkRoot, uploadId);
+  fs.mkdirSync(uploadDir, { recursive: true });
+  fs.writeFileSync(path.join(uploadDir, 'metadata.json'), JSON.stringify({
+    uploadId,
+    filename: req.body?.filename || 'file',
+    totalChunks,
+    size: Number(req.body?.size || 0),
+    path: req.body?.path || '/',
+    environmentId: req.body?.environmentId || req.environmentId,
+    createdAt: new Date().toISOString()
+  }));
+  res.json({ uploadId });
+}));
+
+router.post('/upload/chunk', chunkUpload.single('chunk'), withEnvironment(async (req, res) => {
+  assertPermission(req, 'upload');
+  const uploadId = req.body?.uploadId;
+  const chunkIndex = Number(req.body?.chunkIndex);
+  if (!uploadId || !Number.isInteger(chunkIndex) || chunkIndex < 0) {
+    return res.status(400).json({ message: 'uploadId e chunkIndex obrigat\u00f3rios' });
+  }
+  const uploadDir = path.join(storageChunkRoot, uploadId);
+  if (!fs.existsSync(path.join(uploadDir, 'metadata.json'))) {
+    return res.status(404).json({ message: 'Upload n\u00e3o encontrado' });
+  }
+  if (req.file?.path) {
+    fs.renameSync(req.file.path, path.join(uploadDir, `chunk-${chunkIndex}`));
+  }
+  res.json({ ok: true, chunkIndex });
+}));
+
+router.post('/upload/complete', withEnvironment(async (req, res) => {
+  const environment = assertPermission(req, 'upload');
+  const uploadId = req.body?.uploadId;
+  const uploadDir = path.join(storageChunkRoot, uploadId || '');
+  const metadataPath = path.join(uploadDir, 'metadata.json');
+  if (!uploadId || !fs.existsSync(metadataPath)) {
+    return res.status(404).json({ message: 'Upload n\u00e3o encontrado' });
+  }
+  const metadata = JSON.parse(fs.readFileSync(metadataPath, 'utf8'));
+  const totalChunks = Number(metadata.totalChunks);
+  const assembledPath = path.join(uploadDir, metadata.filename);
+  for (let i = 0; i < totalChunks; i++) {
+    const chunkPath = path.join(uploadDir, `chunk-${i}`);
+    if (!fs.existsSync(chunkPath)) {
+      return res.status(400).json({ message: `Chunk ${i + 1}/${totalChunks} ausente` });
+    }
+    fs.appendFileSync(assembledPath, fs.readFileSync(chunkPath));
+  }
+  const fileObj = {
+    originalname: metadata.filename,
+    buffer: fs.readFileSync(assembledPath),
+    size: fs.statSync(assembledPath).size
+  };
+  const uploaded = await multiStorage.uploadFiles(environment.id, [fileObj], metadata.path || '/');
+  fs.rmSync(uploadDir, { recursive: true, force: true });
   res.json({ uploaded, environment });
 }));
 
