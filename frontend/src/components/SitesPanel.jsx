@@ -437,6 +437,30 @@ const SitesPanel = () => {
     }
   }
 
+  const cleanupCache = async () => {
+    if (!selectedSite) return
+    const confirmed = await askConfirm({
+      title: 'Limpar cache do WordPress',
+      message: `Remover cache de otimização e desativar minificação antiga do backup no site ${selectedSite.name}? Use quando o tema carregar sem CSS/JS após restauração ou troca de domínio.`,
+      confirmText: 'Limpar cache',
+      variant: 'warning',
+    })
+    if (!confirmed) return
+    setBusy('cleanup-cache')
+    setMessage(null)
+    try {
+      const response = await api.post(`/sites/${selectedSite.id}/cleanup-cache`)
+      setSites((current) => current.map((site) => (site.id === response.data.site.id ? response.data.site : site)))
+      const removed = response.data?.cleanup?.removedPaths?.length || 0
+      const tables = response.data?.cleanup?.optionTables || 0
+      setMessage({ type: 'success', text: `Cache limpo (${removed} caminhos removidos, ${tables} tabelas ajustadas)` })
+    } catch (err) {
+      setMessage({ type: 'error', text: getErrorMessage(err, 'Erro ao limpar cache') })
+    } finally {
+      setBusy('')
+    }
+  }
+
   const submitMigration = async (event) => {
     event.preventDefault()
     if (!selectedSite || !migrationFile) return
@@ -1121,6 +1145,9 @@ const SitesPanel = () => {
                   </Button>
                   <Button type="button" variant="secondary" leadingIcon={<Shield size={16} />} loading={busy === 'fix-permissions'} onClick={fixPermissions}>
                     Corrigir permissões
+                  </Button>
+                  <Button type="button" variant="secondary" leadingIcon={<RefreshCcw size={16} />} loading={busy === 'cleanup-cache'} onClick={cleanupCache}>
+                    Limpar cache WP
                   </Button>
                   {!selectedSite.ssl ? (
                     <Button type="button" variant="secondary" leadingIcon={<Lock size={16} />} loading={busy === 'fix-ssl'} onClick={fixSsl}>

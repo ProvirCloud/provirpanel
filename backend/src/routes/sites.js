@@ -470,6 +470,8 @@ const quoteSqlIdentifier = (identifier) => {
   return `\`${value}\``;
 };
 
+const escapeRegExp = (value) => String(value || '').replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+
 const getSafeTablePrefix = (site) => {
   const prefix = site.wordpress?.tablePrefix || 'wp_';
   return /^[a-zA-Z0-9_]+$/.test(prefix) ? prefix : 'wp_';
@@ -1185,12 +1187,12 @@ const updateMultisiteUrls = async (site, tables = [], restoreConfig = {}) => {
     optionTables.add(tableName);
   });
   tables
-    .filter((tableName) => new RegExp(`^${prefix.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}\\d+_options$`).test(tableName))
+    .filter((tableName) => new RegExp(`^${escapeRegExp(prefix)}\\d+_options$`).test(tableName))
     .forEach((tableName) => optionTables.add(tableName));
 
   for (const tableName of optionTables) {
     if (!hasTable(tables, tableName)) continue;
-    const blogMatch = tableName.match(new RegExp(`^${prefix.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}(\\d+)_options$`));
+    const blogMatch = tableName.match(new RegExp(`^${escapeRegExp(prefix)}(\\d+)_options$`));
     const blog = blogMatch
       ? blogs.find((entry) => entry.blogId === Number(blogMatch[1]))
       : blogs.find((entry) => entry.blogId === 1);
@@ -1246,24 +1248,65 @@ const cleanupWordPressCacheFiles = (site) => {
   const cachePaths = [
     'wp-content/litespeed',
     'wp-content/cache/litespeed',
+    'wp-content/cache/autoptimize',
     'wp-content/cache/wp-rocket',
     'wp-content/cache/min',
     'wp-content/cache/busting',
     'wp-content/cache/critical-css',
     'wp-content/cache/page_enhanced',
     'wp-content/cache/supercache',
-    'wp-content/advanced-cache.php'
+    'wp-content/cache/wpo-cache',
+    'wp-content/cache/breeze',
+    'wp-content/cache/hummingbird',
+    'wp-content/cache/comet-cache',
+    'wp-content/cache/asset-cleanup',
+    'wp-content/cache/css',
+    'wp-content/cache/js',
+    'wp-content/uploads/ao_ccss',
+    'wp-content/advanced-cache.php',
+    'wp-content/wp-cache-config.php'
   ];
 
   const removed = [];
-  cachePaths.forEach((relativePath) => {
+  const removePath = (relativePath) => {
     const target = path.join(wordpressRoot, relativePath);
     if (fs.existsSync(target)) {
       fs.rmSync(target, { recursive: true, force: true });
       removed.push(relativePath);
     }
-  });
+  };
+
+  cachePaths.forEach(removePath);
+
+  const cacheDir = path.join(wordpressRoot, 'wp-content/cache');
+  if (fs.existsSync(cacheDir)) {
+    fs.readdirSync(cacheDir, { withFileTypes: true }).forEach((entry) => {
+      if (!entry.isDirectory()) return;
+      if (/^(autoptimize|litespeed|rocket|wpo|breeze|hummingbird)/i.test(entry.name)) {
+        removePath(`wp-content/cache/${entry.name}`);
+      }
+    });
+  }
+
+  const uploadsSitesDir = path.join(wordpressRoot, 'wp-content/uploads/sites');
+  if (fs.existsSync(uploadsSitesDir)) {
+    fs.readdirSync(uploadsSitesDir, { withFileTypes: true }).forEach((entry) => {
+      if (!entry.isDirectory() || !/^\d+$/.test(entry.name)) return;
+      removePath(`wp-content/uploads/sites/${entry.name}/ao_ccss`);
+    });
+  }
+
   return removed;
+};
+
+const getWordPressOptionTables = (tables = [], prefix = 'wp_') => {
+  const optionTables = new Set();
+  if (hasTable(tables, `${prefix}options`)) optionTables.add(`${prefix}options`);
+  const subsiteRegex = new RegExp(`^${escapeRegExp(prefix)}\\d+_options$`);
+  tables
+    .filter((tableName) => subsiteRegex.test(tableName))
+    .forEach((tableName) => optionTables.add(tableName));
+  return Array.from(optionTables);
 };
 
 const truncateCacheTablesIfPresent = async (site, tables) => {
@@ -1287,7 +1330,11 @@ const truncateCacheTablesIfPresent = async (site, tables) => {
 };
 
 const cleanupWordPressCacheDatabase = async (site) => {
-  const prefix = getSafeTablePrefix(site);
+  const tables = await listDatabaseTables(site);
+  const prefix = resolveWordPressTablePrefix(tables, getSafeTablePrefix(site));
+  const optionTables = getWordPressOptionTables(tables, prefix);
+  if (!optionTables.length) return { tablePrefix: prefix, optionTables: 0 };
+
   const disabledOptions = [
     'litespeed.conf.guest',
     'litespeed.conf.guest_optm',
@@ -1301,28 +1348,83 @@ const cleanupWordPressCacheDatabase = async (site) => {
     'litespeed.conf.optm-js_comb',
     'litespeed.conf.optm-js_comb_ext_inl',
     'litespeed.conf.optm-js_defer',
-    'litespeed.conf.optm-guest_only'
+    'litespeed.conf.optm-guest_only',
+    'autoptimize_html',
+    'autoptimize_js',
+    'autoptimize_css',
+    'autoptimize_css_defer',
+    'autoptimize_css_inline',
+    'autoptimize_css_include_inline',
+    'autoptimize_css_datauris',
+    'autoptimize_css_justhead',
+    'autoptimize_js_include_inline',
+    'autoptimize_js_trycatch',
+    'autoptimize_imgopt_lazyload'
+  ];
+  const deletedOptions = [
+    'litespeed.purge.queue',
+    'litespeed.purge.queue2',
+    'autoptimize_cache_size',
+    'autoptimize_cache_cleaned',
+    'rewrite_rules',
+    '_site_transient_theme_roots',
+    '_site_transient_timeout_theme_roots',
+    '_site_transient_update_themes',
+    '_site_transient_timeout_update_themes',
+    '_transient_theme_roots',
+    '_transient_timeout_theme_roots',
+    '_transient_update_themes',
+    '_transient_timeout_update_themes'
+  ];
+  const transientPatterns = [
+    '_transient_litespeed%',
+    '_site_transient_litespeed%',
+    '_transient_timeout_litespeed%',
+    '_site_transient_timeout_litespeed%',
+    '_transient_rocket%',
+    '_site_transient_rocket%',
+    '_transient_timeout_rocket%',
+    '_site_transient_timeout_rocket%',
+    '_transient_autoptimize%',
+    '_site_transient_autoptimize%',
+    '_transient_timeout_autoptimize%',
+    '_site_transient_timeout_autoptimize%',
+    '_transient_rsssl%',
+    '_site_transient_rsssl%',
+    '_transient_timeout_rsssl%',
+    '_site_transient_timeout_rsssl%'
   ];
   const quotedOptions = disabledOptions.map((name) => `'${escapeSql(name)}'`).join(',');
-  await runSql(
-    site,
-    [
-      `UPDATE ${prefix}options SET option_value='' WHERE option_name IN (${quotedOptions});`,
-      `DELETE FROM ${prefix}options WHERE option_name IN ('litespeed.purge.queue','litespeed.purge.queue2') OR option_name LIKE '_transient_litespeed%' OR option_name LIKE '_site_transient_litespeed%' OR option_name LIKE '_transient_timeout_litespeed%' OR option_name LIKE '_site_transient_timeout_litespeed%' OR option_name LIKE '_transient_rocket%' OR option_name LIKE '_site_transient_rocket%' OR option_name LIKE '_transient_timeout_rocket%' OR option_name LIKE '_site_transient_timeout_rocket%';`
-    ].join(' ')
-  );
+  const quotedDeletedOptions = deletedOptions.map((name) => `'${escapeSql(name)}'`).join(',');
+  const deleteCacheWhere = [
+    `option_name IN (${quotedDeletedOptions})`,
+    "option_name LIKE 'autoptimize_cache_%'",
+    "option_name LIKE 'ao_ccss_%'",
+    ...transientPatterns.map((pattern) => `option_name LIKE '${escapeSql(pattern)}'`)
+  ].join(' OR ');
+  const sql = optionTables
+    .map((tableName) => {
+      const table = quoteSqlIdentifier(tableName);
+      return [
+        `UPDATE ${table} SET option_value='' WHERE option_name IN (${quotedOptions});`,
+        `DELETE FROM ${table} WHERE ${deleteCacheWhere};`
+      ].join(' ');
+    })
+    .join(' ');
+  await runSql(site, sql);
   await truncateCacheTablesIfPresent(site, [
     `${prefix}litespeed_url`,
     `${prefix}litespeed_url_file`,
     `${prefix}litespeed_img_optm`,
     `${prefix}litespeed_img_optming`
   ]);
+  return { tablePrefix: prefix, optionTables: optionTables.length };
 };
 
 const cleanupWordPressAfterMigration = async (site) => {
   const removed = cleanupWordPressCacheFiles(site);
-  await cleanupWordPressCacheDatabase(site);
-  return removed;
+  const databaseCleanup = await cleanupWordPressCacheDatabase(site);
+  return { removed, databaseCleanup };
 };
 
 const createWordPressSite = async (body = {}) => {
@@ -1949,11 +2051,13 @@ const processMigrationArchive = async (siteId, file) => {
         actions.push(`Banco importado, mas o ajuste de domínio falhou: ${err.message}`);
       }
       try {
-        const removedCachePaths = await cleanupWordPressAfterMigration(site);
+        const cacheCleanup = await cleanupWordPressAfterMigration(site);
+        const removedCachePaths = cacheCleanup.removed || [];
+        const optionTables = cacheCleanup.databaseCleanup?.optionTables || 0;
         actions.push(
-          removedCachePaths.length
-            ? `Cache/otimizacoes do backup limpos (${removedCachePaths.length} caminhos removidos)`
-            : 'Otimizacoes LiteSpeed/WP Rocket do backup desativadas'
+          removedCachePaths.length || optionTables
+            ? `Cache/otimizacoes do backup limpos (${removedCachePaths.length} caminhos removidos, ${optionTables} tabelas de opções)`
+            : 'Otimizacoes de cache do backup desativadas'
         );
       } catch (err) {
         actions.push(`Backup restaurado, mas a limpeza de cache/otimizacao falhou: ${err.message}`);
@@ -2073,6 +2177,16 @@ router.post('/:id/domain', async (req, res, next) => {
       warnings.push(`Host salvo, mas não foi possível ajustar wp-config.php: ${err.message}`);
     }
     try {
+      const cacheCleanup = await cleanupWordPressAfterMigration(site);
+      const removedCachePaths = cacheCleanup.removed || [];
+      const optionTables = cacheCleanup.databaseCleanup?.optionTables || 0;
+      if (removedCachePaths.length || optionTables) {
+        warnings.push(`Cache/otimizações antigos limpos (${removedCachePaths.length} caminhos, ${optionTables} tabelas de opções).`);
+      }
+    } catch (err) {
+      warnings.push(`Host salvo, mas a limpeza de cache/otimização falhou: ${err.message}`);
+    }
+    try {
       syncSiteWordPressServiceUrl(site);
     } catch (err) {
       warnings.push(`Host salvo, mas a URL externa do serviço não foi sincronizada: ${err.message}`);
@@ -2094,6 +2208,32 @@ router.post('/:id/fix-permissions', async (req, res, next) => {
     site.updatedAt = new Date().toISOString();
     saveSite(site);
     res.json({ site: await decorateSite(site), message: 'Permissões corrigidas' });
+  } catch (err) {
+    next(err);
+  }
+});
+
+router.post('/:id/cleanup-cache', async (req, res, next) => {
+  try {
+    const site = getSiteOr404(req.params.id);
+    const cacheCleanup = await cleanupWordPressAfterMigration(site);
+    try {
+      await repairWordPressFilesystemPermissions(site);
+    } catch {
+      // A limpeza já foi executada; permissão é ajuste complementar.
+    }
+    site.lastCacheCleanup = {
+      removedPaths: cacheCleanup.removed || [],
+      optionTables: cacheCleanup.databaseCleanup?.optionTables || 0,
+      tablePrefix: cacheCleanup.databaseCleanup?.tablePrefix || site.wordpress?.tablePrefix || 'wp_',
+      createdAt: new Date().toISOString()
+    };
+    site.updatedAt = new Date().toISOString();
+    saveSite(site);
+    res.json({
+      site: await decorateSite(site),
+      cleanup: site.lastCacheCleanup
+    });
   } catch (err) {
     next(err);
   }
@@ -2129,6 +2269,11 @@ router.post('/:id/fix-ssl', async (req, res, next) => {
       await updateWordPressUrls(site);
     } catch (err) {
       warnings.push(`wp-config.php corrigido, mas o ajuste de siteurl/home falhou: ${err.message}`);
+    }
+    try {
+      await cleanupWordPressAfterMigration(site);
+    } catch (err) {
+      warnings.push(`HTTPS ativado, mas a limpeza de cache/otimização falhou: ${err.message}`);
     }
     saveSite(site);
     res.json({ site: await decorateSite(site), output: result.stdout?.trim(), warnings });
