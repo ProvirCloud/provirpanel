@@ -535,40 +535,55 @@ class DockerManager {
       if (onProgress) {
         onProgress(`🔨 Construindo imagem ${imageName} a partir de ${contextPath}...`);
       }
-      
-      const tarfs = require('tar-fs');
-      const tarStream = tarfs.pack(contextPath);
-      
+
+      const { execFile } = require('child_process');
       return new Promise((resolve, reject) => {
-        const buildOptions = { t: imageName };
+        const args = ['build', '-t', imageName];
         if (options.dockerfileName) {
-          buildOptions.dockerfile = options.dockerfileName;
+          args.push('-f', options.dockerfileName);
         }
         if (options.buildArgs && typeof options.buildArgs === 'object') {
-          buildOptions.buildargs = options.buildArgs;
-        }
-        this.docker.buildImage(tarStream, buildOptions, (err, stream) => {
-          if (err) {
-            return reject(err);
-          }
-          
-          this.docker.modem.followProgress(stream, (progressErr, output) => {
-            if (progressErr) {
-              return reject(progressErr);
-            }
-            if (onProgress) {
-              onProgress(`✅ Imagem ${imageName} construída com sucesso`);
-            }
-            return resolve(output);
-          }, (event) => {
-            if (onProgress && event.stream) {
-              const message = event.stream.trim();
-              if (message) {
-                onProgress(message);
-              }
-            }
+          Object.entries(options.buildArgs).forEach(([key, value]) => {
+            args.push('--build-arg', `${key}=${value}`);
           });
+        }
+        args.push('.');
+
+        const child = execFile('docker', args, {
+          cwd: contextPath,
+          env: { ...process.env, DOCKER_BUILDKIT: '1' },
+          maxBuffer: 50 * 1024 * 1024,
+          timeout: 600000
+        }, (err, stdout, stderr) => {
+          if (err) {
+            const errorOutput = stderr || stdout || err.message;
+            if (onProgress) {
+              onProgress(`❌ Build falhou: ${errorOutput.trim().split('\n').pop()}`);
+            }
+            return reject(new Error(errorOutput.trim().split('\n').pop() || err.message));
+          }
+          if (onProgress) {
+            onProgress(`✅ Imagem ${imageName} construída com sucesso`);
+          }
+          return resolve(stdout);
         });
+
+        if (child.stdout && onProgress) {
+          child.stdout.on('data', (data) => {
+            String(data).split('\n').forEach((line) => {
+              const trimmed = line.trim();
+              if (trimmed) onProgress(trimmed);
+            });
+          });
+        }
+        if (child.stderr && onProgress) {
+          child.stderr.on('data', (data) => {
+            String(data).split('\n').forEach((line) => {
+              const trimmed = line.trim();
+              if (trimmed) onProgress(trimmed);
+            });
+          });
+        }
       });
     } catch (err) {
       if (onProgress) {
