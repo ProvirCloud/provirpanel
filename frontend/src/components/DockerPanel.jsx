@@ -1854,6 +1854,10 @@ const DockerPanel = ({ showPageIntro = true }) => {
             message: payload.message,
             logs: [...(prev?.logs || []), payload.message]
           }))
+          if (payload.phase === 'done') {
+            loadImages()
+            setBuildWorking(false)
+          }
         }
         return
       }
