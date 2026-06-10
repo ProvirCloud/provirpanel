@@ -38,7 +38,7 @@
     "tar-fs": "^3.0.4"
   },
   "devDependencies": {
-    "concurrently": "^9.2.1",
+    "concurrently": "^10.0.3",
     "prisma": "^5.22.0"
   }
 }
