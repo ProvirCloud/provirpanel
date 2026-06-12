@@ -14,7 +14,8 @@ const ALLOWED_PULL_IMAGES = new Set([
   'redis',
   'nginx',
   'node',
-  'dpage/pgadmin4'
+  'dpage/pgadmin4',
+  'n8nio/n8n'
 ]);
 
 const extractContainerHealthStatus = (container = {}) => {
