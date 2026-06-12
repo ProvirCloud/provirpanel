@@ -1460,32 +1460,96 @@ const ServiceEnvironmentTab = ({ service, envRows, setEnvRows, onReload }) => {
   )
 }
 
+const formatLogTimestamp = (ts) => {
+  if (!ts) return ''
+  try {
+    const d = new Date(ts)
+    return d.toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit', second: '2-digit' })
+  } catch (e) {
+    return ts
+  }
+}
+
+const getLogMinuteKey = (ts) => {
+  if (!ts) return ''
+  try {
+    const d = new Date(ts)
+    return `${d.toLocaleDateString('pt-BR')} ${d.toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit' })}`
+  } catch (e) {
+    return ''
+  }
+}
+
+const LOG_LEVEL_STYLES = {
+  error: 'text-rose-400',
+  warn: 'text-amber-400',
+  info: 'text-sky-400',
+  debug: 'text-slate-500'
+}
+
 const LogsViewer = ({ logs, loading }) => {
+  const containerRef = useRef(null)
+
+  useEffect(() => {
+    if (containerRef.current) {
+      containerRef.current.scrollTop = containerRef.current.scrollHeight
+    }
+  }, [logs])
+
   if (loading) {
     return (
-      <div className="flex h-80 items-center justify-center rounded-lg bg-slate-950 font-mono text-sm text-slate-500">
+      <div className="flex h-80 items-center justify-center rounded-xl bg-[#0d1117] font-mono text-sm text-slate-500">
         <Loader2 className="mr-2 h-4 w-4 animate-spin" />
         Carregando logs...
       </div>
     )
   }
+
+  const entries = logs?.entries || []
+  if (!entries.length) {
+    return (
+      <div className="flex h-80 items-center justify-center rounded-xl bg-[#0d1117] font-mono text-sm text-slate-600">
+        Sem logs para os filtros atuais.
+      </div>
+    )
+  }
+
+  // Group by minute
+  const groups = []
+  let currentGroup = null
+  entries.forEach((entry) => {
+    const key = getLogMinuteKey(entry.timestamp)
+    if (!currentGroup || currentGroup.key !== key) {
+      currentGroup = { key, entries: [] }
+      groups.push(currentGroup)
+    }
+    currentGroup.entries.push(entry)
+  })
+
   return (
-    <div className="h-[520px] overflow-auto rounded-lg border border-slate-800 bg-black p-3 font-mono text-xs leading-5 text-slate-300">
-      {logs?.entries?.length ? logs.entries.map((entry) => (
-        <div key={entry.id} className="grid gap-2 border-b border-white/5 py-1 md:grid-cols-[170px_60px_1fr]">
-          <span className="text-slate-600">{entry.timestamp || '-'}</span>
-          <span className={
-            entry.level === 'error'
-              ? 'text-rose-300'
-              : entry.level === 'warn'
-                ? 'text-amber-300'
-                : 'text-emerald-300'
-          }>
-            {entry.level}
-          </span>
-          <span className="whitespace-pre-wrap break-words">{entry.message}</span>
+    <div
+      ref={containerRef}
+      className="h-[560px] overflow-auto rounded-xl bg-[#0d1117] p-4 font-mono text-[13px] leading-[1.7] selection:bg-blue-500/30"
+    >
+      {groups.map((group) => (
+        <div key={group.key} className="mb-1">
+          {group.key ? (
+            <div className="sticky top-0 z-10 mb-1 flex items-center gap-3 py-1">
+              <span className="text-[11px] text-slate-600 bg-[#0d1117] pr-3">{group.key}</span>
+              <span className="flex-1 border-t border-slate-800/60" />
+            </div>
+          ) : null}
+          {group.entries.map((entry) => (
+            <div key={entry.id} className="flex gap-3 py-[1px] hover:bg-white/[0.02] rounded px-1 -mx-1">
+              <span className="shrink-0 text-slate-600 select-none w-[62px]">{formatLogTimestamp(entry.timestamp)}</span>
+              <span className={`shrink-0 w-[42px] select-none font-semibold ${LOG_LEVEL_STYLES[entry.level] || 'text-slate-500'}`}>
+                {entry.level === 'error' ? 'ERR' : entry.level === 'warn' ? 'WRN' : entry.level === 'debug' ? 'DBG' : 'INF'}
+              </span>
+              <span className="whitespace-pre-wrap break-words text-slate-300 min-w-0">{entry.message}</span>
+            </div>
+          ))}
         </div>
-      )) : <p className="text-slate-600">Sem logs para os filtros atuais.</p>}
+      ))}
     </div>
   )
 }

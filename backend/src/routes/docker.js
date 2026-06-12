@@ -37,6 +37,12 @@ const CONTAINER_VOLUME_PERMISSIONS = {
     gid: 5050,
     mode: '777',
     label: 'pgAdmin'
+  },
+  n8n: {
+    uid: 1000,
+    gid: 1000,
+    mode: '755',
+    label: 'n8n'
   }
 };
 

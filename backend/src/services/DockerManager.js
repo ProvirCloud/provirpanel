@@ -15,7 +15,32 @@ const ALLOWED_PULL_IMAGES = new Set([
   'nginx',
   'node',
   'dpage/pgadmin4',
-  'n8nio/n8n'
+  'n8nio/n8n',
+  'mongo',
+  'rabbitmq',
+  'memcached',
+  'eclipse-temurin',
+  'openjdk',
+  'amazoncorretto',
+  'python',
+  'ruby',
+  'golang',
+  'httpd',
+  'traefik',
+  'adminer',
+  'phpmyadmin',
+  'minio/minio',
+  'grafana/grafana',
+  'prom/prometheus',
+  'elasticsearch',
+  'kibana',
+  'bitnami/wordpress',
+  'bitnami/postgresql',
+  'bitnami/mysql',
+  'bitnami/redis',
+  'bitnami/nginx',
+  'bitnami/node',
+  'bitnami/mongodb'
 ]);
 
 const extractContainerHealthStatus = (container = {}) => {
@@ -71,7 +96,11 @@ class DockerManager {
     const normalized = (imageName || '').trim();
     const baseName = normalized.split(':')[0];
     if (!options.allowAny && !ALLOWED_PULL_IMAGES.has(baseName)) {
-      throw new Error('Image not allowed');
+      // Allow any image from Docker Hub (contains /) or official images
+      const isDockerHub = baseName.includes('/') || baseName.match(/^[a-z][a-z0-9-]+$/);
+      if (!isDockerHub) {
+        throw new Error('Image not allowed');
+      }
     }
 
     return new Promise((resolve, reject) => {
