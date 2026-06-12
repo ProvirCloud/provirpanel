@@ -1351,7 +1351,9 @@ const ServiceEnvironmentTab = ({ service, envRows, setEnvRows, onReload }) => {
         .filter((row) => row.key)
       await serviceEnvironmentApi.upsert(service.id, cleanRows, { apply })
       setMessage(apply ? 'ENV aplicada ao serviço.' : 'ENV salva como configuração pendente.')
-      await onReload()
+      if (apply) {
+        await onReload()
+      }
     } catch (err) {
       setMessage(err.response?.data?.message || err.message || 'Falha ao salvar ENV')
     } finally {
@@ -2139,13 +2141,16 @@ const ServiceSettingsTab = ({ service, settingsState, setSettingsState, onReload
         command: settingsState.command,
         bindLocalOnly: settingsState.bindLocalOnly,
         autoRollback: settingsState.autoRollback,
+        volumes: settingsState.volumes.filter((v) => v.hostPath || v.containerPath),
         healthcheck: settingsState.healthcheck,
         nodeServiceMode: settingsState.nodeServiceMode,
         nodeSiteConfig: settingsState.nodeSiteConfig,
         apply
       })
       setMessage(apply ? 'Configuração aplicada.' : 'Configuração salva como pendente.')
-      await onReload()
+      if (apply) {
+        await onReload()
+      }
     } catch (err) {
       setMessage(err.response?.data?.message || err.message || 'Falha ao salvar configuração')
     } finally {
@@ -2222,6 +2227,24 @@ const ServiceSettingsTab = ({ service, settingsState, setSettingsState, onReload
           </label>
         </div>
         <div className="mt-5 rounded-xl border border-slate-800 bg-slate-900/40 p-3">
+          <h3 className="mb-3 text-sm font-semibold text-white">Volumes</h3>
+          <div className="space-y-2">
+            {(settingsState.volumes || []).map((vol, idx) => (
+              <div key={idx} className="grid gap-2 rounded-lg border border-slate-800 bg-slate-950 p-2 md:grid-cols-[1fr_1fr_auto]">
+                <input className={fieldClass} value={vol.hostPath} onChange={(e) => setSettingsState((prev) => ({ ...prev, volumes: prev.volumes.map((v, i) => i === idx ? { ...v, hostPath: e.target.value } : v) }))} placeholder="/host/path" />
+                <input className={fieldClass} value={vol.containerPath} onChange={(e) => setSettingsState((prev) => ({ ...prev, volumes: prev.volumes.map((v, i) => i === idx ? { ...v, containerPath: e.target.value } : v) }))} placeholder="/container/path" />
+                <button className="inline-flex items-center justify-center rounded-lg border border-rose-500/30 bg-rose-500/10 px-3 py-2 text-rose-200 hover:bg-rose-500/20" type="button" onClick={() => setSettingsState((prev) => ({ ...prev, volumes: prev.volumes.filter((_, i) => i !== idx) }))}>
+                  <Trash2 className="h-4 w-4" />
+                </button>
+              </div>
+            ))}
+            <button className={smallButtonClass} type="button" onClick={() => setSettingsState((prev) => ({ ...prev, volumes: [...(prev.volumes || []), { hostPath: '', containerPath: '' }] }))}>
+              <Plus className="h-4 w-4" />
+              Adicionar volume
+            </button>
+          </div>
+        </div>
+        <div className="mt-5 rounded-xl border border-slate-800 bg-slate-900/40 p-3">
           <h3 className="mb-3 text-sm font-semibold text-white">Healthcheck</h3>
           <div className="grid gap-3 md:grid-cols-2 xl:grid-cols-3">
             <label className="inline-flex items-center gap-2 rounded-lg border border-slate-800 bg-slate-950 px-3 py-2 text-sm text-slate-300">
@@ -2261,6 +2284,7 @@ const buildSettingsState = (service = {}) => ({
   command: Array.isArray(service.command) ? service.command.join(' ') : service.command || '',
   bindLocalOnly: Boolean(service.bindLocalOnly),
   autoRollback: service.autoRollback !== false,
+  volumes: (service.volumes || []).map((v) => ({ hostPath: v.hostPath || '', containerPath: v.containerPath || '' })),
   healthcheck: {
     enabled: Boolean(service.healthcheck?.enabled),
     target: service.healthcheck?.target || '/',

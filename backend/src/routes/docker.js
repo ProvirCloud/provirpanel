@@ -66,8 +66,16 @@ const applyContainerVolumePermissions = (templateId, hostPath, progress, imageNa
 
   const resolvedPath = path.resolve(hostPath);
   fs.mkdirSync(resolvedPath, { recursive: true });
-  execFileSync('chown', ['-R', `${permission.uid}:${permission.gid}`, resolvedPath], { stdio: 'ignore' });
-  execFileSync('chmod', ['-R', permission.mode, resolvedPath], { stdio: 'ignore' });
+  try {
+    execFileSync('chown', ['-R', `${permission.uid}:${permission.gid}`, resolvedPath], { stdio: 'ignore' });
+  } catch (err) {
+    try { execFileSync('sudo', ['-n', 'chown', '-R', `${permission.uid}:${permission.gid}`, resolvedPath], { stdio: 'ignore' }); } catch (e) { /* ignore */ }
+  }
+  try {
+    execFileSync('chmod', ['-R', permission.mode, resolvedPath], { stdio: 'ignore' });
+  } catch (err) {
+    try { execFileSync('sudo', ['-n', 'chmod', '-R', permission.mode, resolvedPath], { stdio: 'ignore' }); } catch (e) { /* ignore */ }
+  }
   if (progress) {
     progress.push(`✅ Permissões ${permission.label} ajustadas`);
   }
@@ -3681,6 +3689,8 @@ router.post('/services', async (req, res, next) => {
             templateId: 'pgadmin',
             parentService: serviceId
           }),
+          User: '5050:5050',
+          WorkingDir: '/pgadmin4',
           HostConfig: {
             NetworkMode: networkName,
             PortBindings: {
@@ -3898,6 +3908,7 @@ router.put('/services/:id', async (req, res, next) => {
       'hostPort',
       'containerPort',
       'envVars',
+      'volumes',
       'networkName',
       'command',
       'bindLocalOnly',
@@ -3920,6 +3931,7 @@ router.put('/services/:id', async (req, res, next) => {
       hostPort,
       containerPort: requestedContainerPort,
       envVars = [],
+      volumes: requestedVolumes,
       networkName,
       command,
       bindLocalOnly,
@@ -3948,6 +3960,9 @@ router.put('/services/:id', async (req, res, next) => {
     );
     const savedPort = Number(hostPort) || service.hostPort;
     const savedContainerPort = Number(requestedContainerPort) || service.containerPort;
+    const savedVolumes = Array.isArray(requestedVolumes) && requestedVolumes.length
+      ? requestedVolumes.filter((v) => v.hostPath || v.containerPath)
+      : service.volumes || [];
     const savedBindLocal = bindLocalOnly ?? service.bindLocalOnly ?? false;
     const savedNetwork = networkName || service.networkName || 'provirpanel';
     const requestedSavedCommand = command ?? pendingConfig?.command ?? stringifyCommand(service.command);
@@ -3964,6 +3979,7 @@ router.put('/services/:id', async (req, res, next) => {
           hostPort: savedPort,
           containerPort: savedContainerPort,
           envVars: savedEnvVars,
+          volumes: savedVolumes,
           networkName: savedNetwork,
           command: savedCommand,
           bindLocalOnly: savedBindLocal,
@@ -4175,9 +4191,11 @@ router.put('/services/:id', async (req, res, next) => {
     }
 
     service.containerPort = savedContainerPort;
+    service.volumes = savedVolumes;
 
     const containerConfig = {
       name: service.name,
+      ...(service.templateId === 'pgadmin' ? { User: '5050:5050' } : {}),
       Labels: buildServiceLabels({
         serviceId: service.id,
         name: service.name,
@@ -4194,7 +4212,7 @@ router.put('/services/:id', async (req, res, next) => {
               : { HostPort: String(resolvedPort) }
           ]
         },
-        Binds: service.volumes
+        Binds: savedVolumes
           .filter((m) => m.hostPath && m.containerPath)
           .map((m) => `${m.hostPath}:${m.containerPath}`)
       },
@@ -4217,6 +4235,8 @@ router.put('/services/:id', async (req, res, next) => {
     }
     if (workdir) {
       containerConfig.WorkingDir = workdir;
+    } else if (isDatabaseServiceForConfig || service.templateId === 'pgadmin') {
+      // Preserve image default WorkingDir — don't override
     }
 
     // For Node.js with project, use npm install and start
@@ -4242,6 +4262,7 @@ router.put('/services/:id', async (req, res, next) => {
       containerId: container.Id,
       hostPort: resolvedPort,
       containerPort: savedContainerPort,
+      volumes: savedVolumes,
       envVars: resolvedEnvVars,
       command: isNodeSitesMode || autoProjectLaunch ? null : containerCmd || null,
       autoCommandType: autoProjectLaunch ? autoProjectLaunch.type : null,
@@ -5946,6 +5967,38 @@ const SERVICE_TEMPLATES = [
     env: [],
     description: 'Cache Redis com volume /data opcional',
     features: ['Cache', 'Volume /data'],
+    hasProjectOption: false
+  },
+  {
+    id: 'n8n',
+    label: 'n8n (Automação)',
+    image: 'n8nio/n8n',
+    tag: 'latest',
+    defaultPort: 5678,
+    containerPort: 5678,
+    volumes: [
+      { hostPath: '', containerPath: '/home/node/.n8n' }
+    ],
+    env: [
+      { key: 'N8N_HOST', value: '0.0.0.0' },
+      { key: 'N8N_PORT', value: '5678' },
+      { key: 'N8N_PROTOCOL', value: 'https' },
+      { key: 'WEBHOOK_URL', value: 'https://n8n.seudominio.com.br/' },
+      { key: 'N8N_EDITOR_BASE_URL', value: 'https://n8n.seudominio.com.br/' },
+      { key: 'GENERIC_TIMEZONE', value: 'America/Sao_Paulo' },
+      { key: 'TZ', value: 'America/Sao_Paulo' },
+      { key: 'N8N_ENCRYPTION_KEY', value: 'change-me-to-random-key' },
+      { key: 'DB_TYPE', value: 'postgresdb' },
+      { key: 'DB_POSTGRESDB_HOST', value: 'postgres-container-name' },
+      { key: 'DB_POSTGRESDB_PORT', value: '5432' },
+      { key: 'DB_POSTGRESDB_DATABASE', value: 'n8n' },
+      { key: 'DB_POSTGRESDB_USER', value: 'n8n' },
+      { key: 'DB_POSTGRESDB_PASSWORD', value: 'change-me' },
+      { key: 'N8N_RUNNERS_ENABLED', value: 'true' },
+      { key: 'N8N_ENFORCE_SETTINGS_FILE_PERMISSIONS', value: 'false' }
+    ],
+    description: 'Plataforma de automação de workflows com suporte a PostgreSQL e webhooks',
+    features: ['Automação', 'Webhooks', 'PostgreSQL', 'Volume persistente'],
     hasProjectOption: false
   }
 ];

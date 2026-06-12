@@ -136,6 +136,7 @@ const presetImages = [
   { id: 'postgres-db', name: 'PostgreSQL', image: 'postgres', tag: '16', description: 'Banco com volume dedicado e permissões ajustadas' },
   { id: 'mysql-db', name: 'MySQL', image: 'mysql', tag: '8', description: 'Banco relacional com volume persistente' },
   { id: 'redis-cache', name: 'Redis', image: 'redis', tag: '7', description: 'Cache com volume /data opcional' },
+  { id: 'n8n', name: 'n8n', image: 'n8nio/n8n', tag: 'latest', description: 'Automação de workflows com PostgreSQL e webhooks' },
   { id: 'nginx-static', name: 'Nginx', image: 'nginx', tag: 'latest', description: 'Site estático com fallback SPA' },
   { id: 'node-app', name: 'Node.js', image: 'node', tag: '20', description: 'Serviço Node ou hospedagem de build estático' }
 ]
@@ -145,6 +146,7 @@ const guessContainerPort = (imageTag) => {
   if (lower.includes('postgres')) return 5432
   if (lower.includes('mysql') || lower.includes('mariadb')) return 3306
   if (lower.includes('redis')) return 6379
+  if (lower.includes('n8n')) return 5678
   if (lower.includes('nginx')) return 80
   if (lower.includes('node')) return 3000
   if (lower.includes('java') || lower.includes('spring') || lower.includes('openjdk') || lower.includes('temurin')) return 8080
@@ -339,11 +341,12 @@ const INSTALL_TEMPLATE_BADGES = {
   'postgres-db': ['Volume dedicado', 'Permissões ajustadas', 'pgAdmin opcional'],
   pgadmin: ['Banco existente', 'Configuração automática'],
   'mysql-db': ['Volume persistente', 'Env padrão'],
-  'redis-cache': ['Cache', 'Volume /data']
+  'redis-cache': ['Cache', 'Volume /data'],
+  'n8n': ['Automação', 'Webhooks', 'PostgreSQL', 'Volume persistente']
 }
 
 const DATA_SERVICE_TEMPLATE_IDS = new Set(['postgres-db', 'mysql-db', 'redis-cache'])
-const NON_PROJECT_TEMPLATE_IDS = new Set(['postgres-db', 'mysql-db', 'redis-cache', 'pgadmin'])
+const NON_PROJECT_TEMPLATE_IDS = new Set(['postgres-db', 'mysql-db', 'redis-cache', 'pgadmin', 'n8n'])
 
 const getTemplateFeatureBadges = (tpl = {}) => {
   const features = Array.isArray(tpl.features) && tpl.features.length
@@ -780,6 +783,12 @@ const TEMPLATE_APP_META = {
     icon: Layers,
     accent: 'from-rose-500/20 to-red-500/5',
     border: 'border-rose-500/30'
+  },
+  'n8n': {
+    category: 'runtime',
+    icon: Activity,
+    accent: 'from-orange-500/20 to-amber-500/5',
+    border: 'border-orange-500/30'
   },
   default: {
     category: 'other',
