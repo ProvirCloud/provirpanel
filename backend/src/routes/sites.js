@@ -2282,6 +2282,25 @@ router.post('/:id/fix-ssl', async (req, res, next) => {
   }
 });
 
+router.post('/:id/disable-ssl', async (req, res, next) => {
+  try {
+    const site = getSiteOr404(req.params.id);
+    site.ssl = false;
+    site.url = getSiteUrl(site);
+    site.updatedAt = new Date().toISOString();
+    const warnings = [];
+    try {
+      await updateWordPressUrls(site);
+    } catch (err) {
+      warnings.push(`SSL desativado, mas o ajuste de siteurl/home falhou: ${err.message}`);
+    }
+    saveSite(site);
+    res.json({ site: await decorateSite(site), warnings });
+  } catch (err) {
+    next(err);
+  }
+});
+
 router.post('/:id/reset-password', async (req, res, next) => {
   try {
     const site = getSiteOr404(req.params.id);

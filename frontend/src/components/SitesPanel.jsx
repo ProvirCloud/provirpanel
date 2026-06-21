@@ -416,6 +416,22 @@ const SitesPanel = () => {
     }
   }
 
+  const disableSsl = async () => {
+    if (!selectedSite) return
+    setBusy('disable-ssl')
+    setMessage(null)
+    try {
+      const response = await api.post(`/sites/${selectedSite.id}/disable-ssl`)
+      setSites((current) => current.map((site) => (site.id === response.data.site.id ? response.data.site : site)))
+      const warnings = (response.data?.warnings || []).filter(Boolean).join(' ')
+      setMessage({ type: warnings ? 'warning' : 'success', text: warnings || 'HTTPS desativado — site operando em HTTP' })
+    } catch (err) {
+      setMessage({ type: 'error', text: getErrorMessage(err, 'Erro ao desativar HTTPS') })
+    } finally {
+      setBusy('')
+    }
+  }
+
   const fixPermissions = async () => {
     if (!selectedSite) return
     const confirmed = await askConfirm({
@@ -1153,7 +1169,11 @@ const SitesPanel = () => {
                     <Button type="button" variant="secondary" leadingIcon={<Lock size={16} />} loading={busy === 'fix-ssl'} onClick={fixSsl}>
                       Ativar HTTPS
                     </Button>
-                  ) : null}
+                  ) : (
+                    <Button type="button" variant="ghost" leadingIcon={<Lock size={16} />} loading={busy === 'disable-ssl'} onClick={disableSsl}>
+                      Desativar HTTPS
+                    </Button>
+                  )}
                   <Button type="button" variant="ghost" leadingIcon={<RefreshCcw size={16} />} onClick={loadSites} loading={loading}>
                     Recarregar status
                   </Button>
