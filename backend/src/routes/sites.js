@@ -1080,6 +1080,77 @@ const verifyWordPressDatabaseConnection = async (site) => {
   }
 };
 
+const detectOldSiteUrl = async (site, prefix = 'wp_') => {
+  try {
+    const rows = await runSqlRows(
+      site,
+      `SELECT option_value FROM ${quoteSqlIdentifier(`${prefix}options`)} WHERE option_name = 'siteurl' LIMIT 1;`
+    );
+    return rows?.[0]?.[0] || null;
+  } catch (err) {
+    return null;
+  }
+};
+
+const searchReplaceInDatabase = async (site, oldUrl, newUrl, prefix = 'wp_') => {
+  if (!oldUrl || !newUrl || oldUrl === newUrl) return [];
+  const replaced = [];
+  // Strip trailing slash for consistency
+  const oldClean = oldUrl.replace(/\/$/, '');
+  const newClean = newUrl.replace(/\/$/, '');
+  if (oldClean === newClean) return [];
+
+  const textColumns = [
+    { table: `${prefix}posts`, columns: ['post_content', 'post_excerpt', 'guid'] },
+    { table: `${prefix}postmeta`, columns: ['meta_value'] },
+    { table: `${prefix}options`, columns: ['option_value'] },
+    { table: `${prefix}comments`, columns: ['comment_content', 'comment_author_url'] },
+    { table: `${prefix}termmeta`, columns: ['meta_value'] },
+  ];
+
+  for (const { table, columns } of textColumns) {
+    for (const col of columns) {
+      try {
+        await runSql(
+          site,
+          `UPDATE ${quoteSqlIdentifier(table)} SET ${quoteSqlIdentifier(col)} = REPLACE(${quoteSqlIdentifier(col)}, '${escapeSql(oldClean)}', '${escapeSql(newClean)}') WHERE ${quoteSqlIdentifier(col)} LIKE '%${escapeSql(oldClean)}%';`
+        );
+        replaced.push(`${table}.${col}`);
+      } catch (err) {
+        // Table/column might not exist, skip
+      }
+    }
+  }
+  // Also handle http->https and https->http variants
+  const oldHttp = oldClean.replace(/^https:/, 'http:');
+  const oldHttps = oldClean.replace(/^http:/, 'https:');
+  if (oldHttp !== oldClean) {
+    for (const { table, columns } of textColumns) {
+      for (const col of columns) {
+        try {
+          await runSql(
+            site,
+            `UPDATE ${quoteSqlIdentifier(table)} SET ${quoteSqlIdentifier(col)} = REPLACE(${quoteSqlIdentifier(col)}, '${escapeSql(oldHttp)}', '${escapeSql(newClean)}') WHERE ${quoteSqlIdentifier(col)} LIKE '%${escapeSql(oldHttp)}%';`
+          );
+        } catch (err) { /* skip */ }
+      }
+    }
+  }
+  if (oldHttps !== oldClean && oldHttps !== oldHttp) {
+    for (const { table, columns } of textColumns) {
+      for (const col of columns) {
+        try {
+          await runSql(
+            site,
+            `UPDATE ${quoteSqlIdentifier(table)} SET ${quoteSqlIdentifier(col)} = REPLACE(${quoteSqlIdentifier(col)}, '${escapeSql(oldHttps)}', '${escapeSql(newClean)}') WHERE ${quoteSqlIdentifier(col)} LIKE '%${escapeSql(oldHttps)}%';`
+          );
+        } catch (err) { /* skip */ }
+      }
+    }
+  }
+  return replaced;
+};
+
 const updateOptionTableUrls = async (site, tableName, url, tables = null) => {
   if (tables && !hasTable(tables, tableName)) return false;
   await runSql(
@@ -2041,7 +2112,12 @@ const processMigrationArchive = async (siteId, file) => {
         actions.push(`Banco importado, mas o ajuste do wp-config.php falhou: ${err.message}`);
       }
       try {
+        const oldUrl = await detectOldSiteUrl(site, tablePrefix);
         await updateWordPressUrls(site, restoreConfig);
+        if (oldUrl && oldUrl !== getSiteUrl(site)) {
+          const replacedColumns = await searchReplaceInDatabase(site, oldUrl, getSiteUrl(site), tablePrefix);
+          actions.push(`Search-replace de ${oldUrl} para ${getSiteUrl(site)} em ${replacedColumns.length} colunas`);
+        }
         actions.push(
           multisite
             ? `URLs do multisite ajustadas para ${getSiteUrl(site)}`
