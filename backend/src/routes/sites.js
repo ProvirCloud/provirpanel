@@ -1036,6 +1036,8 @@ const patchWordPressConfigForHostChange = async (site) => {
   await repairWordPressFilesystemPermissions(site);
   return { patched: true, source: configFile.source };
 };
+
+const patchWordPressConfigForRestore = async (site, restoreConfig = {}) => {
   const configFile = await readWordPressConfigFile(site);
   if (!configFile.content) {
     return { patched: false, message: 'wp-config.php não encontrado para ajustar prefixo/multisite' };
