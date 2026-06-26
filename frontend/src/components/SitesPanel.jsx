@@ -1165,11 +1165,10 @@ const SitesPanel = () => {
                   <Button type="button" variant="secondary" leadingIcon={<RefreshCcw size={16} />} loading={busy === 'cleanup-cache'} onClick={cleanupCache}>
                     Limpar cache WP
                   </Button>
-                  {!selectedSite.behindProxy ? (
-                    <Button type="button" variant="secondary" leadingIcon={<Lock size={16} />} loading={busy === 'fix-ssl'} onClick={fixSsl}>
-                      Ativar HTTPS
-                    </Button>
-                  ) : (
+                  <Button type="button" variant="secondary" leadingIcon={<Lock size={16} />} loading={busy === 'fix-ssl'} onClick={fixSsl}>
+                    {selectedSite.behindProxy ? 'Reaplicar HTTPS' : 'Ativar HTTPS'}
+                  </Button>
+                  {selectedSite.behindProxy && (
                     <Button type="button" variant="ghost" leadingIcon={<Lock size={16} />} loading={busy === 'disable-ssl'} onClick={disableSsl}>
                       Desativar HTTPS
                     </Button>
