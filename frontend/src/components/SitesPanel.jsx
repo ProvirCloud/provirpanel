@@ -964,7 +964,7 @@ const SitesPanel = () => {
                 <input
                   className="zeus-input"
                   type="file"
-                  accept=".zip,.tar,.tar.gz,.tgz,.sql"
+                  accept=".zip,.tar,.tar.gz,.tgz,.gz,.sql,application/gzip,application/x-tar,application/x-gzip,application/zip"
                   onChange={handleMigrationFileChange}
                 />
               </Field>
