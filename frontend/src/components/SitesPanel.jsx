@@ -36,7 +36,7 @@ const defaultCreateForm = {
   adminUser: 'admin',
   adminEmail: '',
   adminPassword: '',
-  ssl: true,
+  behindProxy: true,
 }
 
 const normalizeDisplayProxyPath = (value = '/') => {
@@ -931,8 +931,8 @@ const SitesPanel = () => {
                 <label className="flex cursor-pointer items-center gap-2 text-sm text-[var(--color-text-muted)]">
                   <input
                     type="checkbox"
-                    checked={createForm.ssl}
-                    onChange={(event) => handleCreateChange('ssl', event.target.checked)}
+                    checked={createForm.behindProxy}
+                    onChange={(event) => handleCreateChange('behindProxy', event.target.checked)}
                     className="h-4 w-4 rounded border-[var(--color-border)] accent-[var(--color-brand)]"
                   />
                   <Lock size={14} />
@@ -1165,7 +1165,7 @@ const SitesPanel = () => {
                   <Button type="button" variant="secondary" leadingIcon={<RefreshCcw size={16} />} loading={busy === 'cleanup-cache'} onClick={cleanupCache}>
                     Limpar cache WP
                   </Button>
-                  {!selectedSite.ssl ? (
+                  {!selectedSite.behindProxy ? (
                     <Button type="button" variant="secondary" leadingIcon={<Lock size={16} />} loading={busy === 'fix-ssl'} onClick={fixSsl}>
                       Ativar HTTPS
                     </Button>

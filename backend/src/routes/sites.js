@@ -190,7 +190,7 @@ const getSitePrimaryHost = (site = {}) =>
   site.domain || getSiteProxyHost(site);
 
 const getSiteScheme = (site = {}) =>
-  site.domain && site.ssl ? 'https' : 'http';
+  site.domain && (site.ssl || site.behindProxy) ? 'https' : 'http';
 
 const safeUploadFilename = (filename, fallback = 'wordpress-backup.zip') => {
   const base = path.basename(String(filename || fallback)).replace(/[^a-zA-Z0-9._-]/g, '_');
@@ -1019,12 +1019,23 @@ const patchWordPressConfigForHostChange = async (site) => {
     content = upsertPhpDefine(content, 'WP_SITEURL', targetUrl);
   }
 
+  // Inject X-Forwarded-Proto trust snippet for sites behind reverse proxy (Traefik, etc.)
+  if (site.behindProxy) {
+    const proxySnippet = "if (isset(\$_SERVER['HTTP_X_FORWARDED_PROTO']) && \$_SERVER['HTTP_X_FORWARDED_PROTO'] === 'https') { \$_SERVER['HTTPS'] = 'on'; }";
+    if (!content.includes('HTTP_X_FORWARDED_PROTO')) {
+      const phpOpen = content.indexOf('<?php');
+      if (phpOpen >= 0) {
+        const insertAt = phpOpen + '<?php'.length;
+        content = `${content.slice(0, insertAt)}\n${proxySnippet}\n${content.slice(insertAt)}`;
+      }
+    }
+    content = upsertPhpDefine(content, 'FORCE_SSL_ADMIN', false);
+  }
+
   await writeWordPressConfigFile(site, content);
   await repairWordPressFilesystemPermissions(site);
   return { patched: true, source: configFile.source };
 };
-
-const patchWordPressConfigForRestore = async (site, restoreConfig = {}) => {
   const configFile = await readWordPressConfigFile(site);
   if (!configFile.content) {
     return { patched: false, message: 'wp-config.php não encontrado para ajustar prefixo/multisite' };
@@ -1044,6 +1055,20 @@ const patchWordPressConfigForRestore = async (site, restoreConfig = {}) => {
     content = upsertPhpDefine(content, 'SITE_ID_CURRENT_SITE', Number(restoreConfig.siteIdCurrentSite || 1));
     content = upsertPhpDefine(content, 'BLOG_ID_CURRENT_SITE', Number(restoreConfig.blogIdCurrentSite || 1));
   }
+
+  // Inject X-Forwarded-Proto trust snippet for sites behind reverse proxy (Traefik, etc.)
+  if (site.behindProxy) {
+    const proxySnippet = "if (isset(\$_SERVER['HTTP_X_FORWARDED_PROTO']) && \$_SERVER['HTTP_X_FORWARDED_PROTO'] === 'https') { \$_SERVER['HTTPS'] = 'on'; }";
+    if (!content.includes('HTTP_X_FORWARDED_PROTO')) {
+      const phpOpen = content.indexOf('<?php');
+      if (phpOpen >= 0) {
+        const insertAt = phpOpen + '<?php'.length;
+        content = `${content.slice(0, insertAt)}\n${proxySnippet}\n${content.slice(insertAt)}`;
+      }
+    }
+    content = upsertPhpDefine(content, 'FORCE_SSL_ADMIN', false);
+  }
+
   await writeWordPressConfigFile(site, content);
   await repairWordPressFilesystemPermissions(site);
   return { patched: true, source: configFile.source };
@@ -1095,60 +1120,69 @@ const detectOldSiteUrl = async (site, prefix = 'wp_') => {
 const searchReplaceInDatabase = async (site, oldUrl, newUrl, prefix = 'wp_') => {
   if (!oldUrl || !newUrl || oldUrl === newUrl) return [];
   const replaced = [];
-  // Strip trailing slash for consistency
   const oldClean = oldUrl.replace(/\/$/, '');
   const newClean = newUrl.replace(/\/$/, '');
   if (oldClean === newClean) return [];
 
-  const textColumns = [
-    { table: `${prefix}posts`, columns: ['post_content', 'post_excerpt', 'guid'] },
-    { table: `${prefix}postmeta`, columns: ['meta_value'] },
-    { table: `${prefix}options`, columns: ['option_value'] },
-    { table: `${prefix}comments`, columns: ['comment_content', 'comment_author_url'] },
-    { table: `${prefix}termmeta`, columns: ['meta_value'] },
-  ];
+  const coreSuffixes = ['posts', 'postmeta', 'options', 'comments', 'commentmeta', 'termmeta', 'links'];
+  const columnMap = {
+    posts: ['post_content', 'post_excerpt', 'guid'],
+    postmeta: ['meta_value'],
+    options: ['option_value'],
+    comments: ['comment_content', 'comment_author_url'],
+    commentmeta: ['meta_value'],
+    termmeta: ['meta_value'],
+    links: ['link_url', 'link_image', 'link_rss']
+  };
+
+  // Build table list including multisite subsite tables
+  const tables = await listDatabaseTables(site);
+  const textColumns = [];
+  for (const suffix of coreSuffixes) {
+    const mainTable = `${prefix}${suffix}`;
+    if (hasTable(tables, mainTable)) {
+      textColumns.push({ table: mainTable, columns: columnMap[suffix] });
+    }
+    // Multisite subsite tables (wp_2_posts, wp_3_posts, etc.)
+    const subsiteRegex = new RegExp(`^${escapeRegExp(prefix)}\\d+_${suffix}$`);
+    tables.filter((t) => subsiteRegex.test(t)).forEach((t) => {
+      textColumns.push({ table: t, columns: columnMap[suffix] });
+    });
+  }
+
+  // Also include sitemeta for multisite
+  const sitemetaTable = `${prefix}sitemeta`;
+  if (hasTable(tables, sitemetaTable)) {
+    textColumns.push({ table: sitemetaTable, columns: ['meta_value'] });
+  }
+
+  // Collect all URL variants to replace (http and https versions)
+  const oldHttp = oldClean.replace(/^https:/, 'http:');
+  const oldHttps = oldClean.replace(/^http:/, 'https:');
+  const replacePairs = [[oldClean, newClean]];
+  if (oldHttp !== oldClean) replacePairs.push([oldHttp, newClean]);
+  if (oldHttps !== oldClean && oldHttps !== oldHttp) replacePairs.push([oldHttps, newClean]);
+
+  // Also force any remaining http:// variant of the target domain to https://
+  const newHttp = newClean.replace(/^https:/, 'http:');
+  if (newClean.startsWith('https://') && newHttp !== newClean) {
+    replacePairs.push([newHttp, newClean]);
+  }
 
   for (const { table, columns } of textColumns) {
     for (const col of columns) {
-      try {
-        await runSql(
-          site,
-          `UPDATE ${quoteSqlIdentifier(table)} SET ${quoteSqlIdentifier(col)} = REPLACE(${quoteSqlIdentifier(col)}, '${escapeSql(oldClean)}', '${escapeSql(newClean)}') WHERE ${quoteSqlIdentifier(col)} LIKE '%${escapeSql(oldClean)}%';`
-        );
-        replaced.push(`${table}.${col}`);
-      } catch (err) {
-        // Table/column might not exist, skip
-      }
-    }
-  }
-  // Also handle http->https and https->http variants
-  const oldHttp = oldClean.replace(/^https:/, 'http:');
-  const oldHttps = oldClean.replace(/^http:/, 'https:');
-  if (oldHttp !== oldClean) {
-    for (const { table, columns } of textColumns) {
-      for (const col of columns) {
+      for (const [search, replace] of replacePairs) {
         try {
           await runSql(
             site,
-            `UPDATE ${quoteSqlIdentifier(table)} SET ${quoteSqlIdentifier(col)} = REPLACE(${quoteSqlIdentifier(col)}, '${escapeSql(oldHttp)}', '${escapeSql(newClean)}') WHERE ${quoteSqlIdentifier(col)} LIKE '%${escapeSql(oldHttp)}%';`
+            `UPDATE ${quoteSqlIdentifier(table)} SET ${quoteSqlIdentifier(col)} = REPLACE(${quoteSqlIdentifier(col)}, '${escapeSql(search)}', '${escapeSql(replace)}') WHERE ${quoteSqlIdentifier(col)} LIKE '%${escapeSql(search)}%';`
           );
+          replaced.push(`${table}.${col}`);
         } catch (err) { /* skip */ }
       }
     }
   }
-  if (oldHttps !== oldClean && oldHttps !== oldHttp) {
-    for (const { table, columns } of textColumns) {
-      for (const col of columns) {
-        try {
-          await runSql(
-            site,
-            `UPDATE ${quoteSqlIdentifier(table)} SET ${quoteSqlIdentifier(col)} = REPLACE(${quoteSqlIdentifier(col)}, '${escapeSql(oldHttps)}', '${escapeSql(newClean)}') WHERE ${quoteSqlIdentifier(col)} LIKE '%${escapeSql(oldHttps)}%';`
-          );
-        } catch (err) { /* skip */ }
-      }
-    }
-  }
-  return replaced;
+  return [...new Set(replaced)];
 };
 
 const updateOptionTableUrls = async (site, tableName, url, tables = null) => {
@@ -1556,7 +1590,8 @@ const createWordPressSite = async (body = {}) => {
     proxyMode: !domain,
     port,
     ssl: domain ? Boolean(body.ssl) : false,
-    url: getSiteUrl({ domain, proxyHost, proxyPath, ssl: domain ? Boolean(body.ssl) : false }),
+    behindProxy: Boolean(body.behindProxy),
+    url: getSiteUrl({ domain, proxyHost, proxyPath, ssl: domain ? Boolean(body.ssl) : false, behindProxy: Boolean(body.behindProxy) }),
     localUrl: `http://localhost:${port}`,
     networkName: buildSiteNetworkName(slug, shortId),
     siteDir,
@@ -2216,6 +2251,7 @@ router.post('/:id/domain', async (req, res, next) => {
     site.domain = nextDomain;
     site.proxyMode = !nextDomain;
     if (req.body?.ssl !== undefined) site.ssl = nextDomain ? Boolean(req.body.ssl) : false;
+    if (req.body?.behindProxy !== undefined) site.behindProxy = Boolean(req.body.behindProxy);
     if (!nextDomain) site.ssl = false;
     site.url = getSiteUrl(site);
     site.updatedAt = new Date().toISOString();
@@ -2337,7 +2373,8 @@ router.post('/:id/fix-ssl', async (req, res, next) => {
     const result = await dockerExecRootShell(site.containers.wordpress, script, {
       PROVIR_PATCH_LINE: patchLine
     });
-    site.ssl = true;
+    site.behindProxy = true;
+    site.ssl = false;
     site.url = getSiteUrl(site);
     site.updatedAt = new Date().toISOString();
     const warnings = [];
@@ -2361,6 +2398,7 @@ router.post('/:id/fix-ssl', async (req, res, next) => {
 router.post('/:id/disable-ssl', async (req, res, next) => {
   try {
     const site = getSiteOr404(req.params.id);
+    site.behindProxy = false;
     site.ssl = false;
     site.url = getSiteUrl(site);
     site.updatedAt = new Date().toISOString();
