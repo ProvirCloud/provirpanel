@@ -1019,14 +1019,31 @@ const patchWordPressConfigForHostChange = async (site) => {
     content = upsertPhpDefine(content, 'WP_SITEURL', targetUrl);
   }
 
-  // Inject X-Forwarded-Proto trust snippet for sites behind reverse proxy (Traefik, etc.)
+  // Inject unconditional HTTPS forcing for sites behind reverse proxy (Traefik, Cloudflare, etc.)
   if (site.behindProxy) {
-    const proxySnippet = ["if (isset(\$_SERVER['HTTP_X_FORWARDED_PROTO']) && \$_SERVER['HTTP_X_FORWARDED_PROTO'] === 'https') { \$_SERVER['HTTPS'] = 'on'; }", "elseif (isset(\$_SERVER['HTTP_CF_VISITOR']) && strpos(\$_SERVER['HTTP_CF_VISITOR'], 'https') !== false) { \$_SERVER['HTTPS'] = 'on'; }", "if (!isset(\$_SERVER['HTTPS']) || \$_SERVER['HTTPS'] !== 'on') { \$_SERVER['HTTPS'] = 'on'; }"].join(' ');
-    if (!content.includes('HTTP_X_FORWARDED_PROTO')) {
+    const proxySnippet = "\$_SERVER['HTTPS'] = 'on';";
+    if (!content.includes("\$_SERVER['HTTPS'] = 'on'") && !content.includes('HTTP_X_FORWARDED_PROTO')) {
       const phpOpen = content.indexOf('<?php');
       if (phpOpen >= 0) {
         const insertAt = phpOpen + '<?php'.length;
         content = `${content.slice(0, insertAt)}\n${proxySnippet}\n${content.slice(insertAt)}`;
+      }
+    } else if (content.includes('HTTP_X_FORWARDED_PROTO')) {
+      // Replace old conditional snippet with unconditional one
+      content = content.replace(
+        /if \(isset\(\$_SERVER\['HTTP_X_FORWARDED_PROTO'\]\).*?\$_SERVER\['HTTPS'\]\s*=\s*'on';\s*\}/gs,
+        ''
+      ).replace(
+        /elseif \(isset\(\$_SERVER\['HTTP_CF_VISITOR'\]\).*?\$_SERVER\['HTTPS'\]\s*=\s*'on';\s*\}/gs,
+        ''
+      ).replace(
+        /if \(!isset\(\$_SERVER\['HTTPS'\]\).*?\$_SERVER\['HTTPS'\]\s*=\s*'on';\s*\}/gs,
+        ''
+      );
+      const phpOpen = content.indexOf('<?php');
+      if (phpOpen >= 0) {
+        const insertAt = phpOpen + '<?php'.length;
+        content = `${content.slice(0, insertAt)}\n\$_SERVER['HTTPS'] = 'on';\n${content.slice(insertAt)}`;
       }
     }
     content = upsertPhpDefine(content, 'FORCE_SSL_ADMIN', false);
@@ -1056,16 +1073,37 @@ const patchWordPressConfigForRestore = async (site, restoreConfig = {}) => {
     content = upsertPhpDefine(content, 'PATH_CURRENT_SITE', currentSitePath);
     content = upsertPhpDefine(content, 'SITE_ID_CURRENT_SITE', Number(restoreConfig.siteIdCurrentSite || 1));
     content = upsertPhpDefine(content, 'BLOG_ID_CURRENT_SITE', Number(restoreConfig.blogIdCurrentSite || 1));
+  } else {
+    // Always ensure WP_HOME/WP_SITEURL for standalone sites
+    content = upsertPhpDefine(content, 'WP_HOME', getSiteUrl(site));
+    content = upsertPhpDefine(content, 'WP_SITEURL', getSiteUrl(site));
   }
 
-  // Inject X-Forwarded-Proto trust snippet for sites behind reverse proxy (Traefik, etc.)
+  // Inject unconditional HTTPS forcing for sites behind reverse proxy (Traefik, Cloudflare, etc.)
   if (site.behindProxy) {
-    const proxySnippet = ["if (isset(\$_SERVER['HTTP_X_FORWARDED_PROTO']) && \$_SERVER['HTTP_X_FORWARDED_PROTO'] === 'https') { \$_SERVER['HTTPS'] = 'on'; }", "elseif (isset(\$_SERVER['HTTP_CF_VISITOR']) && strpos(\$_SERVER['HTTP_CF_VISITOR'], 'https') !== false) { \$_SERVER['HTTPS'] = 'on'; }", "if (!isset(\$_SERVER['HTTPS']) || \$_SERVER['HTTPS'] !== 'on') { \$_SERVER['HTTPS'] = 'on'; }"].join(' ');
-    if (!content.includes('HTTP_X_FORWARDED_PROTO')) {
+    const proxySnippet = "\$_SERVER['HTTPS'] = 'on';";
+    if (!content.includes("\$_SERVER['HTTPS'] = 'on'") && !content.includes('HTTP_X_FORWARDED_PROTO')) {
       const phpOpen = content.indexOf('<?php');
       if (phpOpen >= 0) {
         const insertAt = phpOpen + '<?php'.length;
         content = `${content.slice(0, insertAt)}\n${proxySnippet}\n${content.slice(insertAt)}`;
+      }
+    } else if (content.includes('HTTP_X_FORWARDED_PROTO')) {
+      // Replace old conditional snippet with unconditional one
+      content = content.replace(
+        /if \(isset\(\$_SERVER\['HTTP_X_FORWARDED_PROTO'\]\).*?\$_SERVER\['HTTPS'\]\s*=\s*'on';\s*\}/gs,
+        ''
+      ).replace(
+        /elseif \(isset\(\$_SERVER\['HTTP_CF_VISITOR'\]\).*?\$_SERVER\['HTTPS'\]\s*=\s*'on';\s*\}/gs,
+        ''
+      ).replace(
+        /if \(!isset\(\$_SERVER\['HTTPS'\]\).*?\$_SERVER\['HTTPS'\]\s*=\s*'on';\s*\}/gs,
+        ''
+      );
+      const phpOpen = content.indexOf('<?php');
+      if (phpOpen >= 0) {
+        const insertAt = phpOpen + '<?php'.length;
+        content = `${content.slice(0, insertAt)}\n\$_SERVER['HTTPS'] = 'on';\n${content.slice(insertAt)}`;
       }
     }
     content = upsertPhpDefine(content, 'FORCE_SSL_ADMIN', false);
@@ -1169,6 +1207,15 @@ const searchReplaceInDatabase = async (site, oldUrl, newUrl, prefix = 'wp_') => 
   const newHttp = newClean.replace(/^https:/, 'http:');
   if (newClean.startsWith('https://') && newHttp !== newClean) {
     replacePairs.push([newHttp, newClean]);
+  }
+
+  // Also replace www variant of target domain (http://www.domain -> https://domain)
+  const targetHost = getSitePrimaryHost(site);
+  if (targetHost && !targetHost.startsWith('www.')) {
+    const wwwHttp = `http://www.${targetHost}`;
+    const wwwHttps = `https://www.${targetHost}`;
+    if (!replacePairs.some(([s]) => s === wwwHttp)) replacePairs.push([wwwHttp, newClean]);
+    if (!replacePairs.some(([s]) => s === wwwHttps)) replacePairs.push([wwwHttps, newClean]);
   }
 
   for (const { table, columns } of textColumns) {
@@ -2216,6 +2263,14 @@ const processMigrationArchive = async (siteId, file) => {
         if (oldUrl && oldUrl !== getSiteUrl(site)) {
           const replacedColumns = await searchReplaceInDatabase(site, oldUrl, getSiteUrl(site), tablePrefix);
           actions.push(`Search-replace de ${oldUrl} para ${getSiteUrl(site)} em ${replacedColumns.length} colunas`);
+        }
+        // Always force http→https for behindProxy sites, even when oldUrl matches
+        if (site.behindProxy && getSiteUrl(site).startsWith('https://')) {
+          const httpVariant = getSiteUrl(site).replace(/^https:/, 'http:');
+          const httpsReplaced = await searchReplaceInDatabase(site, httpVariant, getSiteUrl(site), tablePrefix);
+          if (httpsReplaced.length) {
+            actions.push(`http→https forçado em ${httpsReplaced.length} colunas`);
+          }
         }
         actions.push(
           multisite
