@@ -1021,7 +1021,7 @@ const patchWordPressConfigForHostChange = async (site) => {
 
   // Inject X-Forwarded-Proto trust snippet for sites behind reverse proxy (Traefik, etc.)
   if (site.behindProxy) {
-    const proxySnippet = "if (isset(\$_SERVER['HTTP_X_FORWARDED_PROTO']) && \$_SERVER['HTTP_X_FORWARDED_PROTO'] === 'https') { \$_SERVER['HTTPS'] = 'on'; }";
+    const proxySnippet = ["if (isset(\$_SERVER['HTTP_X_FORWARDED_PROTO']) && \$_SERVER['HTTP_X_FORWARDED_PROTO'] === 'https') { \$_SERVER['HTTPS'] = 'on'; }", "elseif (isset(\$_SERVER['HTTP_CF_VISITOR']) && strpos(\$_SERVER['HTTP_CF_VISITOR'], 'https') !== false) { \$_SERVER['HTTPS'] = 'on'; }", "if (!isset(\$_SERVER['HTTPS']) || \$_SERVER['HTTPS'] !== 'on') { \$_SERVER['HTTPS'] = 'on'; }"].join(' ');
     if (!content.includes('HTTP_X_FORWARDED_PROTO')) {
       const phpOpen = content.indexOf('<?php');
       if (phpOpen >= 0) {
@@ -1060,7 +1060,7 @@ const patchWordPressConfigForRestore = async (site, restoreConfig = {}) => {
 
   // Inject X-Forwarded-Proto trust snippet for sites behind reverse proxy (Traefik, etc.)
   if (site.behindProxy) {
-    const proxySnippet = "if (isset(\$_SERVER['HTTP_X_FORWARDED_PROTO']) && \$_SERVER['HTTP_X_FORWARDED_PROTO'] === 'https') { \$_SERVER['HTTPS'] = 'on'; }";
+    const proxySnippet = ["if (isset(\$_SERVER['HTTP_X_FORWARDED_PROTO']) && \$_SERVER['HTTP_X_FORWARDED_PROTO'] === 'https') { \$_SERVER['HTTPS'] = 'on'; }", "elseif (isset(\$_SERVER['HTTP_CF_VISITOR']) && strpos(\$_SERVER['HTTP_CF_VISITOR'], 'https') !== false) { \$_SERVER['HTTPS'] = 'on'; }", "if (!isset(\$_SERVER['HTTPS']) || \$_SERVER['HTTPS'] !== 'on') { \$_SERVER['HTTPS'] = 'on'; }"].join(' ');
     if (!content.includes('HTTP_X_FORWARDED_PROTO')) {
       const phpOpen = content.indexOf('<?php');
       if (phpOpen >= 0) {
@@ -1528,10 +1528,72 @@ const cleanupWordPressCacheDatabase = async (site) => {
   return { tablePrefix: prefix, optionTables: optionTables.length };
 };
 
+const deactivateSslRedirectPlugins = async (site) => {
+  if (!site.behindProxy) return { deactivated: [] };
+  const tables = await listDatabaseTables(site);
+  const prefix = resolveWordPressTablePrefix(tables, getSafeTablePrefix(site));
+  const optionTables = getWordPressOptionTables(tables, prefix);
+  const sslPlugins = [
+    'really-simple-ssl/rlrsssl-really-simple-ssl.php',
+    'really-simple-ssl-pro/really-simple-ssl-pro.php',
+    'wp-force-ssl/wp-force-ssl.php',
+    'ssl-insecure-content-fixer/ssl-insecure-content-fixer.php',
+    'https-redirection/https-redirection.php',
+    'easy-https-redirection/easy-https-redirection.php',
+    'wordpress-https/wordpress-https.php',
+  ];
+  const deactivated = [];
+  for (const tableName of optionTables) {
+    try {
+      const rows = await runSqlRows(
+        site,
+        `SELECT option_value FROM ${quoteSqlIdentifier(tableName)} WHERE option_name='active_plugins' LIMIT 1;`
+      );
+      const raw = rows?.[0]?.[0];
+      if (!raw) continue;
+      let changed = raw;
+      for (const plugin of sslPlugins) {
+        if (changed.includes(plugin)) {
+          changed = changed.replace(new RegExp(escapeRegExp(plugin), 'g'), '__deactivated__');
+          deactivated.push(plugin);
+        }
+      }
+      if (changed !== raw) {
+        // Rebuild serialized array by removing deactivated entries and fixing count
+        const pluginMatches = [...changed.matchAll(/s:\d+:"([^"]+)"/g)]
+          .map((m) => m[1])
+          .filter((p) => p !== '__deactivated__');
+        const serialized = `a:${pluginMatches.length}:{${pluginMatches.map((p, i) => `i:${i};s:${p.length}:"${p}";`).join('')}}`;
+        await runSql(
+          site,
+          `UPDATE ${quoteSqlIdentifier(tableName)} SET option_value='${escapeSql(serialized)}' WHERE option_name='active_plugins';`
+        );
+      }
+    } catch (err) { /* skip */ }
+  }
+  // Also disable Really Simple SSL options that force redirect
+  const rsslOptions = [
+    'rlrsssl_options',
+    'rsssl_options',
+  ];
+  for (const tableName of optionTables) {
+    for (const optName of rsslOptions) {
+      try {
+        await runSql(
+          site,
+          `DELETE FROM ${quoteSqlIdentifier(tableName)} WHERE option_name='${escapeSql(optName)}';`
+        );
+      } catch (err) { /* skip */ }
+    }
+  }
+  return { deactivated: [...new Set(deactivated)] };
+};
+
 const cleanupWordPressAfterMigration = async (site) => {
   const removed = cleanupWordPressCacheFiles(site);
   const databaseCleanup = await cleanupWordPressCacheDatabase(site);
-  return { removed, databaseCleanup };
+  const sslCleanup = await deactivateSslRedirectPlugins(site);
+  return { removed, databaseCleanup, sslCleanup };
 };
 
 const createWordPressSite = async (body = {}) => {
