@@ -1019,32 +1019,28 @@ const patchWordPressConfigForHostChange = async (site) => {
     content = upsertPhpDefine(content, 'WP_SITEURL', targetUrl);
   }
 
-  // Inject unconditional HTTPS forcing for sites behind reverse proxy (Traefik, Cloudflare, etc.)
+  // Inject unconditional HTTPS/SERVER_NAME forcing for sites behind reverse proxy
   if (site.behindProxy) {
-    const proxySnippet = "\$_SERVER['HTTPS'] = 'on';";
-    if (!content.includes("\$_SERVER['HTTPS'] = 'on'") && !content.includes('HTTP_X_FORWARDED_PROTO')) {
-      const phpOpen = content.indexOf('<?php');
-      if (phpOpen >= 0) {
-        const insertAt = phpOpen + '<?php'.length;
-        content = `${content.slice(0, insertAt)}\n${proxySnippet}\n${content.slice(insertAt)}`;
-      }
-    } else if (content.includes('HTTP_X_FORWARDED_PROTO')) {
-      // Replace old conditional snippet with unconditional one
-      content = content.replace(
-        /if \(isset\(\$_SERVER\['HTTP_X_FORWARDED_PROTO'\]\).*?\$_SERVER\['HTTPS'\]\s*=\s*'on';\s*\}/gs,
-        ''
-      ).replace(
-        /elseif \(isset\(\$_SERVER\['HTTP_CF_VISITOR'\]\).*?\$_SERVER\['HTTPS'\]\s*=\s*'on';\s*\}/gs,
-        ''
-      ).replace(
-        /if \(!isset\(\$_SERVER\['HTTPS'\]\).*?\$_SERVER\['HTTPS'\]\s*=\s*'on';\s*\}/gs,
-        ''
-      );
-      const phpOpen = content.indexOf('<?php');
-      if (phpOpen >= 0) {
-        const insertAt = phpOpen + '<?php'.length;
-        content = `${content.slice(0, insertAt)}\n\$_SERVER['HTTPS'] = 'on';\n${content.slice(insertAt)}`;
-      }
+    const host = getSitePrimaryHost(site);
+    const proxySnippet = `\$_SERVER['HTTPS'] = 'on'; \$_SERVER['SERVER_NAME'] = '${host}'; \$_SERVER['HTTP_HOST'] = '${host}';`;
+    // Remove any old proxy snippets
+    content = content.replace(
+      /if \(isset\(\$_SERVER\['HTTP_X_FORWARDED_PROTO'\]\).*?\$_SERVER\['HTTPS'\]\s*=\s*'on';\s*\}[\s]*/gs,
+      ''
+    ).replace(
+      /elseif \(isset\(\$_SERVER\['HTTP_CF_VISITOR'\]\).*?\$_SERVER\['HTTPS'\]\s*=\s*'on';\s*\}[\s]*/gs,
+      ''
+    ).replace(
+      /if \(!isset\(\$_SERVER\['HTTPS'\]\).*?\$_SERVER\['HTTPS'\]\s*=\s*'on';\s*\}[\s]*/gs,
+      ''
+    ).replace(
+      /\$_SERVER\['HTTPS'\]\s*=\s*'on';[^\n]*\n/g,
+      ''
+    );
+    const phpOpen = content.indexOf('<?php');
+    if (phpOpen >= 0) {
+      const insertAt = phpOpen + '<?php'.length;
+      content = `${content.slice(0, insertAt)}\n${proxySnippet}\n${content.slice(insertAt)}`;
     }
     content = upsertPhpDefine(content, 'FORCE_SSL_ADMIN', false);
   }
@@ -1079,32 +1075,28 @@ const patchWordPressConfigForRestore = async (site, restoreConfig = {}) => {
     content = upsertPhpDefine(content, 'WP_SITEURL', getSiteUrl(site));
   }
 
-  // Inject unconditional HTTPS forcing for sites behind reverse proxy (Traefik, Cloudflare, etc.)
+  // Inject unconditional HTTPS/SERVER_NAME forcing for sites behind reverse proxy
   if (site.behindProxy) {
-    const proxySnippet = "\$_SERVER['HTTPS'] = 'on';";
-    if (!content.includes("\$_SERVER['HTTPS'] = 'on'") && !content.includes('HTTP_X_FORWARDED_PROTO')) {
-      const phpOpen = content.indexOf('<?php');
-      if (phpOpen >= 0) {
-        const insertAt = phpOpen + '<?php'.length;
-        content = `${content.slice(0, insertAt)}\n${proxySnippet}\n${content.slice(insertAt)}`;
-      }
-    } else if (content.includes('HTTP_X_FORWARDED_PROTO')) {
-      // Replace old conditional snippet with unconditional one
-      content = content.replace(
-        /if \(isset\(\$_SERVER\['HTTP_X_FORWARDED_PROTO'\]\).*?\$_SERVER\['HTTPS'\]\s*=\s*'on';\s*\}/gs,
-        ''
-      ).replace(
-        /elseif \(isset\(\$_SERVER\['HTTP_CF_VISITOR'\]\).*?\$_SERVER\['HTTPS'\]\s*=\s*'on';\s*\}/gs,
-        ''
-      ).replace(
-        /if \(!isset\(\$_SERVER\['HTTPS'\]\).*?\$_SERVER\['HTTPS'\]\s*=\s*'on';\s*\}/gs,
-        ''
-      );
-      const phpOpen = content.indexOf('<?php');
-      if (phpOpen >= 0) {
-        const insertAt = phpOpen + '<?php'.length;
-        content = `${content.slice(0, insertAt)}\n\$_SERVER['HTTPS'] = 'on';\n${content.slice(insertAt)}`;
-      }
+    const host = getSitePrimaryHost(site);
+    const proxySnippet = `\$_SERVER['HTTPS'] = 'on'; \$_SERVER['SERVER_NAME'] = '${host}'; \$_SERVER['HTTP_HOST'] = '${host}';`;
+    // Remove any old proxy snippets
+    content = content.replace(
+      /if \(isset\(\$_SERVER\['HTTP_X_FORWARDED_PROTO'\]\).*?\$_SERVER\['HTTPS'\]\s*=\s*'on';\s*\}[\s]*/gs,
+      ''
+    ).replace(
+      /elseif \(isset\(\$_SERVER\['HTTP_CF_VISITOR'\]\).*?\$_SERVER\['HTTPS'\]\s*=\s*'on';\s*\}[\s]*/gs,
+      ''
+    ).replace(
+      /if \(!isset\(\$_SERVER\['HTTPS'\]\).*?\$_SERVER\['HTTPS'\]\s*=\s*'on';\s*\}[\s]*/gs,
+      ''
+    ).replace(
+      /\$_SERVER\['HTTPS'\]\s*=\s*'on';[^\n]*\n/g,
+      ''
+    );
+    const phpOpen = content.indexOf('<?php');
+    if (phpOpen >= 0) {
+      const insertAt = phpOpen + '<?php'.length;
+      content = `${content.slice(0, insertAt)}\n${proxySnippet}\n${content.slice(insertAt)}`;
     }
     content = upsertPhpDefine(content, 'FORCE_SSL_ADMIN', false);
   }
@@ -2476,27 +2468,16 @@ router.post('/:id/fix-ssl', async (req, res, next) => {
     if (!site.containers?.wordpress) {
       return res.status(400).json({ message: 'Container WordPress não encontrado' });
     }
-    const patchLine = 'if (isset($_SERVER["HTTP_X_FORWARDED_PROTO"]) && $_SERVER["HTTP_X_FORWARDED_PROTO"] === "https") { $_SERVER["HTTPS"] = "on"; }';
-    const script = [
-      'set -e',
-      'CONFIG=/var/www/html/wp-config.php',
-      'if [ ! -f "$CONFIG" ]; then echo "wp-config.php not found"; exit 1; fi',
-      'if grep -q "HTTP_X_FORWARDED_PROTO" "$CONFIG"; then echo "already patched"; exit 0; fi',
-      'TMPF=$(mktemp)',
-      'echo "<?php" > "$TMPF"',
-      'echo "$PROVIR_PATCH_LINE" >> "$TMPF"',
-      'tail -n +2 "$CONFIG" >> "$TMPF"',
-      'mv "$TMPF" "$CONFIG"',
-      'echo "patched"'
-    ].join('\n');
-    const result = await dockerExecRootShell(site.containers.wordpress, script, {
-      PROVIR_PATCH_LINE: patchLine
-    });
     site.behindProxy = true;
     site.ssl = false;
     site.url = getSiteUrl(site);
     site.updatedAt = new Date().toISOString();
     const warnings = [];
+    try {
+      await patchWordPressConfigForHostChange(site);
+    } catch (err) {
+      warnings.push(`Ajuste do wp-config.php falhou: ${err.message}`);
+    }
     try {
       await updateWordPressUrls(site);
     } catch (err) {
@@ -2508,7 +2489,7 @@ router.post('/:id/fix-ssl', async (req, res, next) => {
       warnings.push(`HTTPS ativado, mas a limpeza de cache/otimização falhou: ${err.message}`);
     }
     saveSite(site);
-    res.json({ site: await decorateSite(site), output: result.stdout?.trim(), warnings });
+    res.json({ site: await decorateSite(site), output: 'patched', warnings });
   } catch (err) {
     next(err);
   }
