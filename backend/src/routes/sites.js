@@ -549,21 +549,63 @@ const getSiteUrl = (site) => {
   return publicPath === '/' ? getSiteBaseUrl(site) : `${getSiteBaseUrl(site)}${publicPath}`;
 };
 
-const buildNginxProxyHeaders = (extraHeaders = '') => `        proxy_http_version 1.1;
+const buildWordPressConfigExtra = (site = {}) => {
+  const lines = [
+    "if (",
+    "    (!empty($_SERVER['HTTP_X_FORWARDED_PROTO']) && strpos($_SERVER['HTTP_X_FORWARDED_PROTO'], 'https') !== false)",
+    "    || (!empty($_SERVER['HTTP_X_FORWARDED_SSL']) && $_SERVER['HTTP_X_FORWARDED_SSL'] === 'on')",
+    "    || (!empty($_SERVER['HTTP_FRONT_END_HTTPS']) && $_SERVER['HTTP_FRONT_END_HTTPS'] !== 'off')",
+    "    || (!empty($_SERVER['HTTP_CF_VISITOR']) && strpos($_SERVER['HTTP_CF_VISITOR'], 'https') !== false)",
+    ") {",
+    "    $_SERVER['HTTPS'] = 'on';",
+    "}",
+  ];
+
+  if (site.behindProxy) {
+    const host = getSitePrimaryHost(site);
+    const targetUrl = getSiteUrl(site);
+    lines.push(
+      "$_SERVER['HTTPS'] = 'on';",
+      `$_SERVER['SERVER_NAME'] = '${host}';`,
+      `$_SERVER['HTTP_HOST'] = '${host}';`,
+      `define('WP_HOME', '${targetUrl}');`,
+      `define('WP_SITEURL', '${targetUrl}');`
+    );
+  }
+
+  lines.push(
+    "define('FORCE_SSL_ADMIN', false);",
+    "define('FS_METHOD', 'direct');",
+    "define('WP_MEMORY_LIMIT', '256M');",
+    "define('WP_MAX_MEMORY_LIMIT', '512M');"
+  );
+
+  return lines.join('\n');
+};
+
+const buildNginxProxyHeaders = (site = {}, extraHeaders = '') => {
+  const forwardedProto = site.behindProxy ? 'https' : '$scheme';
+  const forwardedSsl = site.behindProxy ? 'on' : '$https';
+  const forwardedPort = site.behindProxy ? '443' : '$server_port';
+  return `        proxy_http_version 1.1;
         proxy_set_header Host $host;
         proxy_set_header X-Real-IP $remote_addr;
         proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
-        proxy_set_header X-Forwarded-Proto $scheme;
+        proxy_set_header X-Forwarded-Host $host;
+        proxy_set_header X-Forwarded-Proto ${forwardedProto};
+        proxy_set_header X-Forwarded-Ssl ${forwardedSsl};
+        proxy_set_header X-Forwarded-Port ${forwardedPort};
 ${extraHeaders}        proxy_read_timeout 300s;
         proxy_send_timeout 300s;
         proxy_buffering off;`;
+};
 
-const buildNginxProxyLocation = (hostPort, proxyPath = '/') => {
+const buildNginxProxyLocation = (site, hostPort, proxyPath = '/') => {
   const normalizedPath = normalizeProxyPath(proxyPath);
   if (normalizedPath === '/') {
     return `    location / {
         proxy_pass http://127.0.0.1:${hostPort};
-${buildNginxProxyHeaders()}    }`;
+${buildNginxProxyHeaders(site)}    }`;
   }
   return `    location = ${normalizedPath} {
         return 301 ${normalizedPath}/;
@@ -571,7 +613,7 @@ ${buildNginxProxyHeaders()}    }`;
 
     location ${normalizedPath}/ {
         proxy_pass http://127.0.0.1:${hostPort}/;
-${buildNginxProxyHeaders(`        proxy_set_header X-Forwarded-Prefix ${normalizedPath};\n`)}    }
+${buildNginxProxyHeaders(site, `        proxy_set_header X-Forwarded-Prefix ${normalizedPath};\n`)}    }
 
     location ~ ^/(wp-admin|wp-login\\.php|wp-content|wp-includes|wp-json|xmlrpc\\.php)(/|$) {
         return 302 ${normalizedPath}$request_uri;
@@ -582,21 +624,21 @@ ${buildNginxProxyHeaders(`        proxy_set_header X-Forwarded-Prefix ${normaliz
     }`;
 };
 
-const buildNginxServerBlock = (serverNames, hostPort, proxyPath = '/') => `server {
+const buildNginxServerBlock = (site, serverNames, hostPort, proxyPath = '/') => `server {
     listen 80;
     server_name ${serverNames.join(' ') || '_'};
     client_max_body_size 800m;
 
-${buildNginxProxyLocation(hostPort, proxyPath)}
+${buildNginxProxyLocation(site, hostPort, proxyPath)}
 }
 `;
 
 const buildNginxConfig = (site, hostPort) => {
   const blocks = [];
   if (site.domain) {
-    blocks.push(buildNginxServerBlock([site.domain], hostPort, '/'));
+    blocks.push(buildNginxServerBlock(site, [site.domain], hostPort, '/'));
   }
-  blocks.push(buildNginxServerBlock([getSiteProxyHost(site)], hostPort, getSiteProxyPath(site)));
+  blocks.push(buildNginxServerBlock(site, [getSiteProxyHost(site)], hostPort, getSiteProxyPath(site)));
   return blocks.join('\n');
 };
 
@@ -1120,6 +1162,12 @@ const patchWordPressConfigForHostChange = async (site) => {
     ).replace(
       /\$_SERVER\['HTTPS'\]\s*=\s*'on';[^\n]*\n/g,
       ''
+    ).replace(
+      /\$_SERVER\['SERVER_NAME'\]\s*=\s*'[^']*';[^\n]*\n/g,
+      ''
+    ).replace(
+      /\$_SERVER\['HTTP_HOST'\]\s*=\s*'[^']*';[^\n]*\n/g,
+      ''
     );
     const phpOpen = content.indexOf('<?php');
     if (phpOpen >= 0) {
@@ -1175,6 +1223,12 @@ const patchWordPressConfigForRestore = async (site, restoreConfig = {}) => {
       ''
     ).replace(
       /\$_SERVER\['HTTPS'\]\s*=\s*'on';[^\n]*\n/g,
+      ''
+    ).replace(
+      /\$_SERVER\['SERVER_NAME'\]\s*=\s*'[^']*';[^\n]*\n/g,
+      ''
+    ).replace(
+      /\$_SERVER\['HTTP_HOST'\]\s*=\s*'[^']*';[^\n]*\n/g,
       ''
     );
     const phpOpen = content.indexOf('<?php');
@@ -1728,6 +1782,7 @@ const createWordPressSite = async (body = {}) => {
   const slug = slugify(name, 'wordpress');
   const shortId = id.slice(0, 8);
   const domain = normalizeOptionalDomain(body.domain);
+  const behindProxy = domain ? body.behindProxy !== false : Boolean(body.behindProxy);
   const proxyHost = buildSiteProxyHost(slug, shortId);
   const proxyPath = normalizeProxyPath(body.proxyPath);
   const siteDir = path.join(sitesBaseDir, `${slug}-${shortId}`);
@@ -1777,8 +1832,8 @@ const createWordPressSite = async (body = {}) => {
     proxyMode: !domain,
     port,
     ssl: domain ? Boolean(body.ssl) : false,
-    behindProxy: Boolean(body.behindProxy),
-    url: getSiteUrl({ domain, proxyHost, proxyPath, ssl: domain ? Boolean(body.ssl) : false, behindProxy: Boolean(body.behindProxy) }),
+    behindProxy,
+    url: getSiteUrl({ domain, proxyHost, proxyPath, ssl: domain ? Boolean(body.ssl) : false, behindProxy }),
     localUrl: `http://localhost:${port}`,
     networkName: buildSiteNetworkName(slug, shortId),
     siteDir,
@@ -1858,7 +1913,7 @@ const createWordPressSite = async (body = {}) => {
       'WORDPRESS_DB_USER=wordpress',
       `WORDPRESS_DB_PASSWORD=${dbPassword}`,
       'WORDPRESS_TABLE_PREFIX=wp_',
-      "WORDPRESS_CONFIG_EXTRA=if (isset(\$_SERVER['HTTP_X_FORWARDED_PROTO']) && \$_SERVER['HTTP_X_FORWARDED_PROTO'] === 'https') { \$_SERVER['HTTPS'] = 'on'; }\ndefine('FORCE_SSL_ADMIN', false);\ndefine('FS_METHOD', 'direct');\ndefine('WP_MEMORY_LIMIT', '256M');\ndefine('WP_MAX_MEMORY_LIMIT', '512M');"
+      `WORDPRESS_CONFIG_EXTRA=${buildWordPressConfigExtra(site)}`
     ],
     ExposedPorts: {
       '80/tcp': {}
@@ -1882,6 +1937,16 @@ const createWordPressSite = async (body = {}) => {
     progress.push('Permissões do WordPress ajustadas para o PHP gravar wp-config.php e wp-content');
   } catch (err) {
     warnings.push(`WordPress criado, mas o ajuste de permissões falhou: ${err.message}`);
+  }
+  try {
+    const patchResult = await patchWordPressConfigForHostChange(site);
+    if (patchResult.patched) {
+      progress.push('wp-config.php ajustado para URL pública e HTTPS do domínio');
+    } else {
+      warnings.push(patchResult.message);
+    }
+  } catch (err) {
+    warnings.push(`WordPress criado, mas o ajuste inicial de HTTPS/wp-config.php falhou: ${err.message}`);
   }
 
   site.nginxConfigName = writeNginxSite(site, warnings);
