@@ -1611,13 +1611,59 @@ add_action('after_setup_theme', function () {
     }
 }, PHP_INT_MAX);
 
+add_action('wp_enqueue_scripts', 'provirpanel_seven_remove_legacy_asset_filters', PHP_INT_MAX);
+add_action('login_enqueue_scripts', 'provirpanel_seven_remove_legacy_asset_filters', PHP_INT_MAX);
+add_action('admin_enqueue_scripts', 'provirpanel_seven_remove_legacy_asset_filters', PHP_INT_MAX);
+add_action('wp_print_styles', 'provirpanel_seven_remove_legacy_asset_filters', 0);
+add_action('login_head', 'provirpanel_seven_remove_legacy_asset_filters', 0);
+function provirpanel_seven_remove_legacy_asset_filters() {
+    if (function_exists('theme_link_relative')) {
+        remove_filter('style_loader_src', 'theme_link_relative');
+        remove_filter('script_loader_src', 'theme_link_relative');
+    }
+    if (function_exists('_filter_double_home_url_src')) {
+        remove_filter('style_loader_src', '_filter_double_home_url_src');
+        remove_filter('script_loader_src', '_filter_double_home_url_src');
+    }
+}
+
+function provirpanel_seven_normalize_asset_url($src) {
+    if (empty($src) || !is_string($src)) return $src;
+    if (strpos($src, '//') === 0) return (is_ssl() ? 'https:' : 'http:') . $src;
+    return $src;
+}
+
 add_filter('style_loader_src', function ($src) {
-    return empty($src) ? false : $src;
+    return provirpanel_seven_normalize_asset_url($src);
 }, PHP_INT_MAX);
 
 add_filter('script_loader_src', function ($src) {
-    return empty($src) ? false : $src;
+    return provirpanel_seven_normalize_asset_url($src);
 }, PHP_INT_MAX);
+
+add_filter('style_loader_tag', function ($html, $handle, $href, $media) {
+    if (!empty($href)) return $html;
+
+    global $wp_styles;
+    if (!isset($wp_styles->registered[$handle])) return $html;
+
+    $style = $wp_styles->registered[$handle];
+    $src = isset($style->src) ? $style->src : '';
+    if (empty($src)) return $html;
+
+    if (strpos($src, '//') === 0) {
+        $src = (is_ssl() ? 'https:' : 'http:') . $src;
+    } elseif (strpos($src, 'http://') !== 0 && strpos($src, 'https://') !== 0 && strpos($src, '/') !== 0) {
+        $baseUrl = isset($wp_styles->base_url) ? $wp_styles->base_url : site_url();
+        $src = rtrim($baseUrl, '/') . '/' . ltrim($src, '/');
+    }
+
+    $src = esc_url($src);
+    if (!$src) return $html;
+
+    $mediaAttr = $media && $media !== 'all' ? ' media="' . esc_attr($media) . '"' : '';
+    return '<link rel="stylesheet" id="' . esc_attr($handle) . '-css" href="' . $src . '"' . $mediaAttr . ' />' . "\\n";
+}, PHP_INT_MAX, 4);
 `;
 
   fs.mkdirSync(muPluginsDir, { recursive: true });
