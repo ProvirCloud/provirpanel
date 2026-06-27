@@ -1587,9 +1587,10 @@ const cleanupWordPressCacheFiles = (site) => {
 
 const repairLegacyThemeAssetFilters = (site) => {
   const wordpressRoot = site.paths?.wordpress;
-  if (!wordpressRoot) return [];
+  if (!wordpressRoot) return { repaired: [], diagnostics: [{ type: 'wordpress-root', ok: false, message: 'paths.wordpress ausente no site' }] };
 
   const repaired = [];
+  const diagnostics = [{ type: 'wordpress-root', ok: fs.existsSync(wordpressRoot), path: wordpressRoot }];
   const muPluginsDir = path.join(wordpressRoot, 'wp-content/mu-plugins');
   const muPluginPath = path.join(muPluginsDir, 'provirpanel-seven-asset-repair.php');
   const muPluginContent = `<?php
@@ -1671,11 +1672,20 @@ add_filter('style_loader_tag', function ($html, $handle, $href, $media) {
     fs.writeFileSync(muPluginPath, muPluginContent, 'utf8');
     repaired.push('wp-content/mu-plugins/provirpanel-seven-asset-repair.php');
   }
+  diagnostics.push({
+    type: 'mu-plugin',
+    ok: fs.existsSync(muPluginPath),
+    path: muPluginPath,
+    repaired: repaired.includes('wp-content/mu-plugins/provirpanel-seven-asset-repair.php')
+  });
 
   ['seven-capital-2017', 'seven-par-2017'].forEach((themeName) => {
     const relativePath = `wp-content/themes/${themeName}/inc/core/url-relatives.php`;
     const target = path.join(wordpressRoot, relativePath);
-    if (!fs.existsSync(target)) return;
+    if (!fs.existsSync(target)) {
+      diagnostics.push({ type: 'theme-file', theme: themeName, ok: false, path: target });
+      return;
+    }
 
     const original = fs.readFileSync(target, 'utf8');
     let next = original;
@@ -1685,8 +1695,8 @@ add_filter('style_loader_tag', function ($html, $handle, $href, $media) {
         (match) => `${match}\t\tif( empty( $url ) || !is_string( $url ) ) return $url;\n`
       );
     }
-    next = next.replace(/\n\s*'script_loader_src',/g, '');
-    next = next.replace(/\n\s*'style_loader_src',/g, '');
+    next = next.replace(/\r?\n\s*'script_loader_src',/g, '');
+    next = next.replace(/\r?\n\s*'style_loader_src',/g, '');
     if (!next.includes("!defined( 'SITE_URL' ) || SITE_URL === ''")) {
       next = next.replace(
         /\$site_http = str_replace\( 'https:\/\/', 'http:\/\/', SITE_URL \);/g,
@@ -1698,9 +1708,20 @@ add_filter('style_loader_tag', function ($html, $handle, $href, $media) {
       fs.writeFileSync(target, next, 'utf8');
       repaired.push(relativePath);
     }
+    const current = fs.readFileSync(target, 'utf8');
+    diagnostics.push({
+      type: 'theme-file',
+      theme: themeName,
+      ok: true,
+      path: target,
+      hasStyleLoaderFilter: /'style_loader_src'/.test(current),
+      hasScriptLoaderFilter: /'script_loader_src'/.test(current),
+      hasEmptyUrlGuard: current.includes('empty( $url ) || !is_string( $url )'),
+      repaired: next !== original
+    });
   });
 
-  return repaired;
+  return { repaired, diagnostics };
 };
 
 const getWordPressOptionTables = (tables = [], prefix = 'wp_') => {
@@ -1888,10 +1909,16 @@ const deactivateSslRedirectPlugins = async (site) => {
 
 const cleanupWordPressAfterMigration = async (site) => {
   const removed = cleanupWordPressCacheFiles(site);
-  const themeRepairs = repairLegacyThemeAssetFilters(site);
+  const themeRepairResult = repairLegacyThemeAssetFilters(site);
   const databaseCleanup = await cleanupWordPressCacheDatabase(site);
   const sslCleanup = await deactivateSslRedirectPlugins(site);
-  return { removed, themeRepairs, databaseCleanup, sslCleanup };
+  return {
+    removed,
+    themeRepairs: themeRepairResult.repaired || [],
+    themeRepairDiagnostics: themeRepairResult.diagnostics || [],
+    databaseCleanup,
+    sslCleanup
+  };
 };
 
 const createWordPressSite = async (body = {}) => {
@@ -2790,6 +2817,7 @@ router.post('/:id/cleanup-cache', async (req, res, next) => {
     site.lastCacheCleanup = {
       removedPaths: cacheCleanup.removed || [],
       themeRepairs: cacheCleanup.themeRepairs || [],
+      themeRepairDiagnostics: cacheCleanup.themeRepairDiagnostics || [],
       optionTables: cacheCleanup.databaseCleanup?.optionTables || 0,
       tablePrefix: cacheCleanup.databaseCleanup?.tablePrefix || site.wordpress?.tablePrefix || 'wp_',
       createdAt: new Date().toISOString()

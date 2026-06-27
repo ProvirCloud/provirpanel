@@ -495,8 +495,16 @@ const SitesPanel = () => {
       setSites((current) => current.map((site) => (site.id === response.data.site.id ? response.data.site : site)))
       const removed = response.data?.cleanup?.removedPaths?.length || 0
       const themeRepairs = response.data?.cleanup?.themeRepairs?.length || 0
+      const diagnostics = response.data?.cleanup?.themeRepairDiagnostics || []
+      const wpRoot = diagnostics.find((entry) => entry.type === 'wordpress-root')
+      const muPlugin = diagnostics.find((entry) => entry.type === 'mu-plugin')
       const tables = response.data?.cleanup?.optionTables || 0
-      setMessage({ type: 'success', text: `Cache limpo (${removed} caminhos removidos, ${tables} tabelas ajustadas, ${themeRepairs} reparo(s) de tema)` })
+      const detail = [
+        `Cache limpo (${removed} caminhos removidos, ${tables} tabelas ajustadas, ${themeRepairs} reparo(s) de tema)`,
+        wpRoot?.path ? `WP: ${wpRoot.path}` : null,
+        muPlugin ? `mu-plugin: ${muPlugin.ok ? 'ok' : 'falhou'}` : null,
+      ].filter(Boolean).join(' | ')
+      setMessage({ type: muPlugin?.ok === false ? 'warning' : 'success', text: detail })
     } catch (err) {
       setMessage({ type: 'error', text: getErrorMessage(err, 'Erro ao limpar cache') })
     } finally {
