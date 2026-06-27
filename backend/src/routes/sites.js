@@ -352,11 +352,72 @@ const walkTree = (rootDir, visitor, options = {}) => {
   return walk(rootDir, maxDepth);
 };
 
-const findFirstSqlFile = (rootDir) =>
-  walkTree(rootDir, (_dir, entries) => {
-    const sql = entries.find((entry) => entry.isFile() && entry.name.toLowerCase().endsWith('.sql'));
-    return sql ? path.join(_dir, sql.name) : null;
-  });
+const collectSqlFiles = (rootDir, maxDepth = 8, maxEntries = 5000) => {
+  const files = [];
+  let visited = 0;
+
+  const walk = (dir, depth) => {
+    if (visited >= maxEntries || depth < 0) return;
+    let entries = [];
+    try {
+      entries = fs.readdirSync(dir, { withFileTypes: true });
+    } catch (err) {
+      return;
+    }
+    for (const entry of entries) {
+      const entryPath = path.join(dir, entry.name);
+      if (entry.isFile() && entry.name.toLowerCase().endsWith('.sql')) {
+        files.push(entryPath);
+        continue;
+      }
+      if (!entry.isDirectory()) continue;
+      if (['__MACOSX', 'node_modules', '.git'].includes(entry.name)) continue;
+      visited += 1;
+      walk(entryPath, depth - 1);
+    }
+  };
+
+  walk(rootDir, maxDepth);
+  return files;
+};
+
+const readSqlSample = (sqlFile, bytes = 512 * 1024) => {
+  try {
+    const fd = fs.openSync(sqlFile, 'r');
+    const buffer = Buffer.alloc(bytes);
+    const read = fs.readSync(fd, buffer, 0, bytes, 0);
+    fs.closeSync(fd);
+    return buffer.subarray(0, read).toString('utf8');
+  } catch (err) {
+    return '';
+  }
+};
+
+const scoreSqlFile = (sqlFile) => {
+  const filename = path.basename(sqlFile).toLowerCase();
+  const sample = readSqlSample(sqlFile);
+  const stat = fs.statSync(sqlFile);
+  let score = Math.min(80, Math.floor(stat.size / (1024 * 1024)) * 10);
+
+  if (/wordpress|wp|db|dump|backup/.test(filename)) score += 25;
+  if (/fixed/.test(filename)) score += 15;
+  if (/options?\.sql$/.test(filename)) score -= 80;
+  if (/INSERT\s+(?:IGNORE\s+)?INTO\s+`?[a-zA-Z0-9_]*options`?/i.test(sample)) score += 20;
+  if (/INSERT\s+(?:IGNORE\s+)?INTO\s+`?[a-zA-Z0-9_]*(posts|postmeta|users|usermeta)`?/i.test(sample)) score += 35;
+  if (/CREATE\s+TABLE\s+`?[a-zA-Z0-9_]*(posts|options|users)`?/i.test(sample)) score += 45;
+  if (/INSERT\s+(?:IGNORE\s+)?INTO\s+`?[a-zA-Z0-9_]*blogs`?/i.test(sample)) score += 35;
+  if (!/INSERT\s+(?:IGNORE\s+)?INTO|CREATE\s+TABLE/i.test(sample)) score -= 100;
+
+  return score;
+};
+
+const findBestSqlFile = (rootDir) => {
+  const files = collectSqlFiles(rootDir);
+  if (!files.length) return null;
+  return files
+    .map((file) => ({ file, score: scoreSqlFile(file), size: fs.statSync(file).size }))
+    .sort((a, b) => b.score - a.score || b.size - a.size || a.file.localeCompare(b.file))[0].file;
+};
 
 const findWpContentDir = (rootDir) =>
   walkTree(rootDir, (dir, entries) => {
@@ -791,22 +852,45 @@ const repairDatabaseFilesystemPermissions = async (site) => {
   });
 };
 
+const prepareSqlFileForImport = (sqlFile) => {
+  const sample = readSqlSample(sqlFile);
+  if (!/INSERT\s+IGNORE\s+INTO/i.test(sample)) {
+    return { path: sqlFile, prepared: false, cleanup: false };
+  }
+
+  const preparedPath = path.join(
+    path.dirname(sqlFile),
+    `.provirpanel-${path.basename(sqlFile)}-${crypto.randomUUID()}.sql`
+  );
+  const content = fs.readFileSync(sqlFile, 'utf8').replace(/INSERT\s+IGNORE\s+INTO/gi, 'REPLACE INTO');
+  fs.writeFileSync(preparedPath, content, 'utf8');
+  return { path: preparedPath, prepared: true, cleanup: true };
+};
+
 const importSqlFile = async (site, sqlFile) => {
   const db = site.database || {};
   const remotePath = '/tmp/provirpanel-import.sql';
+  const preparedSqlFile = prepareSqlFileForImport(sqlFile);
   await repairDatabaseFilesystemPermissions(site);
-  await runCommand('docker', ['cp', sqlFile, `${site.containers.database}:${remotePath}`], { timeout: 900000 });
-  const script = [
-    'set -e',
-    'CLIENT="$(command -v mariadb || command -v mysql)"',
-    '"$CLIENT" -u"$PROVIR_DB_USER" -p"$PROVIR_DB_PASS" "$PROVIR_DB_NAME" < /tmp/provirpanel-import.sql',
-    'rm -f /tmp/provirpanel-import.sql'
-  ].join('\n');
-  return dockerExecShell(site.containers.database, script, {
-    PROVIR_DB_USER: db.user || 'wordpress',
-    PROVIR_DB_PASS: db.password || '',
-    PROVIR_DB_NAME: db.name || 'wordpress'
-  });
+  try {
+    await runCommand('docker', ['cp', preparedSqlFile.path, `${site.containers.database}:${remotePath}`], { timeout: 900000 });
+    const script = [
+      'set -e',
+      'CLIENT="$(command -v mariadb || command -v mysql)"',
+      '"$CLIENT" -u"$PROVIR_DB_USER" -p"$PROVIR_DB_PASS" "$PROVIR_DB_NAME" < /tmp/provirpanel-import.sql',
+      'rm -f /tmp/provirpanel-import.sql'
+    ].join('\n');
+    const result = await dockerExecShell(site.containers.database, script, {
+      PROVIR_DB_USER: db.user || 'wordpress',
+      PROVIR_DB_PASS: db.password || '',
+      PROVIR_DB_NAME: db.name || 'wordpress'
+    });
+    return { ...result, prepared: preparedSqlFile.prepared };
+  } finally {
+    if (preparedSqlFile.cleanup) {
+      fs.rmSync(preparedSqlFile.path, { force: true });
+    }
+  }
 };
 
 const normalizeWordPressPath = (value = '/') => {
@@ -2186,7 +2270,7 @@ const processMigrationArchive = async (siteId, file) => {
         throw createHttpError('Formato salvo, mas ainda não suportado para extração automática. Use .zip, .tar, .tar.gz, .tgz ou .sql.', 400);
       }
       actions.push('Backup extraído para análise');
-      sqlFile = findFirstSqlFile(extractionDir);
+      sqlFile = findBestSqlFile(extractionDir);
     }
 
     const wpContentDir = fs.existsSync(extractionDir) ? findWpContentDir(extractionDir) : null;
@@ -2205,7 +2289,11 @@ const processMigrationArchive = async (siteId, file) => {
 
     if (sqlFile) {
       const detectedTablePrefix = detectTablePrefixFromSql(sqlFile);
-      await importSqlFile(site, sqlFile);
+      const importResult = await importSqlFile(site, sqlFile);
+      actions.push(`SQL selecionado: ${path.relative(extractionDir, sqlFile) || path.basename(sqlFile)}`);
+      if (importResult.prepared) {
+        actions.push('Dump SQL preparado para sobrescrever dados existentes do WordPress');
+      }
       const tables = await listDatabaseTables(site);
       const tablePrefix = resolveWordPressTablePrefix(tables, detectedTablePrefix);
       const multisite = wordpressConfigMetadata.multisite || isMultisiteDatabase(tables, tablePrefix);
