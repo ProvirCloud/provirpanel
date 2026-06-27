@@ -20,6 +20,8 @@ const uploadTempDir = path.join(os.tmpdir(), 'provirpanel-sites-upload');
 const chunkUploadRoot = path.join(os.tmpdir(), 'provirpanel-sites-chunks');
 fs.mkdirSync(uploadTempDir, { recursive: true });
 fs.mkdirSync(chunkUploadRoot, { recursive: true });
+const migrationJobs = new Map();
+const migrationJobTtlMs = Number(process.env.SITES_MIGRATION_JOB_TTL_MS || 6 * 60 * 60 * 1000);
 
 const upload = multer({ dest: uploadTempDir });
 const registryPath = process.env.SITES_REGISTRY || path.join(__dirname, '../../data/sites.json');
@@ -2469,6 +2471,70 @@ const processMigrationArchive = async (siteId, file) => {
   }
 };
 
+const sanitizeMigrationJob = (job) => ({
+  id: job.id,
+  siteId: job.siteId,
+  status: job.status,
+  filename: job.filename,
+  message: job.message,
+  error: job.error,
+  startedAt: job.startedAt,
+  finishedAt: job.finishedAt
+});
+
+const cleanupOldMigrationJobs = () => {
+  const now = Date.now();
+  for (const [jobId, job] of migrationJobs.entries()) {
+    const finishedAt = job.finishedAt ? Date.parse(job.finishedAt) : null;
+    if (finishedAt && now - finishedAt > migrationJobTtlMs) {
+      migrationJobs.delete(jobId);
+    }
+  }
+};
+
+const startMigrationJob = (siteId, uploadId, archivePath, filename) => {
+  cleanupOldMigrationJobs();
+  const job = {
+    id: crypto.randomUUID(),
+    siteId,
+    uploadId,
+    archivePath,
+    filename,
+    status: 'processing',
+    message: 'Processando backup no servidor',
+    startedAt: new Date().toISOString(),
+    finishedAt: null,
+    result: null,
+    error: null
+  };
+  migrationJobs.set(job.id, job);
+
+  setImmediate(async () => {
+    try {
+      const result = await processMigrationArchive(siteId, {
+        path: archivePath,
+        originalname: filename
+      });
+      job.status = 'completed';
+      job.message = 'Backup processado';
+      job.result = result;
+      job.finishedAt = new Date().toISOString();
+    } catch (err) {
+      job.status = 'failed';
+      job.message = 'Erro ao processar migração';
+      job.error = {
+        message: err.message || 'Erro ao processar migração',
+        status: err.status || 500
+      };
+      job.finishedAt = new Date().toISOString();
+    } finally {
+      cleanupChunkUpload(uploadId);
+    }
+  });
+
+  return job;
+};
+
 const permissionsFixedCache = new Set();
 
 const autoFixPermissionsIfNeeded = async (site) => {
@@ -2842,17 +2908,31 @@ router.post('/:id/migrate/complete', async (req, res, next) => {
       return res.status(400).json({ message: 'Upload inválido para este site' });
     }
     const { archivePath, filename } = assembleChunkUpload(uploadId);
-    const result = await processMigrationArchive(req.params.id, {
-      path: archivePath,
-      originalname: filename
-    });
-    cleanupChunkUpload(uploadId);
-    res.json({
-      ...result,
-      site: await decorateSite(result.site)
-    });
+    const job = startMigrationJob(req.params.id, uploadId, archivePath, filename);
+    res.status(202).json({ job: sanitizeMigrationJob(job) });
   } catch (err) {
     if (uploadId) cleanupChunkUpload(uploadId);
+    next(err);
+  }
+});
+
+router.get('/:id/migrate/jobs/:jobId', async (req, res, next) => {
+  try {
+    const job = migrationJobs.get(req.params.jobId);
+    if (!job || job.siteId !== req.params.id) {
+      return res.status(404).json({ message: 'Processamento de migração não encontrado' });
+    }
+    if (job.status === 'completed' && job.result) {
+      return res.json({
+        job: sanitizeMigrationJob(job),
+        ...job.result,
+        site: await decorateSite(job.result.site)
+      });
+    }
+    return res.json({
+      job: sanitizeMigrationJob(job)
+    });
+  } catch (err) {
     next(err);
   }
 });

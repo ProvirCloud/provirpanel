@@ -177,6 +177,29 @@ const postUploadChunk = async (url, buildFormData, config = {}) => {
   throw lastError
 }
 
+const wait = (ms) => new Promise((resolve) => setTimeout(resolve, ms))
+
+const waitForMigrationJob = async ({ siteId, jobId, onProgress }) => {
+  let progress = 99
+  for (;;) {
+    await wait(2000)
+    const response = await uploadApi.get(`/sites/${siteId}/migrate/jobs/${jobId}`, { timeout: 30000 })
+    const job = response.data?.job
+    if (!job) {
+      throw new Error('Processamento de migração não encontrado')
+    }
+    if (job.status === 'completed') {
+      onProgress?.(100, 1, 1, 'Migração aplicada')
+      return response
+    }
+    if (job.status === 'failed') {
+      throw new Error(job.error?.message || job.message || 'Erro ao processar migração')
+    }
+    progress = Math.min(99, progress + 1)
+    onProgress?.(progress, 1, 1, job.message || 'Processando backup no servidor')
+  }
+}
+
 const uploadFileInChunks = async ({ siteId, file, onProgress }) => {
   const totalChunks = Math.max(1, Math.ceil(file.size / UPLOAD_CHUNK_SIZE_BYTES))
   const safeSize = Math.max(1, file.size)
@@ -217,7 +240,10 @@ const uploadFileInChunks = async ({ siteId, file, onProgress }) => {
   }
 
   onProgress?.(99, totalChunks, totalChunks, 'Processando backup no servidor')
-  return uploadApi.post(`/sites/${siteId}/migrate/complete`, { uploadId }, { timeout: 900000 })
+  const completeResponse = await uploadApi.post(`/sites/${siteId}/migrate/complete`, { uploadId }, { timeout: 60000 })
+  const jobId = completeResponse.data?.job?.id
+  if (!jobId) return completeResponse
+  return waitForMigrationJob({ siteId, jobId, onProgress })
 }
 
 const SitesPanel = () => {
