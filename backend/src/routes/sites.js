@@ -1590,6 +1590,42 @@ const repairLegacyThemeAssetFilters = (site) => {
   if (!wordpressRoot) return [];
 
   const repaired = [];
+  const muPluginsDir = path.join(wordpressRoot, 'wp-content/mu-plugins');
+  const muPluginPath = path.join(muPluginsDir, 'provirpanel-seven-asset-repair.php');
+  const muPluginContent = `<?php
+/**
+ * ProvirPanel emergency repair for legacy Seven Capital themes.
+ *
+ * The 2017 themes convert absolute URLs to relative URLs through
+ * style_loader_src/script_loader_src filters. On modern WordPress restores this
+ * can produce empty stylesheet href attributes, including on wp-login.php.
+ */
+add_action('after_setup_theme', function () {
+    if (function_exists('theme_link_relative')) {
+        remove_filter('style_loader_src', 'theme_link_relative');
+        remove_filter('script_loader_src', 'theme_link_relative');
+    }
+    if (function_exists('_filter_double_home_url_src')) {
+        remove_filter('style_loader_src', '_filter_double_home_url_src');
+        remove_filter('script_loader_src', '_filter_double_home_url_src');
+    }
+}, PHP_INT_MAX);
+
+add_filter('style_loader_src', function ($src) {
+    return empty($src) ? false : $src;
+}, PHP_INT_MAX);
+
+add_filter('script_loader_src', function ($src) {
+    return empty($src) ? false : $src;
+}, PHP_INT_MAX);
+`;
+
+  fs.mkdirSync(muPluginsDir, { recursive: true });
+  if (!fs.existsSync(muPluginPath) || fs.readFileSync(muPluginPath, 'utf8') !== muPluginContent) {
+    fs.writeFileSync(muPluginPath, muPluginContent, 'utf8');
+    repaired.push('wp-content/mu-plugins/provirpanel-seven-asset-repair.php');
+  }
+
   ['seven-capital-2017', 'seven-par-2017'].forEach((themeName) => {
     const relativePath = `wp-content/themes/${themeName}/inc/core/url-relatives.php`;
     const target = path.join(wordpressRoot, relativePath);
