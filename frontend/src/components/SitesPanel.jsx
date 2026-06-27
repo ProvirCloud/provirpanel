@@ -494,8 +494,9 @@ const SitesPanel = () => {
       const response = await api.post(`/sites/${selectedSite.id}/cleanup-cache`)
       setSites((current) => current.map((site) => (site.id === response.data.site.id ? response.data.site : site)))
       const removed = response.data?.cleanup?.removedPaths?.length || 0
+      const themeRepairs = response.data?.cleanup?.themeRepairs?.length || 0
       const tables = response.data?.cleanup?.optionTables || 0
-      setMessage({ type: 'success', text: `Cache limpo (${removed} caminhos removidos, ${tables} tabelas ajustadas)` })
+      setMessage({ type: 'success', text: `Cache limpo (${removed} caminhos removidos, ${tables} tabelas ajustadas, ${themeRepairs} reparo(s) de tema)` })
     } catch (err) {
       setMessage({ type: 'error', text: getErrorMessage(err, 'Erro ao limpar cache') })
     } finally {

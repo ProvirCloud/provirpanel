@@ -1585,6 +1585,42 @@ const cleanupWordPressCacheFiles = (site) => {
   return removed;
 };
 
+const repairLegacyThemeAssetFilters = (site) => {
+  const wordpressRoot = site.paths?.wordpress;
+  if (!wordpressRoot) return [];
+
+  const repaired = [];
+  ['seven-capital-2017', 'seven-par-2017'].forEach((themeName) => {
+    const relativePath = `wp-content/themes/${themeName}/inc/core/url-relatives.php`;
+    const target = path.join(wordpressRoot, relativePath);
+    if (!fs.existsSync(target)) return;
+
+    const original = fs.readFileSync(target, 'utf8');
+    let next = original;
+    if (!next.includes('empty( $url ) || !is_string( $url )')) {
+      next = next.replace(
+        /function theme_link_relative\( \$url \)\{\s*/i,
+        (match) => `${match}\t\tif( empty( $url ) || !is_string( $url ) ) return $url;\n`
+      );
+    }
+    next = next.replace(/\n\s*'script_loader_src',/g, '');
+    next = next.replace(/\n\s*'style_loader_src',/g, '');
+    if (!next.includes("!defined( 'SITE_URL' ) || SITE_URL === ''")) {
+      next = next.replace(
+        /\$site_http = str_replace\( 'https:\/\/', 'http:\/\/', SITE_URL \);/g,
+        "if( !defined( 'SITE_URL' ) || SITE_URL === '' ) return $url;\n\t\t$site_http = str_replace( 'https://', 'http://', SITE_URL );"
+      );
+    }
+
+    if (next !== original) {
+      fs.writeFileSync(target, next, 'utf8');
+      repaired.push(relativePath);
+    }
+  });
+
+  return repaired;
+};
+
 const getWordPressOptionTables = (tables = [], prefix = 'wp_') => {
   const optionTables = new Set();
   if (hasTable(tables, `${prefix}options`)) optionTables.add(`${prefix}options`);
@@ -1770,9 +1806,10 @@ const deactivateSslRedirectPlugins = async (site) => {
 
 const cleanupWordPressAfterMigration = async (site) => {
   const removed = cleanupWordPressCacheFiles(site);
+  const themeRepairs = repairLegacyThemeAssetFilters(site);
   const databaseCleanup = await cleanupWordPressCacheDatabase(site);
   const sslCleanup = await deactivateSslRedirectPlugins(site);
-  return { removed, databaseCleanup, sslCleanup };
+  return { removed, themeRepairs, databaseCleanup, sslCleanup };
 };
 
 const createWordPressSite = async (body = {}) => {
@@ -2430,12 +2467,16 @@ const processMigrationArchive = async (siteId, file) => {
       try {
         const cacheCleanup = await cleanupWordPressAfterMigration(site);
         const removedCachePaths = cacheCleanup.removed || [];
+        const themeRepairs = cacheCleanup.themeRepairs || [];
         const optionTables = cacheCleanup.databaseCleanup?.optionTables || 0;
         actions.push(
           removedCachePaths.length || optionTables
             ? `Cache/otimizacoes do backup limpos (${removedCachePaths.length} caminhos removidos, ${optionTables} tabelas de opções)`
             : 'Otimizacoes de cache do backup desativadas'
         );
+        if (themeRepairs.length) {
+          actions.push(`Filtros legados de CSS/JS reparados em ${themeRepairs.length} arquivo(s) do tema`);
+        }
       } catch (err) {
         actions.push(`Backup restaurado, mas a limpeza de cache/otimizacao falhou: ${err.message}`);
       }
@@ -2666,6 +2707,7 @@ router.post('/:id/cleanup-cache', async (req, res, next) => {
     }
     site.lastCacheCleanup = {
       removedPaths: cacheCleanup.removed || [],
+      themeRepairs: cacheCleanup.themeRepairs || [],
       optionTables: cacheCleanup.databaseCleanup?.optionTables || 0,
       tablePrefix: cacheCleanup.databaseCleanup?.tablePrefix || site.wordpress?.tablePrefix || 'wp_',
       createdAt: new Date().toISOString()
