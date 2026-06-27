@@ -1665,6 +1665,50 @@ add_filter('style_loader_tag', function ($html, $handle, $href, $media) {
     $mediaAttr = $media && $media !== 'all' ? ' media="' . esc_attr($media) . '"' : '';
     return '<link rel="stylesheet" id="' . esc_attr($handle) . '-css" href="' . $src . '"' . $mediaAttr . ' />' . "\\n";
 }, PHP_INT_MAX, 4);
+
+add_action('init', function () {
+    ob_start(function ($html) {
+        if (strpos($html, 'href=""') === false) return $html;
+        $theme = get_template();
+        $themeUri = get_template_directory_uri();
+        $common = array(
+            '/wp-includes/css/dist/block-library/style.min.css',
+            '/wp-includes/css/classic-themes.min.css',
+            '/wp-content/plugins/r-buttons/css/width.css',
+            '/wp-content/plugins/r-buttons/css/grid.css',
+            '/wp-content/plugins/r-buttons/css/alert.css',
+            'https://use.fontawesome.com/releases/v5.15.4/css/all.css',
+            'https://use.fontawesome.com/releases/v5.15.4/css/v4-shims.css',
+        );
+        $themeAssets = array();
+        if ($theme === 'seven-capital-2017' || $theme === 'seven-par-2017') {
+            $themeAssets = array(
+                $themeUri . '/assets/css/modules/button.css',
+                $themeUri . '/assets/css/plugins/?animate,wpcf7,colorbox,map-route,owl2',
+                $themeUri . '/assets/css/modules/?cols,drop-list',
+                $themeUri . '/assets/css/?normalize,editor-style,forms,style,mq,print',
+            );
+        }
+        $loginAssets = array(
+            '/wp-includes/css/dashicons.min.css',
+            '/wp-admin/css/buttons.min.css',
+            '/wp-admin/css/forms.min.css',
+            '/wp-admin/css/l10n.min.css',
+            '/wp-admin/css/login.min.css',
+        );
+        $assets = provirpanel_seven_is_login() ? $loginAssets : array_merge($common, $themeAssets);
+        foreach ($assets as $asset) {
+            $replacement = '<link rel="stylesheet" href="' . esc_url($asset) . '" />';
+            $html = preg_replace('/<link rel="stylesheet" href=""\\s*\\/?>/', $replacement, $html, 1);
+            if (strpos($html, 'href=""') === false) break;
+        }
+        return $html;
+    });
+}, 0);
+
+function provirpanel_seven_is_login() {
+    return isset($GLOBALS['pagenow']) && $GLOBALS['pagenow'] === 'wp-login.php';
+}
 `;
 
   fs.mkdirSync(muPluginsDir, { recursive: true });
@@ -1689,12 +1733,10 @@ add_filter('style_loader_tag', function ($html, $handle, $href, $media) {
 
     const original = fs.readFileSync(target, 'utf8');
     let next = original;
-    if (!next.includes('empty( $url ) || !is_string( $url )')) {
-      next = next.replace(
-        /function theme_link_relative\( \$url \)\{\s*/i,
-        (match) => `${match}\t\tif( empty( $url ) || !is_string( $url ) ) return $url;\n`
-      );
-    }
+    next = next.replace(
+      /function theme_link_relative\( \$url \)\{[\s\S]*?\n\t\}\n\n\n\n\tif/i,
+      "function theme_link_relative( $url ){\n\t\treturn $url;\n\t}\n\n\n\n\tif"
+    );
     next = next.replace(/\r?\n\s*'script_loader_src',/g, '');
     next = next.replace(/\r?\n\s*'style_loader_src',/g, '');
     if (!next.includes("!defined( 'SITE_URL' ) || SITE_URL === ''")) {
