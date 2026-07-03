@@ -318,6 +318,21 @@ export const servicesApi = {
   async remove(serviceId, options = {}) {
     const response = await api.delete(`/docker/services/${serviceId}`, { data: options })
     return response.data
+  },
+
+  async aiAnalyze(serviceId) {
+    const response = await api.post(`/docker/services/${serviceId}/ai-analyze`)
+    return response.data
+  },
+
+  async aiStartFix(serviceId, payload = {}) {
+    const response = await api.post(`/docker/services/${serviceId}/ai-fix`, payload)
+    return response.data
+  },
+
+  async aiGetFixJob(serviceId, jobId) {
+    const response = await api.get(`/docker/services/${serviceId}/ai-fix/jobs/${jobId}`)
+    return response.data
   }
 }
 

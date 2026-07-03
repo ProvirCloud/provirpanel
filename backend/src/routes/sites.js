@@ -1763,6 +1763,36 @@ function provirpanel_seven_is_login() {
     });
   });
 
+  const restrictedAreaPath = path.join(
+    wordpressRoot,
+    'wp-content/themes/seven-capital-2017/inc/project/template-actions.php'
+  );
+  if (fs.existsSync(restrictedAreaPath)) {
+    const original = fs.readFileSync(restrictedAreaPath, 'utf8');
+    const next = original.replace(
+      /https?:\/\/acionistas\.sevencapital\.com\.br\/?/g,
+      'https://ri.sevencapital.com.br'
+    );
+    if (next !== original) {
+      fs.writeFileSync(restrictedAreaPath, next, 'utf8');
+      repaired.push('wp-content/themes/seven-capital-2017/inc/project/template-actions.php');
+    }
+    diagnostics.push({
+      type: 'restricted-area-link',
+      ok: fs.existsSync(restrictedAreaPath),
+      path: restrictedAreaPath,
+      target: 'https://ri.sevencapital.com.br',
+      repaired: next !== original
+    });
+  } else {
+    diagnostics.push({
+      type: 'restricted-area-link',
+      ok: false,
+      path: restrictedAreaPath,
+      target: 'https://ri.sevencapital.com.br'
+    });
+  }
+
   return { repaired, diagnostics };
 };
 

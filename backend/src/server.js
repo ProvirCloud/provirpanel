@@ -27,6 +27,7 @@ const securityAuditRoutes = require('./routes/security-audit');
 const publicStorageRoutes = require('./routes/public-storage');
 const stacksRoutes = require('./routes/stacks');
 const sitesRoutes = require('./routes/sites');
+const zeusRoutes = require('./routes/zeus');
 const authMiddleware = require('./middleware/auth');
 const errorHandler = require('./middleware/errorHandler');
 const MetricsCollector = require('./services/MetricsCollector');
@@ -96,6 +97,8 @@ app.use('/stacks', authMiddleware, stacksRoutes);
 app.use('/api/stacks', authMiddleware, stacksRoutes);
 app.use('/sites', authMiddleware, sitesRoutes);
 app.use('/api/sites', authMiddleware, sitesRoutes);
+app.use('/zeus', authMiddleware, zeusRoutes);
+app.use('/api/zeus', authMiddleware, zeusRoutes);
 app.use('/nginx', authMiddleware, nginxServersRoutes);
 app.use('/nginx', authMiddleware, nginxRoutes);
 app.use('/api/nginx', authMiddleware, nginxServersRoutes);
@@ -195,6 +198,14 @@ runMigrations()
     };
     fs.appendFile(appLogsPath, `${JSON.stringify(entry)}\n`, () => {});
     appendNodeLog(`Node.js iniciado (pid ${process.pid})`);
+
+    // Start Zeus Heartbeat (child panels push context to hub)
+    try {
+      const zeusHeartbeat = require('./services/zeus-heartbeat');
+      zeusHeartbeat.start();
+    } catch (err) {
+      console.warn('[Zeus Heartbeat] Failed to start:', err.message);
+    }
   });
 });
 

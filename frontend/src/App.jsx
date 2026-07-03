@@ -25,6 +25,8 @@ import InfrastructureCanvasPage from './pages/InfrastructureCanvasPage'
 import GitHubServiceWizardPage from './pages/GitHubServiceWizardPage.jsx'
 import ServiceDetailsPage from './pages/ServiceDetailsPage.jsx'
 import StacksPanel from './components/StacksPanel.jsx'
+import ZeusChat from './components/ZeusChat.jsx'
+import ZeusPanels from './components/ZeusPanels.jsx'
 import api from './services/api.js'
 import { getPanelBasename } from './utils/panelPath.js'
 
@@ -113,6 +115,7 @@ const App = () => {
           element={
             <ProtectedRoute loading={authState.loading} authenticated={authState.authenticated}>
               <MainLayout />
+              <ZeusChat />
             </ProtectedRoute>
           }
         >
@@ -136,6 +139,7 @@ const App = () => {
           <Route path="gateway" element={<ModulePage title="Gateway" subtitle="Integrações, APIs e orquestração de borda"><ProvirGateway showPageIntro={false} /></ModulePage>} />
           <Route path="security" element={<ModulePage title="Auditoria" subtitle="Governança, trilhas críticas e segurança"><SecurityAuditPanel showPageIntro={false} /></ModulePage>} />
           <Route path="logs" element={<ModulePage title="Logs" subtitle="Observabilidade, eventos e troubleshooting"><LogsPanel showPageIntro={false} /></ModulePage>} />
+          <Route path="zeus-panels" element={<ModulePage title="Zeus AI" subtitle="Painéis conectados e inteligência centralizada"><ZeusPanels /></ModulePage>} />
         </Route>
         <Route path="*" element={<Navigate to="/" replace />} />
       </Routes>

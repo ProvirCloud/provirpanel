@@ -56,6 +56,18 @@ class NginxServerManager {
     }
   }
 
+  _copyFile(source, target) {
+    try {
+      fs.copyFileSync(source, target);
+    } catch (err) {
+      if (err.code === "EACCES" || err.code === "EPERM") {
+        execSync(`sudo -n cp "${source}" "${target}"`, { stdio: "pipe", timeout: 5000 });
+      } else {
+        throw err;
+      }
+    }
+  }
+
 
   // ==================== DATABASE OPERATIONS ====================
 
@@ -145,7 +157,15 @@ class NginxServerManager {
       throw new Error('Config file path not defined');
     }
 
-    fs.mkdirSync(path.dirname(server.config_file_path), { recursive: true });
+    try {
+      fs.mkdirSync(path.dirname(server.config_file_path), { recursive: true });
+    } catch (err) {
+      if (err.code === 'EACCES' || err.code === 'EPERM') {
+        execSync(`sudo -n mkdir -p "${path.dirname(server.config_file_path)}"`, { stdio: 'pipe', timeout: 5000 });
+      } else {
+        throw err;
+      }
+    }
     const config = this.generateNginxConfig(server);
     this._writeFile(server.config_file_path, config);
 
@@ -1021,7 +1041,7 @@ ${buildProxyBlock(proxyTarget)}    }
     const testResult = this.testConfig();
     if (!testResult.valid) {
       if (backupPath) {
-        fs.copyFileSync(backupPath, server.config_file_path);
+        this._copyFile(backupPath, server.config_file_path);
       }
       throw new Error(`Invalid Nginx configuration: ${testResult.error}`);
     }
@@ -1064,7 +1084,7 @@ ${buildProxyBlock(proxyTarget)}    }
     const testResult = this.testConfig();
     if (!testResult.valid) {
       if (backupPath) {
-        fs.copyFileSync(backupPath, configFilePath);
+        this._copyFile(backupPath, configFilePath);
       }
       throw new Error(`Invalid Nginx configuration: ${testResult.error}`);
     }
@@ -1182,10 +1202,27 @@ ${buildProxyBlock(proxyTarget)}    }
   createBackup(filePath) {
     if (!filePath || !fs.existsSync(filePath)) return null;
     const backupDir = process.env.NGINX_BACKUP_DIR || path.join(this.configPath, 'provirpanel-backups');
-    fs.mkdirSync(backupDir, { recursive: true });
+    try {
+      fs.mkdirSync(backupDir, { recursive: true });
+    } catch (err) {
+      if (err.code === 'EACCES' || err.code === 'EPERM') {
+        execSync(`sudo -n mkdir -p "${backupDir}"`, { stdio: 'pipe', timeout: 5000 });
+        execSync(`sudo -n chmod 777 "${backupDir}"`, { stdio: 'pipe', timeout: 5000 });
+      } else {
+        throw err;
+      }
+    }
     const stamp = new Date().toISOString().replace(/[-:]/g, '').replace(/\..+/, '');
     const backupPath = path.join(backupDir, `${path.basename(filePath)}.bak-${stamp}`);
-    fs.copyFileSync(filePath, backupPath);
+    try {
+      fs.copyFileSync(filePath, backupPath);
+    } catch (err) {
+      if (err.code === 'EACCES' || err.code === 'EPERM') {
+        execSync(`sudo -n cp "${filePath}" "${backupPath}"`, { stdio: 'pipe', timeout: 5000 });
+      } else {
+        throw err;
+      }
+    }
     return backupPath;
   }
 
@@ -1763,13 +1800,12 @@ ${buildProxyBlock(proxyTarget)}    }
         serverType = 'static';
       }
 
-      // Extract proxy settings
-      const proxyPassMatch = content.match(/location\s+\/\s*\{[^}]*proxy_pass\s+http:\/\/([^:\/]+):?(\d+)?/s)
-        || content.match(/proxy_pass\s+http:\/\/([^:\/]+):?(\d+)?/);
+      // Extract proxy settings from root location block
+      const proxyPassMatch = content.match(/proxy_pass\s+http:\/\/([a-zA-Z0-9_.-]+):?(\d+)?/);
       let proxyHost = 'localhost';
       let proxyPort = 3000;
       if (proxyPassMatch) {
-        proxyHost = proxyPassMatch[1];
+        proxyHost = proxyPassMatch[1].substring(0, 255);
         proxyPort = proxyPassMatch[2] ? parseInt(proxyPassMatch[2], 10) : 80;
       }
 
@@ -2032,7 +2068,7 @@ ${buildProxyBlock(proxyTarget)}    }
       sslType: configData.ssl_type || 'none',
       sslCertPath: configData.ssl_cert_path,
       sslKeyPath: configData.ssl_key_path,
-      proxyHost: configData.proxy_host || 'localhost',
+      proxyHost: (configData.proxy_host || 'localhost').substring(0, 255),
       proxyPort: configData.proxy_port || 3000,
       rootPath: configData.root_path || '/var/www/html',
       websocketEnabled: configData.websocket_enabled ?? true,

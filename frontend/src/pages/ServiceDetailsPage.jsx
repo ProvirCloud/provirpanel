@@ -1,4 +1,4 @@
-import { Fragment, createElement, useCallback, useEffect, useMemo, useRef, useState } from 'react'
+import { createElement, useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { useNavigate, useParams, useSearchParams } from 'react-router-dom'
 import {
   Activity,
@@ -46,6 +46,7 @@ import {
   servicesApi
 } from '../services/serviceDetailsApi.js'
 import { createDockerTerminalSocket } from '../services/socket.js'
+import AiFixPanel, { DeployAiDiagnosis } from '../components/AiFixPanel.jsx'
 
 const TABS = [
   { id: 'overview', label: 'Overview', icon: Layers },
@@ -834,111 +835,106 @@ const ServiceOverviewTab = ({ service, detail, activity }) => {
 const DeployHistory = ({ service, busyVersionId, onRollback, onDownload, onRemove }) => {
   const deployments = Array.isArray(service.deployments) ? service.deployments : []
   const [openLogId, setOpenLogId] = useState('')
+  const [page, setPage] = useState(0)
+  const perPage = 5
+  const totalPages = Math.ceil(deployments.length / perPage)
+  const visible = deployments.slice(page * perPage, (page + 1) * perPage)
+
   if (!deployments.length) {
     return <p className="text-sm text-slate-500">Nenhuma versão publicada registrada.</p>
   }
   return (
-    <div className="overflow-x-auto">
-      <table className="min-w-full text-left text-sm">
-        <thead className="text-xs uppercase text-slate-500">
-          <tr>
-            <th className="px-3 py-2">Versão</th>
-            <th className="px-3 py-2">Status</th>
-            <th className="px-3 py-2">Arquivo</th>
-            <th className="px-3 py-2">Publicado</th>
-            <th className="px-3 py-2 text-right">Ações</th>
-          </tr>
-        </thead>
-        <tbody>
-          {deployments.map((deployment) => {
-            const active = deployment.id === service.activeDeploymentId || deployment.status === 'active'
-            const busy = busyVersionId === deployment.id
-            const logLines = getDeploymentLogLines(deployment)
-            const logOpen = openLogId === deployment.id
-            return (
-              <Fragment key={deployment.id}>
-                <tr className={`border-t ${active ? 'border-emerald-500/30 bg-emerald-500/5' : 'border-slate-800'}`}>
-                  <td className="px-3 py-3">
-                    <div className="flex min-w-0 flex-wrap items-center gap-2">
-                      <span className="truncate font-medium text-white">{formatDeploymentLabel(deployment)}</span>
-                      {active ? (
-                        <span className="inline-flex items-center gap-1 rounded-full border border-emerald-400/30 bg-emerald-400/10 px-2 py-0.5 text-[11px] font-semibold text-emerald-100">
-                          <CheckCircle2 className="h-3 w-3" />
-                          ATIVA
-                        </span>
-                      ) : null}
-                    </div>
-                    <p className="mt-1 truncate text-xs text-slate-500">{deployment.id}</p>
-                  </td>
-                  <td className="px-3 py-3">
-                    <span className={`rounded-full border px-2 py-1 text-xs ${
-                      deployment.status === 'failed'
-                        ? 'border-rose-500/30 bg-rose-500/10 text-rose-200'
-                        : active
-                          ? 'border-emerald-500/30 bg-emerald-500/10 text-emerald-200'
-                          : 'border-slate-700 bg-slate-900 text-slate-300'
-                    }`}>
-                      {formatDeploymentStatus(deployment, active)}
-                    </span>
-                  </td>
-                  <td className="max-w-xs truncate px-3 py-3 text-slate-400">{deployment.archiveName || deployment.projectDir || '-'}</td>
-                  <td className="px-3 py-3 text-slate-400">{formatDateTime(deployment.finishedAt || deployment.createdAt)}</td>
-                  <td className="px-3 py-3">
-                    <div className="flex flex-wrap justify-end gap-2">
-                      <button className={smallButtonClass} type="button" onClick={() => setOpenLogId(logOpen ? '' : deployment.id)} disabled={!logLines.length}>
-                        <Terminal className="h-4 w-4" />
-                        {logOpen ? 'Ocultar log' : 'Log'}
-                      </button>
-                      <button className={smallButtonClass} type="button" onClick={() => onDownload(deployment)} disabled={busy}>
-                        <Download className="h-4 w-4" />
-                        Baixar
-                      </button>
-                      <button className={smallButtonClass} type="button" onClick={() => onRollback(deployment)} disabled={active || busy}>
-                        <RotateCcw className="h-4 w-4" />
-                        Rollback
-                      </button>
-                      <button className="inline-flex items-center gap-2 rounded-lg border border-rose-500/30 bg-rose-500/10 px-3 py-2 text-xs text-rose-200 hover:bg-rose-500/20 disabled:cursor-not-allowed disabled:opacity-50" type="button" onClick={() => onRemove(deployment)} disabled={active || busy}>
-                        <Trash2 className="h-4 w-4" />
-                        Remover
-                      </button>
-                    </div>
-                  </td>
-                </tr>
-                {logOpen ? (
-                  <tr className="border-t border-slate-800 bg-slate-950/60">
-                    <td colSpan={5} className="px-3 py-3">
-                      <div className="rounded-lg border border-slate-800 bg-black p-3">
-                        <div className="mb-3 flex flex-wrap items-center justify-between gap-2">
-                          <div className="min-w-0">
-                            <p className="text-xs font-semibold uppercase text-slate-400">Log do deploy</p>
-                            <p className="truncate text-xs text-slate-600">
-                              {deployment.deployLogUpdatedAt ? `Atualizado em ${formatDateTime(deployment.deployLogUpdatedAt)}` : 'Registro salvo da versão'}
-                            </p>
-                          </div>
-                          <button className={smallButtonClass} type="button" onClick={() => navigator.clipboard?.writeText(logLines.join('\n'))}>
-                            <Copy className="h-4 w-4" />
-                            Copiar
-                          </button>
-                        </div>
-                        {deployment.deployLogError || deployment.error ? (
-                          <div className="mb-3 rounded-md border border-rose-500/30 bg-rose-500/10 px-3 py-2 text-xs text-rose-100">
-                            Erro: {deployment.deployLogError || deployment.error}
-                          </div>
-                        ) : null}
-                        <div className="max-h-80 overflow-auto whitespace-pre-wrap rounded-md bg-slate-950 p-3 font-mono text-[11px] leading-5 text-slate-300">
-                          {logLines.map((line, index) => (
-                            <p key={`${deployment.id}-log-${index}`}>{line}</p>
-                          ))}
-                        </div>
-                      </div>
-                    </td>
-                  </tr>
-                ) : null}
-              </Fragment>
-            )
-          })}
-        </tbody>
-      </table>
+    <div className="space-y-3">
+      {visible.map((deployment) => {
+        const active = deployment.id === service.activeDeploymentId || deployment.status === 'active'
+        const failed = deployment.status === 'failed'
+        const busy = busyVersionId === deployment.id
+        const logLines = getDeploymentLogLines(deployment)
+        const logOpen = openLogId === deployment.id
+
+        return (
+          <div key={deployment.id} className={`rounded-lg border ${
+            active ? 'border-emerald-500/30 bg-emerald-500/5' : failed ? 'border-rose-500/20 bg-rose-500/5' : 'border-slate-800 bg-slate-900/30'
+          }`}>
+            {/* Header */}
+            <div className="flex flex-wrap items-center gap-3 px-3 py-2.5">
+              <div className="flex min-w-0 flex-1 items-center gap-2">
+                <span className="truncate text-sm font-medium text-white">{formatDeploymentLabel(deployment)}</span>
+                {active && (
+                  <span className="inline-flex items-center gap-1 rounded-full border border-emerald-400/30 bg-emerald-400/10 px-2 py-0.5 text-[10px] font-semibold text-emerald-100">
+                    <CheckCircle2 className="h-3 w-3" /> ATIVA
+                  </span>
+                )}
+                {failed && (
+                  <span className="inline-flex items-center gap-1 rounded-full border border-rose-500/30 bg-rose-500/10 px-2 py-0.5 text-[10px] font-semibold text-rose-200">
+                    <AlertTriangle className="h-3 w-3" /> FALHOU
+                  </span>
+                )}
+              </div>
+              <span className="text-[11px] text-slate-500">{formatDateTime(deployment.finishedAt || deployment.createdAt)}</span>
+              <div className="flex gap-1.5">
+                <button className={smallButtonClass} type="button" onClick={() => setOpenLogId(logOpen ? '' : deployment.id)}>
+                  <Terminal className="h-3.5 w-3.5" />
+                  {logOpen ? 'Fechar' : 'Log'}
+                </button>
+                <button className={smallButtonClass} type="button" onClick={() => onDownload(deployment)} disabled={busy}>
+                  <Download className="h-3.5 w-3.5" />
+                </button>
+                <button className={smallButtonClass} type="button" onClick={() => onRollback(deployment)} disabled={active || busy}>
+                  <RotateCcw className="h-3.5 w-3.5" />
+                </button>
+                <button className="inline-flex items-center rounded-md border border-rose-500/30 bg-rose-500/10 px-2 py-1 text-[11px] text-rose-200 hover:bg-rose-500/20 disabled:opacity-50" type="button" onClick={() => onRemove(deployment)} disabled={active || busy}>
+                  <Trash2 className="h-3.5 w-3.5" />
+                </button>
+              </div>
+            </div>
+
+            {/* Expanded log + AI */}
+            {logOpen && (
+              <div className="border-t border-slate-800 px-3 py-3 space-y-2">
+                {(deployment.deployLogError || deployment.error) && (
+                  <div className="rounded-md border border-rose-500/30 bg-rose-500/10 px-3 py-2 text-xs text-rose-100">
+                    {deployment.deployLogError || deployment.error}
+                  </div>
+                )}
+                {logLines.length > 0 && (
+                  <div className="max-h-48 overflow-auto rounded-md bg-black/60 p-2.5 font-mono text-[10px] leading-4 text-slate-400">
+                    {logLines.map((line, index) => (
+                      <p key={`${deployment.id}-${index}`}>{line}</p>
+                    ))}
+                  </div>
+                )}
+                {failed && (
+                  <DeployAiDiagnosis service={service} deployment={deployment} />
+                )}
+              </div>
+            )}
+          </div>
+        )
+      })}
+
+      {/* Pagination */}
+      {totalPages > 1 && (
+        <div className="flex items-center justify-center gap-2 pt-2">
+          <button
+            className={smallButtonClass}
+            type="button"
+            onClick={() => setPage(p => Math.max(0, p - 1))}
+            disabled={page === 0}
+          >
+            ←
+          </button>
+          <span className="text-xs text-slate-400">{page + 1} / {totalPages}</span>
+          <button
+            className={smallButtonClass}
+            type="button"
+            onClick={() => setPage(p => Math.min(totalPages - 1, p + 1))}
+            disabled={page >= totalPages - 1}
+          >
+            →
+          </button>
+        </div>
+      )}
     </div>
   )
 }
@@ -1264,6 +1260,7 @@ const ServiceDeploysTab = ({
             {deployRunning ? 'Publicando...' : 'Publicar versão'}
           </button>
           <DeployProgressPanel progress={progress} error={error || progress?.error} />
+          <AiFixPanel service={service} onReload={onReload} />
         </div>
       </Panel>
 
@@ -1802,6 +1799,75 @@ const ServiceTerminalTab = ({ service }) => {
   )
 }
 
+const DeliveryDeployHistory = ({ service }) => {
+  const deployments = Array.isArray(service.deployments) ? service.deployments : []
+  const [openLogId, setOpenLogId] = useState('')
+  const [page, setPage] = useState(0)
+  const perPage = 5
+  const totalPages = Math.ceil(deployments.length / perPage)
+  const visible = deployments.slice(page * perPage, (page + 1) * perPage)
+
+  if (!deployments.length) return <p className="text-sm text-slate-500">Nenhuma publicação registrada.</p>
+
+  return (
+    <div className="space-y-2">
+      {visible.map((deployment) => {
+        const active = deployment.id === service.activeDeploymentId || deployment.status === 'active'
+        const failed = deployment.status === 'failed'
+        const logOpen = openLogId === deployment.id
+        const logLines = getDeploymentLogLines(deployment)
+
+        return (
+          <div key={deployment.id} className={`rounded-lg border ${
+            active ? 'border-emerald-500/30 bg-emerald-500/5' : failed ? 'border-rose-500/20 bg-rose-500/5' : 'border-slate-800 bg-slate-900/30'
+          }`}>
+            <button
+              type="button"
+              className="flex w-full items-center gap-3 px-3 py-2.5 text-left"
+              onClick={() => setOpenLogId(logOpen ? '' : deployment.id)}
+            >
+              <span className={`inline-block h-2 w-2 shrink-0 rounded-full ${
+                active ? 'bg-emerald-400' : failed ? 'bg-rose-400' : 'bg-slate-500'
+              }`} />
+              <span className="min-w-0 flex-1 truncate text-sm font-medium text-white">
+                {formatDeploymentLabel(deployment)}
+              </span>
+              {active && <span className="rounded-full border border-emerald-400/30 bg-emerald-400/10 px-2 py-0.5 text-[10px] text-emerald-100">ATIVA</span>}
+              {failed && <span className="rounded-full border border-rose-500/30 bg-rose-500/10 px-2 py-0.5 text-[10px] text-rose-200">FALHOU</span>}
+              <span className="text-[11px] text-slate-500">{formatDateTime(deployment.finishedAt || deployment.createdAt)}</span>
+              <Terminal className={`h-3.5 w-3.5 transition ${logOpen ? 'text-blue-400' : 'text-slate-600'}`} />
+            </button>
+
+            {logOpen && (
+              <div className="border-t border-slate-800 px-3 py-3 space-y-2">
+                {(deployment.error || deployment.deployLogError) && (
+                  <div className="rounded-md border border-rose-500/30 bg-rose-500/10 px-3 py-2 text-xs text-rose-100">
+                    {deployment.error || deployment.deployLogError}
+                  </div>
+                )}
+                {logLines.length > 0 && (
+                  <div className="max-h-48 overflow-auto rounded-md bg-black/60 p-2.5 font-mono text-[10px] leading-4 text-slate-400">
+                    {logLines.map((line, i) => <p key={i}>{line}</p>)}
+                  </div>
+                )}
+                {failed && <DeployAiDiagnosis service={service} deployment={deployment} />}
+              </div>
+            )}
+          </div>
+        )
+      })}
+
+      {totalPages > 1 && (
+        <div className="flex items-center justify-center gap-2 pt-1">
+          <button className={smallButtonClass} type="button" onClick={() => setPage(p => Math.max(0, p - 1))} disabled={page === 0}>←</button>
+          <span className="text-xs text-slate-400">{page + 1} / {totalPages}</span>
+          <button className={smallButtonClass} type="button" onClick={() => setPage(p => Math.min(totalPages - 1, p + 1))} disabled={page >= totalPages - 1}>→</button>
+        </div>
+      )}
+    </div>
+  )
+}
+
 const ServiceDeliveryTab = ({ service, onReload }) => {
   const [connectionState, setConnectionState] = useState({ connections: [], defaultConnectionId: null })
   const [token, setToken] = useState('')
@@ -2148,40 +2214,7 @@ const ServiceDeliveryTab = ({ service, onReload }) => {
 
       {(service.deployments || []).length > 0 ? (
         <Panel title="Histórico de publicações" icon={History} className="xl:col-span-2">
-          <div className="max-h-[400px] overflow-auto space-y-2">
-            {(service.deployments || []).slice(0, 20).map((deployment) => (
-              <div key={deployment.id} className={`rounded-lg border p-3 text-sm ${
-                deployment.status === 'active' ? 'border-emerald-500/20 bg-emerald-500/5' :
-                deployment.status === 'failed' ? 'border-rose-500/20 bg-rose-500/5' :
-                'border-slate-800 bg-slate-900/40'
-              }`}>
-                <div className="flex items-center justify-between gap-3">
-                  <div className="flex items-center gap-2">
-                    <span className={`inline-block h-2 w-2 rounded-full ${
-                      deployment.status === 'active' ? 'bg-emerald-400' :
-                      deployment.status === 'failed' ? 'bg-rose-400' :
-                      'bg-slate-500'
-                    }`} />
-                    <span className="font-medium text-white">{deployment.versionLabel || deployment.id?.slice(0, 8)}</span>
-                    <span className="text-xs text-slate-500">{deployment.status}</span>
-                  </div>
-                  <span className="text-xs text-slate-500">
-                    {deployment.finishedAt ? new Date(deployment.finishedAt).toLocaleString() : deployment.createdAt ? new Date(deployment.createdAt).toLocaleString() : ''}
-                  </span>
-                </div>
-                {deployment.error ? (
-                  <p className="mt-2 text-xs text-rose-300 break-all">{deployment.error}</p>
-                ) : null}
-                {deployment.progress?.length ? (
-                  <div className="mt-2 max-h-24 overflow-auto rounded bg-slate-950 p-2 font-mono text-[11px] text-slate-400">
-                    {deployment.progress.slice(-10).map((event, idx) => (
-                      <p key={idx}>{typeof event === 'string' ? event : event.message || JSON.stringify(event)}</p>
-                    ))}
-                  </div>
-                ) : null}
-              </div>
-            ))}
-          </div>
+          <DeliveryDeployHistory service={service} />
         </Panel>
       ) : null}
     </div>

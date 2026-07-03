@@ -1,4 +1,4 @@
-import { Activity, Boxes, Files, FileText, Globe, Layers3, Route, SearchCheck, Terminal, X } from 'lucide-react'
+import { Activity, Boxes, Brain, Files, FileText, Globe, Layers3, Route, SearchCheck, Terminal, X } from 'lucide-react'
 import logoNameDark from '../../assets/images/logoname.webp'
 import logoNameLight from '../../assets/images/logoname_w.webp'
 import { useTheme } from '../../app/providers/theme-provider'
@@ -30,6 +30,12 @@ const sections = [
       { to: '/domains', label: 'DNS & WAF', icon: Globe },
       { to: '/gateway', label: 'Gateway', icon: Route },
       { to: '/security', label: 'Auditoria', icon: SearchCheck },
+    ],
+  },
+  {
+    label: 'Inteligência',
+    items: [
+      { to: '/zeus-panels', label: 'Zeus AI', icon: Brain },
     ],
   },
 ]

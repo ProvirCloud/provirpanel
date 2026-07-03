@@ -15,6 +15,8 @@ const { pipeline } = require('stream/promises');
 const zlib = require('zlib');
 const tarfs = require('tar-fs');
 const multer = require('multer');
+const { runAiFixWorkflow, getAiFixJob } = require('../services/ai-fix-workflow');
+const { diagnoseDeploy, analyzeProject } = require('../services/deploy-ai');
 
 const router = express.Router();
 const upload = multer({ dest: os.tmpdir() });
@@ -5833,6 +5835,67 @@ router.get('/containers/:id/stats', async (req, res, next) => {
     next(err);
   }
 });
+
+// ─── AI Fix Routes ───────────────────────────────────────────────────────────
+
+router.post('/services/:id/ai-analyze', async (req, res, next) => {
+  try {
+    const services = dockerManager.listServices();
+    const service = services.find((s) => s.id === req.params.id);
+    if (!service) return res.status(404).json({ message: 'Service not found' });
+
+    const deployments = Array.isArray(service.deployments) ? service.deployments : [];
+    const active = deployments.find((d) => d.status === 'active');
+    const lastFailed = deployments.find((d) => d.status === 'failed');
+    const projectDir = active?.projectDir || lastFailed?.projectDir || service.volumes?.[0]?.hostPath;
+
+    const analysis = await analyzeProject({ service, projectDir });
+    res.json({ analysis });
+  } catch (err) {
+    next(err);
+  }
+});
+
+router.post('/services/:id/ai-fix', async (req, res, next) => {
+  try {
+    const services = dockerManager.listServices();
+    const service = services.find((s) => s.id === req.params.id);
+    if (!service) return res.status(404).json({ message: 'Service not found' });
+
+    const deployments = Array.isArray(service.deployments) ? service.deployments : [];
+    const lastFailed = deployments.find((d) => d.status === 'failed');
+    const projectDir = lastFailed?.projectDir || service.volumes?.[0]?.hostPath;
+
+    if (!projectDir || !fs.existsSync(projectDir)) {
+      return res.status(400).json({ message: 'Diretório do projeto não encontrado' });
+    }
+
+    const error = req.body?.error || lastFailed?.error || 'Unknown error';
+    const logs = req.body?.logs || '';
+
+    const job = await runAiFixWorkflow({
+      service,
+      deployment: lastFailed,
+      logs,
+      error,
+      projectDir
+    });
+
+    res.status(202).json({ jobId: job.id, job });
+  } catch (err) {
+    next(err);
+  }
+});
+
+router.get('/services/:id/ai-fix/jobs/:jobId', (req, res) => {
+  const job = getAiFixJob(req.params.jobId);
+  if (!job || job.serviceId !== req.params.id) {
+    return res.status(404).json({ message: 'Job não encontrado' });
+  }
+  res.json({ job });
+});
+
+// ─── Socket ──────────────────────────────────────────────────────────────────
 
 const extractToken = (handshake) => {
   if (handshake.auth && handshake.auth.token) {

@@ -12,7 +12,8 @@ import {
   Route,
   Shield,
   Layers,
-  ChevronRight
+  ChevronRight,
+  Brain
 } from 'lucide-react'
 import logoIcon from '../assets/images/logoicon.webp'
 import logoName from '../assets/images/logoname.webp'
@@ -43,6 +44,7 @@ const sections = [
     items: [
       { to: '/users',   label: 'Usuários', icon: Users },
       { to: '/email',   label: 'E-mail',   icon: Mail },
+      { to: '/zeus-panels', label: 'Zeus AI', icon: Brain },
     ]
   }
 ]
