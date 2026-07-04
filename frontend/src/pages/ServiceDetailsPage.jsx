@@ -1,10 +1,12 @@
 import { createElement, useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { useNavigate, useParams, useSearchParams } from 'react-router-dom'
+import { useConfirm } from '../components/ui/ConfirmModal'
 import {
   Activity,
   AlertTriangle,
   ArrowLeft,
   BarChart3,
+  Brain,
   CheckCircle2,
   Clock3,
   Copy,
@@ -45,11 +47,13 @@ import {
   serviceMetricsApi,
   servicesApi
 } from '../services/serviceDetailsApi.js'
+import { Send, RefreshCw, Bot } from 'lucide-react'
 import { createDockerTerminalSocket } from '../services/socket.js'
 import AiFixPanel, { DeployAiDiagnosis } from '../components/AiFixPanel.jsx'
 
 const TABS = [
   { id: 'overview', label: 'Overview', icon: Layers },
+  { id: 'ai', label: 'AI', icon: Brain },
   { id: 'deploys', label: 'Deploys', icon: UploadCloud },
   { id: 'delivery', label: 'Delivery', icon: GitBranch },
   { id: 'terminal', label: 'Terminal', icon: Terminal },
@@ -836,15 +840,64 @@ const DeployHistory = ({ service, busyVersionId, onRollback, onDownload, onRemov
   const deployments = Array.isArray(service.deployments) ? service.deployments : []
   const [openLogId, setOpenLogId] = useState('')
   const [page, setPage] = useState(0)
+  const [cleaning, setCleaning] = useState(false)
+  const confirm = useConfirm()
   const perPage = 5
   const totalPages = Math.ceil(deployments.length / perPage)
   const visible = deployments.slice(page * perPage, (page + 1) * perPage)
+  const failedCount = deployments.filter(d => d.status === 'failed').length
+  const inactiveCount = deployments.filter(d => d.status !== 'active' && d.id !== service.activeDeploymentId).length
+
+  const handleCleanFailed = async () => {
+    const ok = await confirm({ title: 'Remover deploys falhos', message: `Remover ${failedCount} deploy(s) que falharam?`, confirmText: 'Remover', variant: 'danger' })
+    if (!ok) return
+    setCleaning(true)
+    try {
+      const failed = deployments.filter(d => d.status === 'failed')
+      for (const d of failed) await onRemove(d, true)
+    } finally { setCleaning(false) }
+  }
+
+  const handleCleanOld = async () => {
+    const ok = await confirm({ title: 'Limpar versões antigas', message: `Remover ${inactiveCount} versão(ões) inativa(s)? A versão ativa será mantida.`, confirmText: 'Limpar', variant: 'danger' })
+    if (!ok) return
+    setCleaning(true)
+    try {
+      const inactive = deployments.filter(d => d.status !== 'active' && d.id !== service.activeDeploymentId)
+      for (const d of inactive) await onRemove(d, true)
+    } finally { setCleaning(false) }
+  }
 
   if (!deployments.length) {
     return <p className="text-sm text-slate-500">Nenhuma versão publicada registrada.</p>
   }
   return (
     <div className="space-y-3">
+      {/* Bulk actions */}
+      {(failedCount > 0 || inactiveCount > 1) && (
+        <div className="flex flex-wrap gap-2">
+          {failedCount > 0 && (
+            <button
+              className="inline-flex items-center gap-1.5 rounded-md border border-rose-500/30 bg-rose-500/10 px-2.5 py-1 text-[11px] font-medium text-rose-200 hover:bg-rose-500/20 disabled:opacity-50"
+              onClick={handleCleanFailed}
+              disabled={cleaning || !!busyVersionId}
+            >
+              <Trash2 className="h-3 w-3" />
+              Remover falhos ({failedCount})
+            </button>
+          )}
+          {inactiveCount > 1 && (
+            <button
+              className="inline-flex items-center gap-1.5 rounded-md border border-slate-600/50 bg-slate-800/50 px-2.5 py-1 text-[11px] font-medium text-slate-300 hover:bg-slate-700/50 disabled:opacity-50"
+              onClick={handleCleanOld}
+              disabled={cleaning || !!busyVersionId}
+            >
+              <Trash2 className="h-3 w-3" />
+              Limpar antigos ({inactiveCount})
+            </button>
+          )}
+        </div>
+      )}
       {visible.map((deployment) => {
         const active = deployment.id === service.activeDeploymentId || deployment.status === 'active'
         const failed = deployment.status === 'failed'
@@ -955,6 +1008,7 @@ const ServiceDeploysTab = ({
   const [busyVersionId, setBusyVersionId] = useState('')
   const [versionsVisible, setVersionsVisible] = useState(false)
   const mountedRef = useRef(true)
+  const confirm = useConfirm()
   const progress = deployProgress
   const deployRunning = isDeployRunning(progress)
   const deployments = Array.isArray(service.deployments) ? service.deployments : []
@@ -1186,15 +1240,19 @@ const ServiceDeploysTab = ({
     }
   }
 
-  const handleRemove = async (deployment) => {
-    if (!window.confirm(`Remover a versão ${deployment.versionLabel || deployment.id}?`)) return
+  const handleRemove = async (deployment, silent = false) => {
+    if (!silent) {
+      const ok = await confirm({ title: 'Remover versão', message: `Remover a versão ${deployment.versionLabel || deployment.id}?`, confirmText: 'Remover', variant: 'danger' })
+      if (!ok) return
+    }
     setBusyVersionId(deployment.id)
     try {
       await servicesApi.removeVersion(service.id, deployment.id)
-      await onReload()
+      if (!silent) await onReload()
     } finally {
       setBusyVersionId('')
     }
+    if (silent) await onReload()
   }
 
   return (
@@ -1675,6 +1733,158 @@ const ServiceMetricsTab = ({ service }) => {
   )
 }
 
+const ServiceAiTab = ({ service }) => {
+  const [messages, setMessages] = useState([])
+  const [input, setInput] = useState('')
+  const [loading, setLoading] = useState(false)
+  const [indexInfo, setIndexInfo] = useState(null)
+  const messagesEndRef = useRef(null)
+  const inputRef = useRef(null)
+
+  const scrollToBottom = () => messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' })
+  useEffect(scrollToBottom, [messages])
+  useEffect(() => { inputRef.current?.focus() }, [])
+
+  const sendMessage = async () => {
+    const text = input.trim()
+    if (!text || loading) return
+    setInput('')
+    setMessages(prev => [...prev, { role: 'user', content: text }])
+    setLoading(true)
+    try {
+      const history = messages.map(m => ({ role: m.role, content: m.content }))
+      const res = await githubDeliveryApi.aiChat(service.id, text, history)
+      setMessages(prev => [...prev, { role: 'assistant', content: res.answer, sources: res.sources }])
+      if (res.indexed) setIndexInfo(res.indexed)
+    } catch (err) {
+      setMessages(prev => [...prev, { role: 'assistant', content: `Erro: ${err.message}`, error: true }])
+    } finally {
+      setLoading(false)
+    }
+  }
+
+  const handleReindex = async () => {
+    setLoading(true)
+    try {
+      const res = await githubDeliveryApi.aiChatReindex(service.id)
+      setIndexInfo({ fileCount: res.fileCount, alreadyIndexed: false })
+      setMessages(prev => [...prev, { role: 'system', content: `✅ Código re-indexado: ${res.fileCount} arquivos processados (${res.chunks} chunks)` }])
+    } catch (err) {
+      setMessages(prev => [...prev, { role: 'system', content: `❌ Erro ao re-indexar: ${err.message}`, error: true }])
+    } finally {
+      setLoading(false)
+    }
+  }
+
+  return (
+    <div className="flex flex-col h-[calc(100vh-280px)] min-h-[500px]">
+      {/* Header */}
+      <div className="flex items-center justify-between px-4 py-3 border-b border-zinc-800">
+        <div className="flex items-center gap-2">
+          <Bot className="w-5 h-5 text-purple-400" />
+          <span className="text-sm font-medium text-zinc-200">Zeus AI — Conheço este projeto</span>
+          {indexInfo && (
+            <span className="text-xs text-zinc-500 ml-2">
+              {indexInfo.fileCount} arquivos indexados
+            </span>
+          )}
+        </div>
+        <button
+          onClick={handleReindex}
+          disabled={loading}
+          className="flex items-center gap-1.5 px-2.5 py-1.5 text-xs rounded bg-zinc-800 hover:bg-zinc-700 text-zinc-300 transition-colors disabled:opacity-50"
+          title="Re-indexar código do projeto"
+        >
+          <RefreshCw className={`w-3.5 h-3.5 ${loading ? 'animate-spin' : ''}`} />
+          Re-indexar
+        </button>
+      </div>
+
+      {/* Messages */}
+      <div className="flex-1 overflow-y-auto px-4 py-4 space-y-4">
+        {messages.length === 0 && (
+          <div className="flex flex-col items-center justify-center h-full text-center">
+            <Brain className="w-12 h-12 text-purple-500/30 mb-4" />
+            <p className="text-zinc-400 text-sm max-w-md">
+              Pergunte qualquer coisa sobre este projeto. A AI leu o código-fonte e pode explicar o que o sistema faz, como funciona, quais rotas tem, etc.
+            </p>
+            <div className="flex flex-wrap gap-2 mt-4 justify-center">
+              {['O que esse sistema faz?', 'Quais são as rotas/endpoints?', 'Como está a arquitetura?', 'Tem algum problema no código?'].map(q => (
+                <button
+                  key={q}
+                  onClick={() => { setInput(q); inputRef.current?.focus() }}
+                  className="px-3 py-1.5 text-xs rounded-full bg-zinc-800 hover:bg-zinc-700 text-zinc-300 transition-colors"
+                >
+                  {q}
+                </button>
+              ))}
+            </div>
+          </div>
+        )}
+        {messages.map((msg, i) => (
+          <div key={i} className={`flex ${msg.role === 'user' ? 'justify-end' : 'justify-start'}`}>
+            <div className={`max-w-[85%] rounded-lg px-4 py-3 text-sm whitespace-pre-wrap ${
+              msg.role === 'user'
+                ? 'bg-purple-600/20 text-purple-100 border border-purple-500/20'
+                : msg.role === 'system'
+                  ? 'bg-zinc-800/50 text-zinc-400 border border-zinc-700/50 text-xs'
+                  : msg.error
+                    ? 'bg-red-900/20 text-red-300 border border-red-500/20'
+                    : 'bg-zinc-800 text-zinc-200 border border-zinc-700/50'
+            }`}>
+              {msg.content}
+              {msg.sources?.length > 0 && msg.sources.some(s => s.score > 0.4) && (
+                <div className="mt-2 pt-2 border-t border-zinc-700/50">
+                  <span className="text-xs text-zinc-500">Fontes: </span>
+                  {msg.sources.filter(s => s.score > 0.4).slice(0, 3).map((s, j) => (
+                    <span key={j} className="text-xs text-zinc-500">
+                      {s.source?.replace('code:', '')}{j < 2 ? ', ' : ''}
+                    </span>
+                  ))}
+                </div>
+              )}
+            </div>
+          </div>
+        ))}
+        {loading && (
+          <div className="flex justify-start">
+            <div className="bg-zinc-800 border border-zinc-700/50 rounded-lg px-4 py-3">
+              <div className="flex items-center gap-2 text-sm text-zinc-400">
+                <Loader2 className="w-4 h-4 animate-spin" />
+                Pensando...
+              </div>
+            </div>
+          </div>
+        )}
+        <div ref={messagesEndRef} />
+      </div>
+
+      {/* Input */}
+      <div className="px-4 py-3 border-t border-zinc-800">
+        <div className="flex gap-2">
+          <input
+            ref={inputRef}
+            type="text"
+            value={input}
+            onChange={e => setInput(e.target.value)}
+            onKeyDown={e => e.key === 'Enter' && !e.shiftKey && sendMessage()}
+            placeholder="Pergunte sobre o projeto..."
+            disabled={loading}
+            className="flex-1 bg-zinc-900 border border-zinc-700 rounded-lg px-4 py-2.5 text-sm text-zinc-200 placeholder-zinc-500 focus:outline-none focus:border-purple-500/50 disabled:opacity-50"
+          />
+          <button
+            onClick={sendMessage}
+            disabled={loading || !input.trim()}
+            className="px-4 py-2.5 rounded-lg bg-purple-600 hover:bg-purple-500 text-white text-sm font-medium transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
+          >
+            <Send className="w-4 h-4" />
+          </button>
+        </div>
+      </div>
+    </div>
+  )
+}
+
 const ServiceActivityTab = ({ service }) => {
   const [events, setEvents] = useState([])
   const [level, setLevel] = useState('all')
@@ -1799,18 +2009,76 @@ const ServiceTerminalTab = ({ service }) => {
   )
 }
 
-const DeliveryDeployHistory = ({ service }) => {
+const DeliveryDeployHistory = ({ service, onReload }) => {
   const deployments = Array.isArray(service.deployments) ? service.deployments : []
   const [openLogId, setOpenLogId] = useState('')
   const [page, setPage] = useState(0)
+  const [cleaning, setCleaning] = useState(false)
+  const confirm = useConfirm()
   const perPage = 5
   const totalPages = Math.ceil(deployments.length / perPage)
   const visible = deployments.slice(page * perPage, (page + 1) * perPage)
+  const failedCount = deployments.filter(d => d.status === 'failed').length
+  const inactiveCount = deployments.filter(d => d.status !== 'active' && d.id !== service.activeDeploymentId).length
+
+  const handleRemoveSingle = async (deployment) => {
+    const ok = await confirm({ title: 'Remover versão', message: `Remover a versão ${deployment.versionLabel || deployment.id}?`, confirmText: 'Remover', variant: 'danger' })
+    if (!ok) return
+    await servicesApi.removeVersion(service.id, deployment.id)
+    if (onReload) await onReload()
+  }
+
+  const handleCleanFailed = async () => {
+    const ok = await confirm({ title: 'Remover deploys falhos', message: `Remover ${failedCount} deploy(s) que falharam?`, confirmText: 'Remover', variant: 'danger' })
+    if (!ok) return
+    setCleaning(true)
+    try {
+      const failed = deployments.filter(d => d.status === 'failed')
+      for (const d of failed) await servicesApi.removeVersion(service.id, d.id)
+      if (onReload) await onReload()
+    } finally { setCleaning(false) }
+  }
+
+  const handleCleanOld = async () => {
+    const ok = await confirm({ title: 'Limpar versões antigas', message: `Remover ${inactiveCount} versão(ões) inativa(s)? A versão ativa será mantida.`, confirmText: 'Limpar', variant: 'danger' })
+    if (!ok) return
+    setCleaning(true)
+    try {
+      const inactive = deployments.filter(d => d.status !== 'active' && d.id !== service.activeDeploymentId)
+      for (const d of inactive) await servicesApi.removeVersion(service.id, d.id)
+      if (onReload) await onReload()
+    } finally { setCleaning(false) }
+  }
 
   if (!deployments.length) return <p className="text-sm text-slate-500">Nenhuma publicação registrada.</p>
 
   return (
     <div className="space-y-2">
+      {/* Bulk actions */}
+      {(failedCount > 0 || inactiveCount > 1) && (
+        <div className="flex flex-wrap gap-2 mb-2">
+          {failedCount > 0 && (
+            <button
+              className="inline-flex items-center gap-1.5 rounded-md border border-rose-500/30 bg-rose-500/10 px-2.5 py-1 text-[11px] font-medium text-rose-200 hover:bg-rose-500/20 disabled:opacity-50"
+              onClick={handleCleanFailed}
+              disabled={cleaning}
+            >
+              <Trash2 className="h-3 w-3" />
+              Remover falhos ({failedCount})
+            </button>
+          )}
+          {inactiveCount > 1 && (
+            <button
+              className="inline-flex items-center gap-1.5 rounded-md border border-slate-600/50 bg-slate-800/50 px-2.5 py-1 text-[11px] font-medium text-slate-300 hover:bg-slate-700/50 disabled:opacity-50"
+              onClick={handleCleanOld}
+              disabled={cleaning}
+            >
+              <Trash2 className="h-3 w-3" />
+              Limpar antigos ({inactiveCount})
+            </button>
+          )}
+        </div>
+      )}
       {visible.map((deployment) => {
         const active = deployment.id === service.activeDeploymentId || deployment.status === 'active'
         const failed = deployment.status === 'failed'
@@ -1818,12 +2086,12 @@ const DeliveryDeployHistory = ({ service }) => {
         const logLines = getDeploymentLogLines(deployment)
 
         return (
-          <div key={deployment.id} className={`rounded-lg border ${
+          <div key={deployment.id} className={`relative rounded-lg border ${
             active ? 'border-emerald-500/30 bg-emerald-500/5' : failed ? 'border-rose-500/20 bg-rose-500/5' : 'border-slate-800 bg-slate-900/30'
           }`}>
             <button
               type="button"
-              className="flex w-full items-center gap-3 px-3 py-2.5 text-left"
+              className="flex w-full items-center gap-3 px-3 py-2.5 text-left pr-10"
               onClick={() => setOpenLogId(logOpen ? '' : deployment.id)}
             >
               <span className={`inline-block h-2 w-2 shrink-0 rounded-full ${
@@ -1837,6 +2105,15 @@ const DeliveryDeployHistory = ({ service }) => {
               <span className="text-[11px] text-slate-500">{formatDateTime(deployment.finishedAt || deployment.createdAt)}</span>
               <Terminal className={`h-3.5 w-3.5 transition ${logOpen ? 'text-blue-400' : 'text-slate-600'}`} />
             </button>
+            {!active && (
+              <button
+                type="button"
+                className="absolute top-2.5 right-2.5 rounded-md p-1 text-slate-600 hover:text-rose-400 hover:bg-rose-500/10"
+                onClick={(e) => { e.stopPropagation(); handleRemoveSingle(deployment) }}
+              >
+                <Trash2 className="h-3 w-3" />
+              </button>
+            )}
 
             {logOpen && (
               <div className="border-t border-slate-800 px-3 py-3 space-y-2">
@@ -1868,7 +2145,79 @@ const DeliveryDeployHistory = ({ service }) => {
   )
 }
 
+const WorkflowRunPanel = ({ run, message }) => {
+  if (!run) return null
+  const isRunning = run.status !== 'completed'
+  const isSuccess = run.conclusion === 'success'
+  const isFailed = run.conclusion === 'failure'
+  const isAiWorking = message?.includes('Zeus AI diagnosticando')
+
+  if (isRunning || isAiWorking) {
+    return (
+      <div className="rounded-xl border border-amber-500/20 bg-gradient-to-r from-amber-500/5 to-orange-500/5 p-4">
+        <div className="flex items-start gap-3">
+          <div className="mt-0.5 flex h-8 w-8 shrink-0 items-center justify-center rounded-lg bg-amber-500/15">
+            {isAiWorking ? <Brain className="h-4 w-4 text-amber-300 animate-pulse" /> : <Loader2 className="h-4 w-4 text-amber-300 animate-spin" />}
+          </div>
+          <div className="flex-1 min-w-0">
+            <p className="text-sm font-semibold text-white">
+              {isAiWorking ? '🤖 Zeus AI corrigindo falha...' : 'Workflow em execução'}
+            </p>
+            <p className="mt-1 text-xs text-amber-200/80">
+              {isAiWorking
+                ? 'A AI está analisando os logs de erro, diagnosticando o problema e aplicando correções automaticamente.'
+                : run.status === 'queued' ? 'Aguardando runner disponível...' : 'Executando steps do workflow...'}
+            </p>
+            {message && !isAiWorking ? <p className="mt-2 text-xs text-slate-400 whitespace-pre-wrap">{message}</p> : null}
+          </div>
+          {run.htmlUrl ? <a href={run.htmlUrl} target="_blank" rel="noreferrer" className="shrink-0 text-xs text-blue-400 underline hover:text-blue-300">GitHub</a> : null}
+        </div>
+        <div className="mt-3 h-1.5 overflow-hidden rounded-full bg-slate-800">
+          <div className={`h-full rounded-full transition-all duration-1000 ${isAiWorking ? 'bg-amber-500 w-3/4' : run.status === 'queued' ? 'bg-amber-500/60 w-1/4' : 'bg-amber-500 w-1/2'} animate-pulse`} />
+        </div>
+      </div>
+    )
+  }
+
+  if (isSuccess) {
+    return (
+      <div className="rounded-xl border border-emerald-500/20 bg-emerald-500/5 p-4">
+        <div className="flex items-center gap-3">
+          <div className="flex h-8 w-8 shrink-0 items-center justify-center rounded-lg bg-emerald-500/15">
+            <CheckCircle2 className="h-4 w-4 text-emerald-300" />
+          </div>
+          <div className="flex-1">
+            <p className="text-sm font-semibold text-white">✅ Deploy concluído com sucesso</p>
+            <p className="mt-0.5 text-xs text-emerald-200/70">O workflow executou todos os steps e o deploy foi publicado.</p>
+          </div>
+          {run.htmlUrl ? <a href={run.htmlUrl} target="_blank" rel="noreferrer" className="text-xs text-blue-400 underline hover:text-blue-300">Ver no GitHub</a> : null}
+        </div>
+      </div>
+    )
+  }
+
+  if (isFailed) {
+    return (
+      <div className="rounded-xl border border-rose-500/20 bg-rose-500/5 p-4">
+        <div className="flex items-start gap-3">
+          <div className="mt-0.5 flex h-8 w-8 shrink-0 items-center justify-center rounded-lg bg-rose-500/15">
+            <AlertTriangle className="h-4 w-4 text-rose-300" />
+          </div>
+          <div className="flex-1 min-w-0">
+            <p className="text-sm font-semibold text-white">❌ Workflow falhou</p>
+            {message ? <pre className="mt-2 whitespace-pre-wrap text-xs text-slate-300 bg-slate-900/60 rounded-lg p-2.5 border border-slate-800">{message}</pre> : null}
+          </div>
+          {run.htmlUrl ? <a href={run.htmlUrl} target="_blank" rel="noreferrer" className="shrink-0 text-xs text-blue-400 underline hover:text-blue-300">Ver no GitHub</a> : null}
+        </div>
+      </div>
+    )
+  }
+
+  return null
+}
+
 const ServiceDeliveryTab = ({ service, onReload }) => {
+  const confirm = useConfirm()
   const [connectionState, setConnectionState] = useState({ connections: [], defaultConnectionId: null })
   const [token, setToken] = useState('')
   const [repos, setRepos] = useState([])
@@ -1882,6 +2231,9 @@ const ServiceDeliveryTab = ({ service, onReload }) => {
   const [message, setMessage] = useState('')
   const [loadingAction, setLoadingAction] = useState('')
   const [editingToken, setEditingToken] = useState(false)
+  const [workflowRun, setWorkflowRun] = useState(null)
+  const [projectAnalysis, setProjectAnalysis] = useState(null)
+  const pollRef = useRef(null)
 
   const connectionId = connectionState.defaultConnectionId
   const activeConnection = connectionState.connections?.[0] || null
@@ -1962,7 +2314,8 @@ const ServiceDeliveryTab = ({ service, onReload }) => {
 
   const removeGithubConnection = async () => {
     if (!connectionId) return
-    if (!window.confirm('Remover a conexão GitHub salva neste painel?')) return
+    const ok = await confirm({ title: 'Remover conexão', message: 'Remover a conexão GitHub salva neste painel?', confirmText: 'Remover', variant: 'danger' })
+    if (!ok) return
     setLoadingAction('remove-connection')
     setMessage('')
     try {
@@ -2047,20 +2400,152 @@ const ServiceDeliveryTab = ({ service, onReload }) => {
     }
   }
 
+  const generateSmartBlueprint = async () => {
+    setLoadingAction('smart-blueprint')
+    setMessage('')
+    try {
+      const res = await githubDeliveryApi.smartBlueprint(service.id)
+      let msg = res.explanation || 'Blueprint gerado com base no Docker ativo.'
+      if (res.appliedUpdates?.length) msg += '\n🔧 Correções aplicadas: ' + res.appliedUpdates.join(', ')
+      if (res.workflowSaved) msg += '\n✅ Workflow atualizado no GitHub.'
+      else if (res.workflowError) msg += `\n⚠️ Workflow não salvo: ${res.workflowError}`
+      if (res.warnings?.length) msg += '\n⚠️ ' + res.warnings.join(' | ')
+      setMessage(msg)
+      await onReload()
+    } catch (err) {
+      setMessage(err.response?.data?.message || err.message || 'Falha ao gerar blueprint')
+    } finally {
+      setLoadingAction('')
+    }
+  }
+
+  const stopPolling = useCallback(() => {
+    if (pollRef.current) { clearInterval(pollRef.current); pollRef.current = null }
+  }, [])
+
+  const pollWorkflowRun = useCallback(() => {
+    stopPolling()
+    pollRef.current = setInterval(async () => {
+      try {
+        const { run } = await githubDeliveryApi.getWorkflowRunStatus(service.id)
+        setWorkflowRun(run)
+        if (!run || run.status === 'completed') {
+          stopPolling()
+          if (run?.conclusion === 'success') {
+            setMessage('✅ Workflow concluído! Deploy publicado com sucesso.')
+            await onReload()
+          }
+          if (run?.conclusion === 'failure' && run?.id) {
+            setMessage('🤖 Zeus AI diagnosticando e corrigindo...')
+            setWorkflowRun(prev => ({ ...prev, status: 'ai_fixing' }))
+            try {
+              const { diagnosis, applied, redispatched } = await githubDeliveryApi.workflowFailed(service.id, run.id)
+              const ok = (applied || []).filter(a => a.success)
+              const failed = (applied || []).filter(a => !a.success)
+              let msg = `🔍 Diagnóstico: ${diagnosis}`
+              if (ok.length) {
+                msg += `\n\n✅ ${ok.length} correção(es) aplicada(s):`
+                ok.forEach(a => { msg += `\n   • ${a.description || a.key || a.type}` })
+              }
+              if (failed.length) {
+                msg += `\n\n⚠️ ${failed.length} não aplicada(s):`
+                failed.forEach(a => { msg += `\n   • ${a.description || a.key}: ${a.reason}` })
+              }
+              if (redispatched) {
+                msg += '\n\n⚡ Workflow re-disparado automaticamente. Aguardando...'
+                setWorkflowRun({ status: 'queued', conclusion: null })
+                setTimeout(() => pollWorkflowRun(), 8000)
+              } else if (!ok.length) {
+                setWorkflowRun({ ...run, status: 'completed', conclusion: 'failure' })
+              }
+              setMessage(msg)
+              await onReload()
+            } catch (fixErr) {
+              setMessage(`❌ Workflow falhou. AI não conseguiu corrigir: ${fixErr.message}`)
+              setWorkflowRun({ ...run, status: 'completed', conclusion: 'failure' })
+            }
+          }
+        }
+      } catch { stopPolling() }
+    }, 5000)
+  }, [service.id, onReload, stopPolling])
+
+  useEffect(() => () => stopPolling(), [stopPolling])
+
   const dispatchWorkflow = async () => {
     setLoadingAction('dispatch')
     setMessage('')
+    setWorkflowRun(null)
     try {
+      // AI pre-validation with auto-fix (non-blocking)
+      try {
+        setMessage('🔍 Validando configuração antes do deploy...')
+        const { validation, applied } = await githubDeliveryApi.aiValidate(service.id, true)
+        if (applied?.some(a => a.success)) {
+          setMessage('🔧 Correções aplicadas. Disparando workflow...')
+          await onReload()
+        }
+        if (!validation.ready) {
+          const critical = (validation.issues || []).filter(i => i.severity === 'critical')
+          if (critical.length) {
+            setMessage(`⚠️ ${critical.map(i => i.message).join('; ')} — disparando mesmo assim...`)
+          }
+        }
+      } catch {
+        // Validation failed — proceed
+      }
+
       await githubDeliveryApi.dispatchWorkflow(service.id, {
         connectionId,
         repository: selectedRepo || service.delivery?.repository,
         branch: selectedBranch || service.delivery?.branch,
         workflowPath: service.delivery?.workflowPath || workflow?.path
       })
-      setMessage('Workflow manual disparado no GitHub.')
+      setMessage('⚡ Workflow disparado. Acompanhando execução...')
+      setWorkflowRun({ status: 'queued', conclusion: null })
+      setTimeout(() => pollWorkflowRun(), 3000)
       await onReload()
     } catch (err) {
       setMessage(err.response?.data?.message || err.message || 'Falha ao disparar workflow')
+    } finally {
+      setLoadingAction('')
+    }
+  }
+
+  const validateAndFix = async () => {
+    setLoadingAction('validate')
+    setMessage('')
+    try {
+      const { validation, applied } = await githubDeliveryApi.aiValidate(service.id, true)
+      let msg = validation.summary || ''
+      if (applied?.length) {
+        const ok = applied.filter(a => a.success)
+        if (ok.length) msg += `\n🔧 ${ok.length} correção(s) aplicada(s): ${ok.map(a => a.reason || a.field).join(', ')}`
+      }
+      if (validation.issues?.length) {
+        const critical = validation.issues.filter(i => i.severity === 'critical')
+        const warnings = validation.issues.filter(i => i.severity === 'warning')
+        if (critical.length) msg += `\n❌ ${critical.length} problema(s) crítico(s): ${critical.map(i => i.message).join('; ')}`
+        if (warnings.length) msg += `\n⚠️ ${warnings.length} aviso(s): ${warnings.map(i => i.message).join('; ')}`
+      }
+      if (validation.ready) msg += '\n✅ Serviço pronto para deploy.'
+      setMessage(msg)
+      if (applied?.some(a => a.success)) await onReload()
+    } catch (err) {
+      setMessage(err.response?.data?.message || err.message || 'Falha na validação')
+    } finally {
+      setLoadingAction('')
+    }
+  }
+
+  const runProjectAnalysis = async () => {
+    setLoadingAction('project-analysis')
+    setProjectAnalysis(null)
+    try {
+      const { analysis } = await githubDeliveryApi.aiProjectAnalysis(service.id)
+      setProjectAnalysis(analysis)
+    } catch (err) {
+      setMessage(err.response?.data?.message || err.message || 'Falha na análise')
     } finally {
       setLoadingAction('')
     }
@@ -2132,7 +2617,15 @@ const ServiceDeliveryTab = ({ service, onReload }) => {
               Analisar projeto
             </button>
           </div>
-          {message ? <p className="rounded-lg border border-slate-800 bg-slate-900 px-3 py-2 text-sm text-slate-300">{message}</p> : null}
+          {message ? (
+            <div className={`rounded-xl border p-3 text-sm whitespace-pre-wrap font-sans ${
+              message.includes('✅') ? 'border-emerald-500/20 bg-emerald-500/5 text-emerald-100' :
+              message.includes('❌') ? 'border-rose-500/20 bg-rose-500/5 text-rose-100' :
+              message.includes('🤖') || message.includes('🔍') ? 'border-amber-500/20 bg-amber-500/5 text-amber-100' :
+              message.includes('⚠️') ? 'border-amber-500/20 bg-amber-500/5 text-amber-100' :
+              'border-slate-800 bg-slate-900 text-slate-300'
+            }`}>{message}</div>
+          ) : null}
         </div>
       </Panel>
 
@@ -2180,6 +2673,10 @@ const ServiceDeliveryTab = ({ service, onReload }) => {
           )}
 
           <div className="flex flex-wrap gap-2">
+            <button className={smallButtonClass} type="button" onClick={generateSmartBlueprint} disabled={loadingAction === 'smart-blueprint'}>
+              {loadingAction === 'smart-blueprint' ? <Loader2 className="h-4 w-4 animate-spin" /> : <Brain className="h-4 w-4" />}
+              Blueprint Inteligente
+            </button>
             <button className={smallButtonClass} type="button" onClick={saveDelivery} disabled={!selectedBlueprint || loadingAction === 'save'}>
               <Save className="h-4 w-4" />
               Salvar vínculo
@@ -2192,6 +2689,14 @@ const ServiceDeliveryTab = ({ service, onReload }) => {
               {loadingAction === 'save-workflow' ? <Loader2 className="h-4 w-4 animate-spin" /> : <UploadCloud className="h-4 w-4" />}
               Salvar workflow no GitHub
             </button>
+            <button className={smallButtonClass} type="button" onClick={validateAndFix} disabled={loadingAction === 'validate'}>
+              {loadingAction === 'validate' ? <Loader2 className="h-4 w-4 animate-spin" /> : <ShieldCheck className="h-4 w-4" />}
+              Validar
+            </button>
+            <button className={smallButtonClass} type="button" onClick={runProjectAnalysis} disabled={loadingAction === 'project-analysis'}>
+              {loadingAction === 'project-analysis' ? <Loader2 className="h-4 w-4 animate-spin" /> : <Brain className="h-4 w-4" />}
+              Diagnóstico AI
+            </button>
             <button className={smallButtonClass} type="button" onClick={dispatchWorkflow} disabled={!(service.delivery?.workflowPath || workflow?.path) || loadingAction === 'dispatch'}>
               {loadingAction === 'dispatch' ? <Loader2 className="h-4 w-4 animate-spin" /> : <Play className="h-4 w-4" />}
               Executar workflow
@@ -2202,6 +2707,8 @@ const ServiceDeliveryTab = ({ service, onReload }) => {
             <textarea className={`${fieldClass} h-80 w-full font-mono text-xs`} value={workflow.content} readOnly />
           ) : null}
 
+          {workflowRun ? <WorkflowRunPanel run={workflowRun} message={message} /> : null}
+
           {service.delivery?.workflowUpdatedAt || service.delivery?.lastWorkflowDispatchAt ? (
             <div className="rounded-lg border border-slate-800 bg-slate-900/40 p-3 text-xs text-slate-400 space-y-1">
               {service.delivery.workflowUpdatedAt ? <p>Workflow atualizado: {new Date(service.delivery.workflowUpdatedAt).toLocaleString()}</p> : null}
@@ -2209,12 +2716,90 @@ const ServiceDeliveryTab = ({ service, onReload }) => {
               {service.delivery.workflowHtmlUrl ? <p><a href={service.delivery.workflowHtmlUrl} target="_blank" rel="noreferrer" className="text-blue-400 underline hover:text-blue-300">Ver workflow no GitHub</a></p> : null}
             </div>
           ) : null}
+
+          {projectAnalysis ? (
+            <div className="space-y-3 rounded-xl border border-indigo-500/20 bg-indigo-500/5 p-4">
+              <div className="flex items-center justify-between">
+                <h4 className="flex items-center gap-2 text-sm font-semibold text-indigo-200">
+                  <Brain className="h-4 w-4" />
+                  Diagnóstico do Projeto
+                </h4>
+                <button onClick={() => setProjectAnalysis(null)} className="text-slate-500 hover:text-slate-300"><X className="h-4 w-4" /></button>
+              </div>
+              <p className="text-xs text-slate-300">{projectAnalysis.summary}</p>
+              <div className="flex items-center gap-2">
+                <span className={`rounded-full px-2 py-0.5 text-[10px] font-bold ${projectAnalysis.canRun ? 'bg-green-500/20 text-green-300' : 'bg-red-500/20 text-red-300'}`}>
+                  {projectAnalysis.canRun ? '✅ Pronto para rodar' : '❌ Precisa de ações'}
+                </span>
+                <span className="text-[10px] text-slate-500">{projectAnalysis.projectType}</span>
+              </div>
+
+              {projectAnalysis.actions?.length ? (
+                <div className="space-y-2">
+                  <p className="text-[11px] font-semibold text-blue-300">Ações necessárias ({projectAnalysis.actions.length}):</p>
+                  {projectAnalysis.actions.sort((a, b) => (a.priority || 99) - (b.priority || 99)).map((action, i) => (
+                    <div key={i} className="rounded-lg border border-slate-700/50 bg-slate-800/50 p-2.5 space-y-1.5">
+                      <div className="flex items-center gap-2">
+                        <span className={`h-5 w-5 flex items-center justify-center rounded text-[10px] font-bold ${
+                          action.type === 'create_service' ? 'bg-blue-500/20 text-blue-300' :
+                          action.type === 'update_env' ? 'bg-amber-500/20 text-amber-300' :
+                          action.type === 'update_command' ? 'bg-purple-500/20 text-purple-300' :
+                          action.type === 'fix_config' ? 'bg-cyan-500/20 text-cyan-300' :
+                          'bg-slate-600/30 text-slate-400'
+                        }`}>{action.priority || i + 1}</span>
+                        <span className="text-xs font-medium text-slate-200">{action.title}</span>
+                        <span className="rounded bg-slate-700 px-1.5 py-0.5 text-[10px] text-slate-400">{action.type.replace('_', ' ')}</span>
+                        {action.autoApply && <span className="text-[10px] text-green-400">⚡ auto</span>}
+                      </div>
+                      <p className="text-[11px] text-slate-400 pl-7">{action.description}</p>
+                      {action.config?.image && (
+                        <p className="text-[10px] text-slate-500 pl-7">Imagem: <code className="text-blue-300">{action.config.image}</code>{action.config.containerPort ? ` · Porta: ${action.config.containerPort}` : ''}</p>
+                      )}
+                      {action.config?.key && (
+                        <p className="text-[10px] text-slate-500 pl-7"><code className="text-amber-200">{action.config.key}</code> = <code className="text-green-300">{action.config.value}</code></p>
+                      )}
+                      {action.config?.command && (
+                        <p className="text-[10px] text-slate-500 pl-7 font-mono">{action.config.command}</p>
+                      )}
+                    </div>
+                  ))}
+                  <button
+                    className="w-full rounded-lg border border-indigo-500/30 bg-indigo-500/10 px-3 py-2 text-xs font-medium text-indigo-200 transition hover:bg-indigo-500/20"
+                    onClick={async () => {
+                      setLoadingAction('apply-actions')
+                      try {
+                        const autoActions = projectAnalysis.actions.filter(a => a.autoApply)
+                        for (const action of autoActions) {
+                          if (action.type === 'update_env' && action.config?.key) {
+                            await githubDeliveryApi.aiApplyFixes(service.id, [{ type: 'env', field: action.config.key, newValue: action.config.value, reason: action.title }])
+                          } else if (action.type === 'update_command' && action.config?.command) {
+                            await githubDeliveryApi.aiApplyFixes(service.id, [{ type: 'command', newValue: action.config.command, reason: action.title }])
+                          } else if (action.type === 'update_healthcheck' && action.config) {
+                            await githubDeliveryApi.aiApplyFixes(service.id, [{ type: 'healthcheck', newValue: JSON.stringify({ enabled: true, target: action.config.target || '/', intervalSeconds: action.config.intervalSeconds || 10, timeoutSeconds: 5, retries: 6, startPeriodSeconds: 5 }), reason: action.title }])
+                          }
+                        }
+                        setMessage(`✅ ${autoActions.length} ação(ões) aplicada(s) automaticamente.`)
+                        await onReload()
+                      } catch (err) {
+                        setMessage(err.message || 'Erro ao aplicar ações')
+                      } finally {
+                        setLoadingAction('')
+                      }
+                    }}
+                    disabled={loadingAction === 'apply-actions' || !projectAnalysis.actions.some(a => a.autoApply)}
+                  >
+                    {loadingAction === 'apply-actions' ? 'Aplicando...' : `⚡ Aplicar ${projectAnalysis.actions.filter(a => a.autoApply).length} ação(ões) automática(s)`}
+                  </button>
+                </div>
+              ) : null}
+            </div>
+          ) : null}
         </div>
       </Panel>
 
       {(service.deployments || []).length > 0 ? (
         <Panel title="Histórico de publicações" icon={History} className="xl:col-span-2">
-          <DeliveryDeployHistory service={service} />
+          <DeliveryDeployHistory service={service} onReload={onReload} />
         </Panel>
       ) : null}
     </div>
@@ -2574,6 +3159,7 @@ const ServiceDetailsPage = () => {
       <ServiceTabs activeTab={activeTab} onChange={setActiveTab} />
 
       {activeTab === 'overview' ? <ServiceOverviewTab service={service} detail={detail} activity={activity} /> : null}
+      {activeTab === 'ai' ? <ServiceAiTab service={service} /> : null}
       {activeTab === 'deploys' ? (
         <ServiceDeploysTab
           service={service}

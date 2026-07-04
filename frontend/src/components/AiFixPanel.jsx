@@ -1,7 +1,8 @@
 import { useState, useCallback, useRef, useEffect } from 'react'
 import {
   Brain, GitBranch, CheckCircle2, XCircle, Loader2, Zap,
-  AlertTriangle, Beaker, GitMerge, FileCode, Lightbulb, ShieldAlert
+  AlertTriangle, Beaker, GitMerge, FileCode, Lightbulb, ShieldAlert,
+  Send, MessageCircle
 } from 'lucide-react'
 import { servicesApi } from '../services/serviceDetailsApi.js'
 
@@ -10,8 +11,8 @@ const PHASE_META = {
   plan: { icon: Lightbulb, label: 'Plano', color: 'text-amber-400', bg: 'bg-amber-500/10' },
   branch: { icon: GitBranch, label: 'Branch', color: 'text-blue-400', bg: 'bg-blue-500/10' },
   fix: { icon: FileCode, label: 'Correção', color: 'text-orange-400', bg: 'bg-orange-500/10' },
-  test: { icon: Beaker, label: 'Teste', color: 'text-cyan-400', bg: 'bg-cyan-500/10' },
-  merge: { icon: GitMerge, label: 'Merge', color: 'text-green-400', bg: 'bg-green-500/10' },
+  test: { icon: Zap, label: 'Deploy', color: 'text-cyan-400', bg: 'bg-cyan-500/10' },
+  merge: { icon: CheckCircle2, label: 'Resultado', color: 'text-green-400', bg: 'bg-green-500/10' },
   discard: { icon: XCircle, label: 'Descarte', color: 'text-rose-400', bg: 'bg-rose-500/10' },
   result: { icon: CheckCircle2, label: 'Resultado', color: 'text-slate-400', bg: 'bg-slate-500/10' },
   error: { icon: AlertTriangle, label: 'Erro', color: 'text-rose-400', bg: 'bg-rose-500/10' }
@@ -25,12 +26,88 @@ const StepStatus = ({ step }) => {
   return <div className="h-3.5 w-3.5 rounded-full border border-slate-600" />
 }
 
+// Chat box for asking AI questions about the project
+function AiChatBox({ serviceId }) {
+  const [messages, setMessages] = useState([])
+  const [input, setInput] = useState('')
+  const [loading, setLoading] = useState(false)
+  const scrollRef = useRef(null)
+
+  useEffect(() => {
+    if (scrollRef.current) scrollRef.current.scrollTop = scrollRef.current.scrollHeight
+  }, [messages])
+
+  const send = async () => {
+    const q = input.trim()
+    if (!q || loading) return
+    setInput('')
+    setMessages(prev => [...prev, { role: 'user', text: q }])
+    setLoading(true)
+    try {
+      const { answer } = await servicesApi.aiChat(serviceId, q)
+      setMessages(prev => [...prev, { role: 'ai', text: answer }])
+    } catch (err) {
+      setMessages(prev => [...prev, { role: 'ai', text: `Erro: ${err.response?.data?.message || err.message}` }])
+    } finally {
+      setLoading(false)
+    }
+  }
+
+  return (
+    <div className="mt-3 border-t border-slate-700/50 pt-3">
+      <div className="flex items-center gap-1.5 mb-2">
+        <MessageCircle className="h-3 w-3 text-purple-400" />
+        <span className="text-[10px] font-semibold uppercase text-purple-300">Perguntar à AI sobre o projeto</span>
+      </div>
+
+      {messages.length > 0 && (
+        <div ref={scrollRef} className="max-h-48 overflow-y-auto space-y-2 mb-2 pr-1">
+          {messages.map((msg, i) => (
+            <div key={i} className={`text-[11px] leading-relaxed rounded-md px-2.5 py-1.5 ${
+              msg.role === 'user'
+                ? 'bg-purple-500/10 text-purple-100 ml-6'
+                : 'bg-slate-800/80 text-slate-300 mr-6'
+            }`}>
+              <pre className="whitespace-pre-wrap font-sans">{msg.text}</pre>
+            </div>
+          ))}
+          {loading && (
+            <div className="flex items-center gap-1.5 text-[11px] text-slate-500 mr-6">
+              <Loader2 className="h-3 w-3 animate-spin" /> Pensando...
+            </div>
+          )}
+        </div>
+      )}
+
+      <div className="flex gap-1.5">
+        <input
+          type="text"
+          value={input}
+          onChange={e => setInput(e.target.value)}
+          onKeyDown={e => e.key === 'Enter' && send()}
+          placeholder="Ex: O que esse projeto faz? / Por que esse erro acontece?"
+          className="flex-1 rounded-md border border-slate-700 bg-slate-900 px-2.5 py-1.5 text-[11px] text-slate-200 placeholder-slate-600 outline-none focus:border-purple-500/50"
+          disabled={loading}
+        />
+        <button
+          onClick={send}
+          disabled={loading || !input.trim()}
+          className="rounded-md border border-purple-500/30 bg-purple-500/10 px-2 py-1.5 text-purple-300 transition hover:bg-purple-500/20 disabled:opacity-40"
+        >
+          <Send className="h-3.5 w-3.5" />
+        </button>
+      </div>
+    </div>
+  )
+}
+
 // Inline AI analysis shown inside a failed deploy log
 export function DeployAiDiagnosis({ service, deployment }) {
   const [analysis, setAnalysis] = useState(null)
   const [fixJob, setFixJob] = useState(null)
   const [loading, setLoading] = useState('')
   const [error, setError] = useState('')
+  const [cached, setCached] = useState(false)
   const pollingRef = useRef(null)
   const mountedRef = useRef(true)
 
@@ -38,6 +115,16 @@ export function DeployAiDiagnosis({ service, deployment }) {
     mountedRef.current = false
     if (pollingRef.current) clearInterval(pollingRef.current)
   }, [])
+
+  // Load cached analysis on mount
+  useEffect(() => {
+    servicesApi.aiGetAnalysis(service.id).then(data => {
+      if (mountedRef.current && data.analysis) {
+        setAnalysis(data.analysis)
+        setCached(true)
+      }
+    }).catch(() => {})
+  }, [service.id])
 
   const pollJob = useCallback((jobId) => {
     if (pollingRef.current) clearInterval(pollingRef.current)
@@ -57,12 +144,13 @@ export function DeployAiDiagnosis({ service, deployment }) {
     }, 1500)
   }, [service.id])
 
-  const runAnalyze = async () => {
+  const runAnalyze = async (force = false) => {
     setLoading('analyze')
     setError('')
     setAnalysis(null)
+    setCached(false)
     try {
-      const { analysis: result } = await servicesApi.aiAnalyze(service.id)
+      const { analysis: result } = await servicesApi.aiAnalyze(service.id, force)
       if (mountedRef.current) setAnalysis(result)
     } catch (err) {
       if (mountedRef.current) setError(err.response?.data?.message || err.message)
@@ -104,11 +192,11 @@ export function DeployAiDiagnosis({ service, deployment }) {
         <div className="ml-auto flex gap-2">
           <button
             className="inline-flex items-center gap-1.5 rounded-md border border-purple-500/30 bg-purple-500/10 px-2.5 py-1 text-[11px] font-medium text-purple-200 transition hover:bg-purple-500/20 disabled:opacity-50"
-            onClick={runAnalyze}
+            onClick={() => runAnalyze(!!analysis)}
             disabled={!!loading || jobRunning}
           >
             {loading === 'analyze' ? <Loader2 className="h-3 w-3 animate-spin" /> : <Brain className="h-3 w-3" />}
-            Diagnosticar
+            {analysis ? 'Re-diagnosticar' : 'Diagnosticar'}
           </button>
           <button
             className="inline-flex items-center gap-1.5 rounded-md border border-green-500/30 bg-green-500/10 px-2.5 py-1 text-[11px] font-medium text-green-200 transition hover:bg-green-500/20 disabled:opacity-50"
@@ -128,10 +216,15 @@ export function DeployAiDiagnosis({ service, deployment }) {
       {/* Analysis result */}
       {analysis && !fixJob && (
         <div className="rounded-lg border border-slate-700/50 bg-slate-900/80 p-3 space-y-2.5">
+          {cached && (
+            <span className="inline-flex items-center gap-1 text-[9px] uppercase text-slate-500 bg-slate-800 rounded px-1.5 py-0.5">
+              salvo
+            </span>
+          )}
           {analysis.summary && (
             <p className="text-xs font-medium text-slate-200">{analysis.summary}</p>
           )}
-          <p className="text-[11px] text-slate-400">{analysis.diagnosis}</p>
+          <p className="text-[11px] text-slate-400">{typeof analysis.diagnosis === 'string' ? analysis.diagnosis : JSON.stringify(analysis.diagnosis)}</p>
 
           {analysis.misconfigurations?.length > 0 && (
             <div className="space-y-1">
@@ -177,6 +270,9 @@ export function DeployAiDiagnosis({ service, deployment }) {
               <span className="text-[10px] text-purple-300">{Math.round(analysis.confidence * 100)}% confiança</span>
             </div>
           )}
+
+          {/* Chat input */}
+          <AiChatBox serviceId={service.id} />
         </div>
       )}
 

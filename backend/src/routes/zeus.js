@@ -79,7 +79,7 @@ router.post('/chat', async (req, res, next) => {
     if (!message) return res.status(400).json({ error: 'message is required' });
 
     // Detect if the question is about infrastructure/panel
-    const infraKeywords = /site|container|docker|nginx|servidor|servi[cç]o|painel|stack|deploy|ssl|https|banco|database|m[eé]trica|cpu|ram|disco|log|porta|dom[ií]nio|dns|status|rodando|ativo|offline|erro|problema|health/i;
+    const infraKeywords = /site|container|docker|nginx|servidor|servi[cç]o|painel|stack|deploy|ssl|https|banco|database|m[eé]trica|cpu|ram|disco|log|porta|dom[ií]nio|dns|status|rodando|ativo|offline|erro|problema|health|vers[aã]o|version|changelog|mudou|mudan[cç]a|atualiza[cç]ão|novo|nova/i;
     const isInfraQuestion = infraKeywords.test(message);
 
     let contextText = '';

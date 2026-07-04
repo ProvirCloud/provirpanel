@@ -579,7 +579,7 @@ class GitHubDeliveryManager {
         '            -F "archive=@.provirpanel-release/app.jar" \\',
         '            -F "autoRollback=true" \\',
         `${formJson('healthcheck', blueprint.healthcheck || {})} \\`,
-        formJson('versionMetadata', { mode: 'auto', changeType: 'feature' })
+        formJson('versionMetadata', { mode: 'auto', changeType: 'feature', commitSha: '${{ github.sha }}' })
       );
       return base.join('\n') + '\n';
     }
@@ -619,7 +619,7 @@ class GitHubDeliveryManager {
         `            -F "nodeServiceMode=sites" \\`,
         `${formJson('nodeSiteConfig', blueprint.nodeSiteConfig || { siteType: 'spa', siteFolder: 'publish', fallbackFile: 'index.html' })} \\`,
         `${formJson('healthcheck', blueprint.healthcheck || {})} \\`,
-        formJson('versionMetadata', { mode: 'auto', changeType: 'content' })
+        formJson('versionMetadata', { mode: 'auto', changeType: 'content', commitSha: '${{ github.sha }}' })
       );
       return base.join('\n') + '\n';
     }
@@ -639,7 +639,7 @@ class GitHubDeliveryManager {
       '            -F "archive=@.provirpanel-release/source.tgz" \\',
       '            -F "autoRollback=true" \\',
       `${formJson('healthcheck', blueprint.healthcheck || {})} \\`,
-      formJson('versionMetadata', { mode: 'auto', changeType: 'feature' })
+      formJson('versionMetadata', { mode: 'auto', changeType: 'feature', commitSha: '${{ github.sha }}' })
     );
     return base.join('\n') + '\n';
   }
@@ -711,6 +711,145 @@ class GitHubDeliveryManager {
       ref,
       dispatchedAt: new Date().toISOString()
     };
+  }
+
+  async getLatestWorkflowRun({ connectionId = null, owner, repo, workflowPath, branch }) {
+    const connection = this.getConnection(connectionId);
+    const workflowId = basenamePosix(workflowPath || '');
+    if (!workflowId) return null;
+    const response = await this.githubRequest(
+      connection,
+      'GET',
+      `/repos/${owner}/${repo}/actions/workflows/${encodeURIComponent(workflowId)}/runs`,
+      { params: { branch, per_page: 1 } }
+    );
+    const run = response?.data?.workflow_runs?.[0];
+    if (!run) return null;
+    return {
+      id: run.id,
+      status: run.status,
+      conclusion: run.conclusion,
+      createdAt: run.created_at,
+      updatedAt: run.updated_at,
+      htmlUrl: run.html_url
+    };
+  }
+
+  /**
+   * Get failed workflow run logs (job steps + annotations)
+   */
+  async getWorkflowRunFailureLogs({ connectionId = null, owner, repo, runId }) {
+    const connection = this.getConnection(connectionId);
+    try {
+      const jobsRes = await this.githubRequest(connection, 'GET', `/repos/${owner}/${repo}/actions/runs/${runId}/jobs`);
+      const jobs = jobsRes?.data?.jobs || [];
+      const lines = [];
+      for (const job of jobs) {
+        if (job.conclusion !== 'failure') continue;
+        lines.push(`Job: ${job.name} - FAILED`);
+        for (const step of (job.steps || [])) {
+          if (step.conclusion === 'failure') {
+            lines.push(`  Step FAILED: ${step.name}`);
+          }
+        }
+        // Get annotations (error messages)
+        try {
+          const annRes = await this.githubRequest(connection, 'GET', `/repos/${owner}/${repo}/check-runs/${job.id}/annotations`);
+          for (const ann of (annRes?.data || [])) {
+            if (ann.annotation_level === 'failure' || ann.annotation_level === 'warning') {
+              lines.push(`  ${ann.annotation_level}: ${ann.message || ann.raw_details || ''}`.slice(0, 300));
+            }
+          }
+        } catch { /* annotations not available */ }
+        // Get actual job logs (text output)
+        try {
+          const token = this.decrypt(connection.tokenEncrypted);
+          const logRes = await axios.get(`${GITHUB_API}/repos/${owner}/${repo}/actions/jobs/${job.id}/logs`, {
+            headers: { Authorization: `Bearer ${token}`, Accept: 'application/vnd.github+json' },
+            maxRedirects: 5, timeout: 15000, responseType: 'text'
+          });
+          if (logRes.data) {
+            // Extract last 150 lines (most relevant for errors)
+            const logLines = String(logRes.data).split('\n');
+            const tail = logLines.slice(-150).join('\n');
+            lines.push(`  --- Job Logs (last 150 lines) ---`);
+            lines.push(tail);
+          }
+        } catch { /* logs download not available */ }
+      }
+      return lines.join('\n') || 'No failure details available';
+    } catch (err) {
+      return `Failed to fetch logs: ${err.message}`;
+    }
+  }
+
+  /**
+   * Get commits between two SHAs (for changelog generation)
+   */
+  async getCommitsBetween({ connectionId = null, owner, repo, baseSha, headSha }) {
+    const connection = this.getConnection(connectionId);
+    try {
+      const response = await this.githubRequest(
+        connection,
+        'GET',
+        `/repos/${owner}/${repo}/compare/${baseSha}...${headSha}`,
+        { timeout: 15000 }
+      );
+      const commits = (response?.data?.commits || []).map(c => ({
+        sha: c.sha?.slice(0, 7),
+        message: (c.commit?.message || '').split('\n')[0].slice(0, 120),
+        author: c.commit?.author?.name || c.author?.login || 'unknown',
+        date: c.commit?.author?.date
+      }));
+      return { commits, totalCommits: response?.data?.total_commits || commits.length };
+    } catch {
+      return { commits: [], totalCommits: 0 };
+    }
+  }
+
+  /**
+   * Get recent commits on a branch (fallback when no base SHA)
+   */
+  async getRecentCommits({ connectionId = null, owner, repo, branch = 'main', count = 10 }) {
+    const connection = this.getConnection(connectionId);
+    try {
+      const response = await this.githubRequest(
+        connection,
+        'GET',
+        `/repos/${owner}/${repo}/commits`,
+        { params: { sha: branch, per_page: count } }
+      );
+      return (response?.data || []).map(c => ({
+        sha: c.sha?.slice(0, 7),
+        message: (c.commit?.message || '').split('\n')[0].slice(0, 120),
+        author: c.commit?.author?.name || c.author?.login || 'unknown',
+        date: c.commit?.author?.date
+      }));
+    } catch {
+      return [];
+    }
+  }
+
+  /**
+   * Set a repository secret (Actions secret) using libsodium for encryption
+   */
+  async setRepositorySecret({ connectionId = null, owner, repo, secretName, secretValue }) {
+    const connection = this.getConnection(connectionId);
+    // Get repo public key for encrypting secrets
+    const keyRes = await this.githubRequest(connection, 'GET', `/repos/${owner}/${repo}/actions/secrets/public-key`);
+    const { key: publicKey, key_id } = keyRes.data;
+    // Encrypt using libsodium sealed box
+    const sodium = require('libsodium-wrappers');
+    await sodium.ready;
+    const keyBytes = sodium.from_base64(publicKey, sodium.base64_variants.ORIGINAL);
+    const messageBytes = sodium.from_string(secretValue);
+    const encrypted = sodium.crypto_box_seal(messageBytes, keyBytes);
+    const encryptedBase64 = sodium.to_base64(encrypted, sodium.base64_variants.ORIGINAL);
+    // Create or update the secret
+    await this.githubRequest(connection, 'PUT', `/repos/${owner}/${repo}/actions/secrets/${secretName}`, {
+      data: { encrypted_value: encryptedBase64, key_id }
+    });
+    return { secretName, created: true };
   }
 
   normalizeServiceName(value, fallback) {

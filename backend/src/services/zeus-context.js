@@ -43,6 +43,16 @@ const collectLocalContext = async (api, token, hostHeader) => {
       ports: s.ports,
       group: s.group
     }));
+
+    // Collect changelogs for services with recent deploys
+    for (const s of services.slice(0, 10)) {
+      if (!s.id) continue;
+      const clData = await safeFetch(`${api}/docker/services/${s.id}/changelog?limit=3`);
+      if (clData?.changelog?.length) {
+        if (!context.changelogs) context.changelogs = [];
+        context.changelogs.push({ service: s.name, entries: clData.changelog });
+      }
+    }
   }
 
   // Metrics
@@ -115,6 +125,20 @@ const formatContextForPrompt = (context, panelName) => {
       if (s.proxyPass) line += ` | proxy_pass: ${s.proxyPass}`;
       if (s.listen) line += ` | listen: ${s.listen}`;
       parts.push(line);
+    });
+    parts.push('');
+  }
+
+  if (context.changelogs && context.changelogs.length) {
+    parts.push('### Changelogs recentes dos serviços:');
+    context.changelogs.forEach(cl => {
+      parts.push(`\n**${cl.service}**:`);
+      cl.entries.forEach(entry => {
+        parts.push(`  Versão ${entry.version} (${entry.promotedAt ? new Date(entry.promotedAt).toLocaleDateString('pt-BR') : '?'}):`);
+        (entry.commits || []).forEach(c => {
+          parts.push(`    - ${c.message} (${c.author})`);
+        });
+      });
     });
     parts.push('');
   }

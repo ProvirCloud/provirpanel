@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
-import { Copy, Plus, RefreshCw, Trash2, Wifi, WifiOff } from 'lucide-react'
+import { Copy, Maximize2, Minimize2, Plus, RefreshCw, Trash2, Wifi, WifiOff } from 'lucide-react'
 import { Terminal as TerminalIcon } from 'lucide-react'
 import { Terminal as XTerm } from 'xterm'
 import { FitAddon } from '@xterm/addon-fit'
@@ -111,21 +111,18 @@ const Terminal = ({ showPageIntro = true }) => {
   const initialTab = useMemo(() => createTab(1), [])
   const [tabs, setTabs] = useState(() => [initialTab])
   const [activeId, setActiveId] = useState(initialTab.id)
+  const [isExpanded, setIsExpanded] = useState(false)
   const tabsRef = useRef([initialTab])
   const terminalsRef = useRef(new Map())
   const fitAddonsRef = useRef(new Map())
   const socketsRef = useRef(new Map())
   const containersRef = useRef(new Map())
   const observersRef = useRef(new Map())
-  const pasteHandlersRef = useRef(new Map())
   const lastOutputRef = useRef(new Map())
 
   useEffect(() => {
     tabsRef.current = tabs
-    if (tabs.length > 0 && !tabs.some((tab) => tab.id === activeId)) {
-      setActiveId(tabs[0].id)
-    }
-  }, [activeId, tabs])
+  }, [tabs])
 
   const updateTab = useCallback((id, updates) => {
     setTabs((currentTabs) => currentTabs.map((tab) => (
@@ -199,13 +196,6 @@ const Terminal = ({ showPageIntro = true }) => {
       observersRef.current.delete(id)
     }
 
-    const container = containersRef.current.get(id)
-    const pasteHandler = pasteHandlersRef.current.get(id)
-    if (container && pasteHandler) {
-      container.removeEventListener('paste', pasteHandler)
-    }
-
-    pasteHandlersRef.current.delete(id)
     containersRef.current.delete(id)
 
     const terminal = terminalsRef.current.get(id)
@@ -309,42 +299,25 @@ const Terminal = ({ showPageIntro = true }) => {
         return true
       }
 
+      // Block Ctrl+V key event — paste is handled by the DOM paste event below
       if (usingModifier && key === 'v') {
-        if (!navigator.clipboard?.readText) {
-          return false
-        }
-
-        navigator.clipboard.readText().then((text) => {
-          if (!text) {
-            return
-          }
-
-          const socket = socketsRef.current.get(id)
-          if (socket?.connected) {
-            socket.emit('input', { data: text })
-          }
-        }).catch(() => {})
         return false
       }
 
       return true
     })
 
-    const handlePaste = (event) => {
-      const text = event.clipboardData?.getData('text')
-      if (!text) {
-        return
-      }
-
-      const socket = socketsRef.current.get(id)
-      if (socket?.connected) {
-        socket.emit('input', { data: text })
-      }
-      event.preventDefault()
-    }
-
-    container.addEventListener('paste', handlePaste)
-    pasteHandlersRef.current.set(id, handlePaste)
+    // Single paste handler via DOM event — avoids duplication from clipboard permission prompt
+    let pasteHandled = false
+    container.addEventListener('paste', (e) => {
+      e.preventDefault()
+      e.stopPropagation()
+      if (pasteHandled) return
+      pasteHandled = true
+      const text = e.clipboardData?.getData('text')
+      if (text) terminal.paste(text)
+      setTimeout(() => { pasteHandled = false }, 100)
+    }, true)
 
     const observer = new ResizeObserver(() => fitTerminal(id))
     observer.observe(container)
@@ -367,6 +340,37 @@ const Terminal = ({ showPageIntro = true }) => {
       focusTerminal(activeId)
     }
   }, [activeId, focusTerminal])
+
+  useEffect(() => {
+    if (!isExpanded) {
+      return undefined
+    }
+
+    const previousOverflow = document.body.style.overflow
+    const handleKeyDown = (event) => {
+      if (event.key === 'Escape') {
+        setIsExpanded(false)
+      }
+    }
+
+    document.body.style.overflow = 'hidden'
+    window.addEventListener('keydown', handleKeyDown)
+
+    return () => {
+      document.body.style.overflow = previousOverflow
+      window.removeEventListener('keydown', handleKeyDown)
+    }
+  }, [isExpanded])
+
+  useEffect(() => {
+    const frame = requestAnimationFrame(() => {
+      if (activeId) {
+        focusTerminal(activeId)
+      }
+    })
+
+    return () => cancelAnimationFrame(frame)
+  }, [activeId, focusTerminal, isExpanded])
 
   const addTab = () => {
     const nextTab = createTab(tabsRef.current.length + 1)
@@ -453,9 +457,16 @@ const Terminal = ({ showPageIntro = true }) => {
   }, [ensureTerminal])
 
   const activeTab = tabs.find((tab) => tab.id === activeId)
+  const shellHeightClass = isExpanded ? 'min-h-0' : 'min-h-[560px]'
 
   return (
-    <div className="flex min-h-[calc(100vh-180px)] flex-col gap-4">
+    <div
+      className={isExpanded
+        ? 'fixed inset-0 z-[100] flex min-h-screen flex-col gap-3 overflow-hidden p-3 sm:p-4'
+        : 'flex min-h-[calc(100vh-180px)] flex-col gap-4'
+      }
+      style={isExpanded ? { background: 'var(--color-bg)' } : undefined}
+    >
       <div className={`flex flex-wrap gap-3 ${showPageIntro ? 'items-center justify-between' : 'items-center justify-end'}`}>
         {showPageIntro ? (
           <div>
@@ -514,6 +525,24 @@ const Terminal = ({ showPageIntro = true }) => {
             Resetar conexao
           </button>
           <button
+            className="flex items-center gap-2 rounded-lg border px-3 py-2 text-xs transition"
+            style={{ background: 'var(--bg-elevated)', borderColor: 'var(--border-default)', color: 'var(--text-secondary)' }}
+            onMouseEnter={(event) => {
+              event.currentTarget.style.borderColor = 'var(--accent)'
+              event.currentTarget.style.color = 'var(--text-primary)'
+            }}
+            onMouseLeave={(event) => {
+              event.currentTarget.style.borderColor = 'var(--border-default)'
+              event.currentTarget.style.color = 'var(--text-secondary)'
+            }}
+            onClick={() => setIsExpanded((current) => !current)}
+            aria-pressed={isExpanded}
+            title={isExpanded ? 'Sair da tela cheia' : 'Expandir terminal'}
+          >
+            {isExpanded ? <Minimize2 className="h-4 w-4" /> : <Maximize2 className="h-4 w-4" />}
+            {isExpanded ? 'Sair da tela cheia' : 'Tela cheia'}
+          </button>
+          <button
             className="flex items-center gap-2 rounded-2xl bg-[linear-gradient(135deg,_#16366f,_#2563eb)] px-3 py-2 text-xs font-semibold text-white transition hover:brightness-110"
             onClick={addTab}
           >
@@ -560,7 +589,7 @@ const Terminal = ({ showPageIntro = true }) => {
         })}
       </div>
 
-      <div className="flex min-h-[0] flex-1 flex-col rounded-[1.5rem] border border-[#30363d] bg-[linear-gradient(180deg,#010409_0%,#050a11_100%)] p-4 shadow-[0_24px_64px_rgba(0,0,0,0.5)]">
+      <div className={`flex min-h-[0] flex-1 flex-col border border-[#30363d] bg-[linear-gradient(180deg,#010409_0%,#050a11_100%)] p-4 shadow-[0_24px_64px_rgba(0,0,0,0.5)] ${isExpanded ? 'rounded-xl' : 'rounded-[1.5rem]'}`}>
         <div className="mb-3 flex flex-wrap items-center justify-between gap-3 text-xs text-[#8b949e]">
           <span className="flex items-center gap-2">
             {activeTab?.status === 'connected' ? <Wifi className="h-4 w-4 text-[#58a6ff]" /> : <WifiOff className="h-4 w-4 text-[#ff7b72]" />}
@@ -569,7 +598,7 @@ const Terminal = ({ showPageIntro = true }) => {
           <span className="max-w-full truncate text-right text-[#6e7681]">{activeTab?.cwd || '~'}</span>
         </div>
 
-        <div className="relative min-h-[560px] flex-1 overflow-hidden rounded-[22px] border border-[#30363d] bg-[#0d1117] shadow-[0_16px_48px_rgba(0,0,0,0.4)]">
+        <div className={`relative flex-1 overflow-hidden rounded-[22px] border border-[#30363d] bg-[#0d1117] shadow-[0_16px_48px_rgba(0,0,0,0.4)] ${shellHeightClass}`}>
           {tabs.map((tab) => (
             <div
               key={tab.id}

@@ -129,16 +129,52 @@ function gatherServiceContext(service, projectDir) {
 async function diagnoseDeploy({ service, deployment, logs, error, projectDir }) {
   const ctx = gatherServiceContext(service, projectDir);
 
+  // Get running container info for comparison
+  let runningContainerInfo = '';
+  try {
+    const { execSync } = require('child_process');
+    const containerName = service.name || service.containerName;
+    const inspect = execSync(`docker inspect ${containerName} --format '{{json .Config.Cmd}} {{json .Config.Entrypoint}} {{.State.Status}}'`, { encoding: 'utf8', timeout: 5000 }).trim();
+    runningContainerInfo = `Container ativo: ${inspect}`;
+  } catch (e) { /* container may not be running */ }
+
+  // Get active deployment info
+  let activeDeployInfo = '';
+  const deployments = Array.isArray(service.deployments) ? service.deployments : [];
+  const activeDeploy = deployments.find(d => d.status === 'active');
+  if (activeDeploy) {
+    activeDeployInfo = `Deploy ativo (FUNCIONANDO): id=${activeDeploy.id}, command=${activeDeploy.command || service.command}, projectDir=${activeDeploy.projectDir}`;
+  }
+
   const sourceSection = (ctx.sourceCode || [])
     .map(f => `--- ${f.file} ---\n${f.content}`)
     .join('\n\n');
 
-  const prompt = `Você é um engenheiro DevOps sênior especialista em Node.js/TypeScript. Analise este deploy que falhou.
+  const prompt = `Você é um engenheiro DevOps sênior especialista em Docker e Node.js. Analise este deploy que falhou.
+
+## CONTEXTO IMPORTANTE
+Este é um deploy Docker. O fluxo é:
+1. Código é enviado como zip para o servidor
+2. O código é extraído numa pasta de versão
+3. Uma imagem Docker é construída a partir do Dockerfile
+4. O container inicia com o comando configurado (CMD ou command override)
+5. O build (npm run build / tsc) acontece DENTRO do container, NÃO no host
+
+Portanto:
+- NÃO tente corrigir erros de TypeScript (warnings de tipo) — o tsc emite os arquivos mesmo com erros de tipo
+- NÃO substitua package.json ou tsconfig.json a menos que estejam realmente quebrados
+- Foque em: Dockerfile, comando de início (CMD), variáveis de ambiente, portas, healthcheck
+- O "command" do serviço é o que realmente roda no container (override do CMD do Dockerfile)
+- COMPARE com o container ativo que está funcionando — o novo deploy deve funcionar igual
+
+## Container/Deploy ATIVO (funcionando agora)
+${runningContainerInfo || 'Não disponível'}
+${activeDeployInfo || 'Nenhum deploy ativo'}
 
 ## Serviço
 Nome: ${ctx.name}
 Imagem: ${ctx.image}
-Comando: ${ctx.command || 'padrão da imagem'}
+Comando do container (override): ${ctx.command || 'usa CMD do Dockerfile'}
 Porta: ${ctx.containerPort}
 Healthcheck: ${JSON.stringify(ctx.healthcheck)}
 ENV: ${JSON.stringify(ctx.envVars)}
@@ -149,7 +185,7 @@ ${ctx.fileTree?.join(', ') || 'não disponível'}
 ## Configurações
 ${Object.entries(ctx.configFiles || {}).map(([name, content]) => `--- ${name} ---\n${content}`).join('\n\n')}
 
-## Código-fonte completo
+## Código-fonte
 ${sourceSection || 'não disponível'}
 
 ## Erro do Deploy
@@ -159,7 +195,16 @@ ${error || 'desconhecido'}
 ${(logs || '').slice(-3000)}
 
 ## Instruções
-Analise TODO o código-fonte acima. Entenda o que o projeto faz, identifique a causa raiz do erro.
+Identifique a causa raiz do erro. Lembre-se: o build roda DENTRO do Docker.
+
+REGRAS PARA ACTIONS:
+- fix_command: DEVE ser um comando shell válido (ex: "sed -i 's/old/new/' file.txt"). NUNCA escreva texto explicativo como comando.
+- fix_file: DEVE ter "file" (caminho relativo) e "content" (conteúdo COMPLETO do arquivo corrigido).
+- fix_config: igual a fix_file mas para arquivos de configuração.
+- fix_env: DEVE ter "key" e "value".
+- Se o problema é no orquestrador/plataforma (não no código do projeto), marque fixable: false.
+- NUNCA substitua package.json ou tsconfig.json inteiros a menos que estejam vazios/corrompidos.
+
 Responda SOMENTE com JSON válido:
 {
   "diagnosis": "explicação clara do problema",

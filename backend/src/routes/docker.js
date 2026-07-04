@@ -16,11 +16,13 @@ const zlib = require('zlib');
 const tarfs = require('tar-fs');
 const multer = require('multer');
 const { runAiFixWorkflow, getAiFixJob } = require('../services/ai-fix-workflow');
-const { diagnoseDeploy, analyzeProject } = require('../services/deploy-ai');
+const { diagnoseDeploy, analyzeProject, zeusChat, gatherServiceContext } = require('../services/deploy-ai');
+const GitHubDeliveryManager = require('../services/GitHubDeliveryManager');
 
 const router = express.Router();
 const upload = multer({ dest: os.tmpdir() });
 const dockerManager = new DockerManager();
+const githubDelivery = new GitHubDeliveryManager();
 const serviceLogsPath = path.join(__dirname, '..', 'logs', 'service-updates.log');
 fs.mkdirSync(path.dirname(serviceLogsPath), { recursive: true });
 const chunkUploadRoot = path.join(os.tmpdir(), 'provirpanel-chunk-uploads');
@@ -701,7 +703,8 @@ const parseVersionMetadataPayload = (value) => {
     mode: parsed.mode === 'manual' ? 'manual' : 'auto',
     appVersion: normalizeVersionText(parsed.appVersion || parsed.version || ''),
     buildNumber: normalizeVersionText(parsed.buildNumber || parsed.build || '', 30),
-    changeType: normalizeVersionChangeType(parsed.changeType || parsed.type)
+    changeType: normalizeVersionChangeType(parsed.changeType || parsed.type),
+    commitSha: String(parsed.commitSha || '').trim().slice(0, 40) || null
   };
 };
 
@@ -773,6 +776,7 @@ const buildDeploymentVersionMetadata = (incoming = null, deployments = []) => {
     changeType,
     changeTypeLabel,
     label,
+    commitSha: String(source.commitSha || '').trim().slice(0, 40) || null,
     generated: mode !== 'manual' || !requestedVersion || !requestedBuild
   };
 };
@@ -2546,7 +2550,7 @@ const resolvePersistedProjectCommand = (service = {}, isNodeService = false) => 
   if (!service.command) return null;
   if (isAutoProjectLaunchCommand(service.command)) return null;
   if (isNodeService && isAutoNodeLifecycleCommand(service.command)) return null;
-  return service.command;
+  return normalizeCommand(service.command);
 };
 
 const stripNextStartFlags = (command) => {
@@ -5092,6 +5096,13 @@ const promoteProjectDeployment = async ({
 
   appendServiceLog('info', `Versao ${deployment.id} publicada para ${service.name}`);
   pushProgress('Versão publicada e estado salvo no painel.', 'done');
+
+  // Auto-index project code for AI chat (non-blocking)
+  try {
+    const { autoIndexAfterDeploy } = require('../services/project-ai-chat');
+    autoIndexAfterDeploy(service.id, deployment.projectDir);
+  } catch { /* ignore if module not available */ }
+
   return saveServiceDeploymentState(
     updatedService,
     {
@@ -5239,6 +5250,7 @@ const publishProjectArchive = async (serviceId, file, options = {}) => {
     changeType: versionMetadata.changeType,
     versionMode: versionMetadata.mode,
     versionLabel: versionMetadata.label,
+    commitSha: versionMetadata.commitSha || null,
     versionMetadata,
     projectDir,
     envVars: resolvedEnvVars,
@@ -5345,6 +5357,40 @@ const startProjectPublishJob = ({
         updatedAt: new Date().toISOString(),
         finishedAt: new Date().toISOString()
       });
+
+      // ═══ CHANGELOG: Generate changelog from GitHub commits after successful deploy ═══
+      try {
+        const svc = updatedService;
+        const delivery = svc.delivery || {};
+        if (delivery.provider === 'github' && delivery.connectionId && delivery.repository) {
+          const [owner, repo] = String(delivery.repository).split('/');
+          if (owner && repo) {
+            const deployments = Array.isArray(svc.deployments) ? svc.deployments : [];
+            const activeDeployment = deployments.find(d => d.id === svc.activeDeploymentId);
+            const headSha = activeDeployment?.commitSha;
+            const previousActive = deployments
+              .filter(d => d.status === 'active' && d.id !== svc.activeDeploymentId && d.commitSha)
+              .sort((a, b) => String(b.promotedAt || '').localeCompare(String(a.promotedAt || '')))[0];
+            const baseSha = previousActive?.commitSha;
+
+            let changelog = null;
+            if (headSha && baseSha && headSha !== baseSha) {
+              changelog = await githubDelivery.getCommitsBetween({ connectionId: delivery.connectionId, owner, repo, baseSha, headSha });
+            } else if (headSha) {
+              const commits = await githubDelivery.getRecentCommits({ connectionId: delivery.connectionId, owner, repo, branch: delivery.branch || 'main', count: 5 });
+              const idx = commits.findIndex(c => c.sha === headSha.slice(0, 7));
+              changelog = { commits: commits.slice(0, idx >= 0 ? idx + 1 : 5), totalCommits: idx >= 0 ? idx + 1 : commits.length };
+            }
+
+            if (changelog?.commits?.length && activeDeployment) {
+              activeDeployment.changelog = changelog;
+              dockerManager.saveService(svc);
+            }
+          }
+        }
+      } catch (clErr) {
+        appendServiceLog('warn', `Changelog: falha ao gerar - ${clErr.message}`);
+      }
     } catch (err) {
       const message = err?.message || 'Erro ao publicar projeto';
       const currentJob = projectDeployJobs.get(jobId) || job;
@@ -5366,6 +5412,39 @@ const startProjectPublishJob = ({
         jobId,
         error: message
       });
+
+      // ═══ AUTO-FIX: Trigger AI fix workflow on deploy failure ═══
+      try {
+        const failedService = dockerManager.listServices().find(s => s.id === serviceId);
+        if (failedService) {
+          const deployments = Array.isArray(failedService.deployments) ? failedService.deployments : [];
+          // Anti-loop: max 3 consecutive failures in 10 minutes
+          const recentFailed = deployments.filter(d => d.status === 'failed' && d.createdAt && (Date.now() - new Date(d.createdAt).getTime()) < 10 * 60 * 1000);
+          if (recentFailed.length >= 3) {
+            appendServiceLog('warn', `Auto-fix: ignorando - ${recentFailed.length} falhas nos ultimos 10min para ${failedService.name}`);
+            pushDeploymentProgress(progress, progressSessionId, '⚠️ Zeus AI: muitas falhas consecutivas. Intervenção manual necessária.', 'ai-fix', { jobId });
+          } else {
+            const lastFailed = deployments.filter(d => d.status === 'failed').sort((a, b) => new Date(b.createdAt) - new Date(a.createdAt)).find(d => d.projectDir && fs.existsSync(d.projectDir));
+            if (lastFailed) {
+              const deployLog = lastFailed.deployLog || lastFailed.progressLog || [];
+              const logText = deployLog.map(e => typeof e === 'object' ? e.message : String(e)).join('\n');
+              appendServiceLog('info', `Auto-fix: disparando Zeus AI para corrigir deploy falho de ${failedService.name}`);
+              pushDeploymentProgress(progress, progressSessionId, '🤖 Zeus AI iniciando diagnóstico e correção automática...', 'ai-fix', { jobId });
+              const aiJob = await runAiFixWorkflow({
+                service: failedService,
+                deployment: lastFailed,
+                logs: logText,
+                error: lastFailed.error || message,
+                projectDir: lastFailed.projectDir
+              });
+              updateJob({ aiFixJobId: aiJob.id });
+              pushDeploymentProgress(progress, progressSessionId, `🤖 Zeus AI fix job iniciado: ${aiJob.id}`, 'ai-fix', { jobId, aiFixJobId: aiJob.id });
+            }
+          }
+        }
+      } catch (aiErr) {
+        appendServiceLog('warn', `Auto-fix falhou ao iniciar: ${aiErr.message}`);
+      }
     } finally {
       if (typeof cleanup === 'function') {
         try {
@@ -5562,6 +5641,25 @@ router.get('/services/:id/versions', async (req, res, next) => {
   } catch (err) {
     next(err);
   }
+});
+
+router.get('/services/:id/changelog', (req, res, next) => {
+  try {
+    const service = dockerManager.listServices().find(s => s.id === req.params.id);
+    if (!service) return res.status(404).json({ message: 'Service not found' });
+    const deployments = (service.deployments || [])
+      .filter(d => d.status === 'active' && d.changelog?.commits?.length)
+      .sort((a, b) => String(b.promotedAt || '').localeCompare(String(a.promotedAt || '')))
+      .slice(0, Number(req.query.limit) || 5);
+    const entries = deployments.map(d => ({
+      version: d.versionLabel || d.label || d.id,
+      promotedAt: d.promotedAt,
+      commitSha: d.commitSha,
+      commits: d.changelog.commits,
+      totalCommits: d.changelog.totalCommits
+    }));
+    res.json({ changelog: entries });
+  } catch (err) { next(err); }
 });
 
 router.get('/services/:id/versions/:versionId/download', async (req, res, next) => {
@@ -5847,13 +5945,54 @@ router.post('/services/:id/ai-analyze', async (req, res, next) => {
     const deployments = Array.isArray(service.deployments) ? service.deployments : [];
     const active = deployments.find((d) => d.status === 'active');
     const lastFailed = deployments.find((d) => d.status === 'failed');
-    const projectDir = active?.projectDir || lastFailed?.projectDir || service.volumes?.[0]?.hostPath;
+    const target = lastFailed || active;
+    const projectDir = target?.projectDir || service.volumes?.[0]?.hostPath;
+
+    // Return cached analysis if exists and not forced
+    if (!req.body.force && target?.aiAnalysis) {
+      return res.json({ analysis: target.aiAnalysis, cached: true });
+    }
 
     const analysis = await analyzeProject({ service, projectDir });
-    res.json({ analysis });
+
+    // Save analysis to the deployment
+    if (target) {
+      target.aiAnalysis = analysis;
+      target.aiAnalysisAt = new Date().toISOString();
+      dockerManager.saveService(service);
+    }
+
+    res.json({ analysis, cached: false });
   } catch (err) {
     next(err);
   }
+});
+
+router.get('/services/:id/ai-analysis', (req, res) => {
+  const services = dockerManager.listServices();
+  const service = services.find((s) => s.id === req.params.id);
+  if (!service) return res.status(404).json({ message: 'Service not found' });
+
+  const deployments = Array.isArray(service.deployments) ? service.deployments : [];
+  const lastFailed = deployments.find((d) => d.status === 'failed');
+  const active = deployments.find((d) => d.status === 'active');
+  const target = lastFailed || active;
+
+  if (target?.aiAnalysis) {
+    return res.json({ analysis: target.aiAnalysis, cached: true, analyzedAt: target.aiAnalysisAt });
+  }
+  res.json({ analysis: null });
+});
+
+router.post('/services/:id/ai-project-analysis', async (req, res, next) => {
+  try {
+    const service = dockerManager.listServices().find(s => s.id === req.params.id);
+    if (!service) return res.status(404).json({ message: 'Service not found' });
+    const { analyzeProjectDependencies } = require('../services/infra-ai');
+    const allServices = dockerManager.listServices();
+    const analysis = await analyzeProjectDependencies(service, allServices);
+    res.json({ analysis });
+  } catch (err) { next(err); }
 });
 
 router.post('/services/:id/ai-fix', async (req, res, next) => {
@@ -5863,15 +6002,19 @@ router.post('/services/:id/ai-fix', async (req, res, next) => {
     if (!service) return res.status(404).json({ message: 'Service not found' });
 
     const deployments = Array.isArray(service.deployments) ? service.deployments : [];
-    const lastFailed = deployments.find((d) => d.status === 'failed');
+    // Find the most recent failed deployment that still has its directory
+    const failedDeploys = deployments.filter((d) => d.status === 'failed').sort((a, b) => new Date(b.createdAt) - new Date(a.createdAt));
+    const lastFailed = failedDeploys.find((d) => d.projectDir && fs.existsSync(d.projectDir)) || failedDeploys[0];
     const projectDir = lastFailed?.projectDir || service.volumes?.[0]?.hostPath;
 
     if (!projectDir || !fs.existsSync(projectDir)) {
       return res.status(400).json({ message: 'Diretório do projeto não encontrado' });
     }
 
+    const deployLog = lastFailed?.deployLog || lastFailed?.progressLog || [];
+    const logText = deployLog.map((e) => typeof e === 'object' ? e.message : String(e)).join('\n');
     const error = req.body?.error || lastFailed?.error || 'Unknown error';
-    const logs = req.body?.logs || '';
+    const logs = req.body?.logs || logText || '';
 
     const job = await runAiFixWorkflow({
       service,
@@ -5893,6 +6036,65 @@ router.get('/services/:id/ai-fix/jobs/:jobId', (req, res) => {
     return res.status(404).json({ message: 'Job não encontrado' });
   }
   res.json({ job });
+});
+
+router.post('/services/:id/ai-chat', async (req, res, next) => {
+  try {
+    const services = dockerManager.listServices();
+    const service = services.find((s) => s.id === req.params.id);
+    if (!service) return res.status(404).json({ message: 'Serviço não encontrado' });
+    const { question } = req.body;
+    if (!question) return res.status(400).json({ message: 'Pergunta obrigatória' });
+
+    const deployments = Array.isArray(service.deployments) ? service.deployments : [];
+    const active = deployments.find((d) => d.status === 'active');
+    const lastFailed = deployments.find((d) => d.status === 'failed');
+    const target = lastFailed || active;
+    const projectDir = target?.projectDir || service.volumes?.[0]?.hostPath;
+
+    // Collect deploy error context
+    let deployContext = '';
+    if (lastFailed) {
+      const logs = (lastFailed.deployLog || []).map(l => typeof l === 'string' ? l : l?.message || '').join('\n').slice(-3000);
+      const err = lastFailed.error || lastFailed.deployLogError || '';
+      deployContext = `\n## Último Deploy (FALHOU)
+Status: failed
+Erro: ${err}
+Logs:\n${logs}\n`;
+      if (lastFailed.aiAnalysis) {
+        deployContext += `\n## Diagnóstico AI anterior\n${JSON.stringify(lastFailed.aiAnalysis, null, 2)}\n`;
+      }
+    }
+    if (active) {
+      deployContext += `\n## Deploy Ativo: ${active.versionLabel || active.id} (status: active)\n`;
+    }
+
+    const ctx = gatherServiceContext(service, projectDir);
+    const sourceSection = (ctx.sourceCode || []).map(f => `--- ${f.file} ---\n${f.content}`).join('\n\n');
+    const prompt = `Você é um assistente DevOps especialista. O usuário tem uma pergunta sobre o projeto abaixo. Você tem acesso ao código-fonte, configurações, logs de deploy e diagnósticos anteriores.
+
+## Serviço: ${ctx.name}
+Imagem: ${ctx.image} | Porta: ${ctx.containerPort}
+Comando: ${ctx.command || 'padrão'}
+ENV: ${JSON.stringify(ctx.envVars)}
+${deployContext}
+## Estrutura
+${ctx.fileTree?.join(', ') || 'não disponível'}
+
+## Configurações
+${Object.entries(ctx.configFiles || {}).map(([name, content]) => `--- ${name} ---\n${content}`).join('\n\n')}
+
+## Código-fonte
+${sourceSection || 'não disponível'}
+
+## Pergunta do usuário
+${question}
+
+## Instruções
+Você já analisou este projeto. Use TODAS as informações acima (erro, logs, diagnóstico, código) para responder. Responda de forma clara e direta em português. Se a pergunta for sobre falha/erro, explique a causa raiz baseado nos logs e código. Seja conciso.`;
+    const answer = await zeusChat(prompt);
+    res.json({ answer });
+  } catch (err) { next(err); }
 });
 
 // ─── Socket ──────────────────────────────────────────────────────────────────

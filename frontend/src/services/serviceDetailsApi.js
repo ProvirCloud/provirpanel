@@ -320,8 +320,13 @@ export const servicesApi = {
     return response.data
   },
 
-  async aiAnalyze(serviceId) {
-    const response = await api.post(`/docker/services/${serviceId}/ai-analyze`)
+  async aiAnalyze(serviceId, force = false) {
+    const response = await api.post(`/docker/services/${serviceId}/ai-analyze`, { force })
+    return response.data
+  },
+
+  async aiGetAnalysis(serviceId) {
+    const response = await api.get(`/docker/services/${serviceId}/ai-analysis`)
     return response.data
   },
 
@@ -332,6 +337,11 @@ export const servicesApi = {
 
   async aiGetFixJob(serviceId, jobId) {
     const response = await api.get(`/docker/services/${serviceId}/ai-fix/jobs/${jobId}`)
+    return response.data
+  },
+
+  async aiChat(serviceId, question) {
+    const response = await api.post(`/docker/services/${serviceId}/ai-chat`, { question })
     return response.data
   }
 }
@@ -433,6 +443,51 @@ export const githubDeliveryApi = {
 
   async dispatchWorkflow(serviceId, payload = {}) {
     const response = await api.post(`/ci-cd/github/services/${serviceId}/workflow/dispatch`, payload)
+    return response.data
+  },
+
+  async getWorkflowRunStatus(serviceId) {
+    const response = await api.get(`/ci-cd/github/services/${serviceId}/workflow/run-status`)
+    return response.data
+  },
+
+  async smartBlueprint(serviceId) {
+    const response = await api.post(`/ci-cd/github/services/${serviceId}/smart-blueprint`)
+    return response.data
+  },
+
+  async aiValidate(serviceId, autoFix = true) {
+    const response = await api.post(`/ci-cd/services/${serviceId}/ai-validate`, { autoFix })
+    return response.data
+  },
+
+  async aiInfraAnalysis(serviceId) {
+    const response = await api.post(`/ci-cd/services/${serviceId}/ai-infra-analysis`)
+    return response.data
+  },
+
+  async aiApplyFixes(serviceId, fixes) {
+    const response = await api.post(`/ci-cd/services/${serviceId}/ai-apply-fixes`, { fixes })
+    return response.data
+  },
+
+  async aiProjectAnalysis(serviceId) {
+    const response = await api.post(`/docker/services/${serviceId}/ai-project-analysis`)
+    return response.data
+  },
+
+  async workflowFailed(serviceId, runId) {
+    const response = await api.post(`/ci-cd/services/${serviceId}/workflow-failed`, { runId })
+    return response.data
+  },
+
+  async aiChat(serviceId, message, history = []) {
+    const response = await api.post(`/ci-cd/services/${serviceId}/ai-chat`, { message, history })
+    return response.data
+  },
+
+  async aiChatReindex(serviceId) {
+    const response = await api.post(`/ci-cd/services/${serviceId}/ai-chat/reindex`)
     return response.data
   }
 }
