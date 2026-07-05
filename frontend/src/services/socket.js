@@ -44,3 +44,11 @@ export const createNginxLogsSocket = (token) => {
     withCredentials: true
   })
 }
+
+export const createAiChatSocket = (token) => {
+  return io(`${baseUrl}/api/ai-chat`, {
+    auth: getToken(token) ? { token: getToken(token) } : undefined,
+    withCredentials: true,
+    transports: ['websocket']
+  })
+}

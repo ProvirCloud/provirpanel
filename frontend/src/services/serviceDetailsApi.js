@@ -482,8 +482,21 @@ export const githubDeliveryApi = {
   },
 
   async aiChat(serviceId, message, history = []) {
-    const response = await api.post(`/ci-cd/services/${serviceId}/ai-chat`, { message, history })
+    const response = await api.post(`/ci-cd/services/${serviceId}/ai-chat`, { message, history }, { timeout: 120000 })
     return response.data
+  },
+
+  aiChatStream(serviceId, message, history = []) {
+    const token = localStorage.getItem('provirpanel-token')
+    const baseURL = api.defaults.baseURL || '/api'
+    return fetch(`${baseURL}/ci-cd/services/${serviceId}/ai-chat`, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'Authorization': `Bearer ${token}`
+      },
+      body: JSON.stringify({ message, history, stream: true })
+    })
   },
 
   async aiChatReindex(serviceId) {

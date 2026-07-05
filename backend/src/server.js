@@ -124,6 +124,7 @@ io.on('connection', (socket) => {
 
 terminalRoutes.initTerminalSocket(io);
 dockerRoutes.initDockerSocket(io);
+if (cicdRoutes.initAiChatSocket) cicdRoutes.initAiChatSocket(io);
 
 // Initialize Nginx Log Watcher for real-time logs
 const nginxLogWatcher = new NginxLogWatcher(io);

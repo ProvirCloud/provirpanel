@@ -11,11 +11,11 @@ const CONFIG_FILES = ['package.json', 'tsconfig.json', 'Dockerfile', 'docker-com
 const SKIP_DIRS = new Set(['node_modules', '.git', 'dist', 'build', '.next', 'coverage', '.cache', '__pycache__', '.turbo', '.nuxt']);
 const MAX_FILE_SIZE = 30000;
 const MAX_TOTAL_CHARS = 200000;
+const MAX_INLINE_CHARS = 12000; // For direct chat without RAG
 
-// Track which services have been indexed (in-memory, resets on restart)
 const indexedServices = new Map(); // serviceId -> { timestamp, fileCount }
+const indexingInProgress = new Set(); // serviceIds currently being indexed
 
-// Persistent index state file
 const INDEX_STATE_FILE = path.join(__dirname, '../../data/ai-index-state.json');
 
 function loadIndexState() {
@@ -59,24 +59,33 @@ function collectProjectFiles(projectDir) {
     }
   };
   walk(projectDir);
-  // Config files first, then by size (smaller = more focused)
   files.sort((a, b) => (b.isConfig - a.isConfig) || (a.size - b.size));
   return files;
 }
 
-async function indexProjectCode(serviceId, projectDir, { force = false } = {}) {
-  // Check if already indexed in this session (skip re-index unless forced)
+function isIndexed(serviceId, projectDir) {
   const cached = indexedServices.get(serviceId);
-  if (!force && cached && (Date.now() - cached.timestamp) < 60 * 60 * 1000) {
-    return { alreadyIndexed: true, fileCount: cached.fileCount };
+  if (cached && (Date.now() - cached.timestamp) < 60 * 60 * 1000) return true;
+
+  const state = loadIndexState();
+  const entry = state[serviceId];
+  if (entry && entry.projectDir === projectDir && entry.fileCount > 0) {
+    indexedServices.set(serviceId, { timestamp: Date.now(), fileCount: entry.fileCount });
+    return true;
+  }
+  return false;
+}
+
+async function indexProjectCode(serviceId, projectDir, { force = false } = {}) {
+  if (!force && isIndexed(serviceId, projectDir)) {
+    return { alreadyIndexed: true, fileCount: indexedServices.get(serviceId)?.fileCount || 0 };
   }
 
-  // Check persistent state — skip if projectDir hasn't changed
+  // Check if files changed since last index
   if (!force) {
     const state = loadIndexState();
     const entry = state[serviceId];
     if (entry && entry.projectDir === projectDir) {
-      // Check if any file was modified since last index
       const lastIndexed = new Date(entry.indexedAt).getTime();
       const files = collectProjectFiles(projectDir);
       const anyModified = files.some(f => {
@@ -105,12 +114,7 @@ async function indexProjectCode(serviceId, projectDir, { force = false } = {}) {
       }
       documents.push({
         text: `// Arquivo: ${file.rel}\n${content}`,
-        metadata: {
-          source: `code:${file.rel}`,
-          file: file.rel,
-          type: file.isConfig ? 'config' : 'source',
-          serviceId
-        }
+        metadata: { source: `code:${file.rel}`, file: file.rel, type: file.isConfig ? 'config' : 'source', serviceId }
       });
       totalChars += content.length;
     } catch { /* skip */ }
@@ -118,24 +122,20 @@ async function indexProjectCode(serviceId, projectDir, { force = false } = {}) {
 
   if (!documents.length) return { alreadyIndexed: false, fileCount: 0 };
 
-  // Also add file tree as a document
   const tree = files.map(f => f.rel).join('\n');
   documents.unshift({
     text: `Estrutura de arquivos do projeto:\n${tree}`,
     metadata: { source: 'file-tree', file: 'TREE', type: 'structure', serviceId }
   });
 
-  // Delete old index and re-index
+  // Delete old index
   try {
     await fetch(`${ZEUS_GATEWAY_URL}/api/index`, {
       method: 'DELETE',
       headers: { 'Content-Type': 'application/json', 'x-api-key': ZEUS_API_KEY },
-      body: JSON.stringify({
-        filter: { must: [{ key: 'serviceId', match: { value: serviceId } }] },
-        collection
-      })
+      body: JSON.stringify({ filter: { must: [{ key: 'serviceId', match: { value: serviceId } }] }, collection })
     });
-  } catch { /* collection may not exist yet */ }
+  } catch { /* ignore */ }
 
   // Batch index
   const res = await fetch(`${ZEUS_GATEWAY_URL}/api/index/batch`, {
@@ -144,15 +144,11 @@ async function indexProjectCode(serviceId, projectDir, { force = false } = {}) {
     body: JSON.stringify({ documents, collection, chunkSize: 800, overlap: 100 })
   });
 
-  if (!res.ok) {
-    const err = await res.text();
-    throw new Error(`Indexação falhou: ${err}`);
-  }
+  if (!res.ok) throw new Error(`Indexação falhou: ${await res.text()}`);
 
   const result = await res.json();
   indexedServices.set(serviceId, { timestamp: Date.now(), fileCount: files.length });
 
-  // Persist index state
   const state = loadIndexState();
   state[serviceId] = { projectDir, fileCount: files.length, chunks: result.chunks, indexedAt: new Date().toISOString() };
   saveIndexState(state);
@@ -160,10 +156,39 @@ async function indexProjectCode(serviceId, projectDir, { force = false } = {}) {
   return { alreadyIndexed: false, fileCount: files.length, chunks: result.chunks };
 }
 
-async function chatAboutProject(serviceId, message, history = []) {
-  const collection = `project_${serviceId.split('-')[0]}`;
+/**
+ * Start indexing in background (non-blocking). Returns immediately.
+ */
+function startBackgroundIndex(serviceId, projectDir) {
+  if (indexingInProgress.has(serviceId)) return;
+  indexingInProgress.add(serviceId);
+  indexProjectCode(serviceId, projectDir, { force: true })
+    .then(r => console.log(`[AI Index] Background indexed ${serviceId}: ${r.fileCount} files`))
+    .catch(e => console.error(`[AI Index] Background index failed ${serviceId}:`, e.message))
+    .finally(() => indexingInProgress.delete(serviceId));
+}
 
-  const SYSTEM_PROMPT = `Você é um engenheiro sênior que acabou de ler TODO o código-fonte deste projeto. Responda como uma pessoa real que conhece o sistema profundamente.
+/**
+ * Read source code inline (for direct chat without RAG - fast path)
+ */
+function readInlineSource(projectDir) {
+  const files = collectProjectFiles(projectDir);
+  const parts = [];
+  let total = 0;
+  for (const file of files) {
+    if (total >= MAX_INLINE_CHARS) break;
+    try {
+      let content = fs.readFileSync(file.fullPath, 'utf8');
+      const remaining = MAX_INLINE_CHARS - total;
+      if (content.length > remaining) content = content.slice(0, remaining) + '\n// ...truncated';
+      parts.push(`--- ${file.rel} ---\n${content}`);
+      total += content.length;
+    } catch { /* skip */ }
+  }
+  return parts.join('\n\n');
+}
+
+const SYSTEM_PROMPT = `Você é um engenheiro sênior que acabou de ler TODO o código-fonte deste projeto. Responda como uma pessoa real que conhece o sistema profundamente.
 
 REGRAS:
 - Responda de forma natural, como um colega explicando o código
@@ -175,46 +200,55 @@ REGRAS:
 - Use português brasileiro, informal mas técnico
 - Se o contexto não tiver informação suficiente pra responder, diga exatamente o que falta`;
 
-  const res = await fetch(`${ZEUS_GATEWAY_URL}/api/chat`, {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json', 'x-api-key': ZEUS_API_KEY },
-    body: JSON.stringify({
-      message,
-      collection,
-      history: history.slice(-10),
-      options: { large: true, topK: 10, num_ctx: 16384 }
-    })
-  });
+async function chatAboutProject(serviceId, message, history = [], projectDir = null) {
+  const collection = `project_${serviceId.split('-')[0]}`;
+  const hasIndex = isIndexed(serviceId, projectDir);
 
-  if (!res.ok) {
-    const err = await res.text();
-    throw new Error(`Chat falhou: ${err}`);
-  }
-
-  const data = await res.json();
-
-  // Inject system prompt by re-calling with direct if RAG returned poor results
-  if (!data.sources?.length || data.sources.every(s => s.score < 0.3)) {
-    // Fallback: direct call with system prompt
-    const directRes = await fetch(`${ZEUS_GATEWAY_URL}/api/chat/direct`, {
+  // If indexed → use RAG (fast, context from Qdrant)
+  if (hasIndex) {
+    const res = await fetch(`${ZEUS_GATEWAY_URL}/api/chat`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json', 'x-api-key': ZEUS_API_KEY },
       body: JSON.stringify({
-        messages: [
-          { role: 'system', content: SYSTEM_PROMPT },
-          ...history.slice(-10),
-          { role: 'user', content: message }
-        ],
-        options: { large: true, num_ctx: 16384 }
+        message,
+        collection,
+        history: history.slice(-10),
+        options: { large: true, topK: 10, num_ctx: 16384 }
       })
     });
-    if (directRes.ok) {
-      const directData = await directRes.json();
-      return { answer: directData.answer, sources: [], model: directData.model, fallback: true };
+    if (res.ok) {
+      const data = await res.json();
+      return { answer: data.answer, sources: data.sources, model: data.model, indexed: true };
     }
   }
 
-  return { answer: data.answer, sources: data.sources, model: data.model };
+  // Not indexed or RAG failed → direct chat with inline source code
+  // Also start background indexing for next time
+  if (projectDir && fs.existsSync(projectDir)) {
+    startBackgroundIndex(serviceId, projectDir);
+  }
+
+  const sourceCode = projectDir ? readInlineSource(projectDir) : '';
+  const userContent = sourceCode
+    ? `Código-fonte do projeto:\n\n${sourceCode}\n\n---\n\nPergunta: ${message}`
+    : message;
+
+  const res = await fetch(`${ZEUS_GATEWAY_URL}/api/chat/direct`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', 'x-api-key': ZEUS_API_KEY },
+    body: JSON.stringify({
+      messages: [
+        { role: 'system', content: SYSTEM_PROMPT },
+        ...history.slice(-10),
+        { role: 'user', content: userContent }
+      ],
+      options: { large: true, num_ctx: 16384 }
+    })
+  });
+
+  if (!res.ok) throw new Error(`Chat falhou: ${await res.text()}`);
+  const data = await res.json();
+  return { answer: data.answer, sources: [], model: data.model, indexed: false, indexing: indexingInProgress.has(serviceId) };
 }
 
 function invalidateIndex(serviceId) {
@@ -224,18 +258,82 @@ function invalidateIndex(serviceId) {
   saveIndexState(state);
 }
 
-/**
- * Auto-index after deploy success. Call this from deploy promotion logic.
- * Runs in background (non-blocking).
- */
 function autoIndexAfterDeploy(serviceId, projectDir) {
   if (!projectDir || !fs.existsSync(projectDir)) return;
   invalidateIndex(serviceId);
-  indexProjectCode(serviceId, projectDir, { force: true }).then(result => {
-    console.log(`[AI Index] Auto-indexed ${serviceId}: ${result.fileCount} files, ${result.chunks || 0} chunks`);
-  }).catch(err => {
-    console.error(`[AI Index] Auto-index failed for ${serviceId}:`, err.message);
-  });
+  startBackgroundIndex(serviceId, projectDir);
 }
 
-module.exports = { indexProjectCode, chatAboutProject, invalidateIndex, autoIndexAfterDeploy };
+async function chatAboutProjectStream(serviceId, message, history = [], projectDir = null, onEvent) {
+  const collection = `project_${serviceId.split('-')[0]}`;
+  const hasIndex = isIndexed(serviceId, projectDir);
+
+  let streamUrl, streamBody;
+
+  if (hasIndex) {
+    // Use RAG stream
+    streamUrl = `${ZEUS_GATEWAY_URL}/api/chat/stream`;
+    streamBody = {
+      message,
+      collection,
+      history: history.slice(-10),
+      options: { large: true, topK: 10, num_ctx: 16384 }
+    };
+  } else {
+    // Direct stream with inline source
+    if (projectDir && fs.existsSync(projectDir)) {
+      startBackgroundIndex(serviceId, projectDir);
+    }
+    const sourceCode = projectDir ? readInlineSource(projectDir) : '';
+    const userContent = sourceCode
+      ? `C\u00f3digo-fonte do projeto:\n\n${sourceCode}\n\n---\n\nPergunta: ${message}`
+      : message;
+
+    streamUrl = `${ZEUS_GATEWAY_URL}/api/chat/direct/stream`;
+    streamBody = {
+      messages: [
+        { role: 'system', content: SYSTEM_PROMPT },
+        ...history.slice(-10),
+        { role: 'user', content: userContent }
+      ],
+      options: { large: true, num_ctx: 16384 }
+    };
+  }
+
+  const res = await fetch(streamUrl, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', 'x-api-key': ZEUS_API_KEY },
+    body: JSON.stringify(streamBody)
+  });
+
+  if (!res.ok) {
+    const err = await res.text();
+    onEvent({ type: 'error', error: err });
+    return;
+  }
+
+  onEvent({ type: 'start', indexed: hasIndex });
+
+  const decoder = new TextDecoder();
+  let buffer = '';
+
+  for await (const chunk of res.body) {
+    buffer += typeof chunk === 'string' ? chunk : decoder.decode(chunk, { stream: true });
+    const lines = buffer.split('\n');
+    buffer = lines.pop() || '';
+    for (const line of lines) {
+      if (!line.startsWith('data: ')) continue;
+      const data = line.slice(6);
+      try {
+        const parsed = JSON.parse(data);
+        await onEvent(parsed);
+      } catch { /* skip */ }
+    }
+  }
+
+  if (buffer.startsWith('data: ')) {
+    try { await onEvent(JSON.parse(buffer.slice(6))); } catch { /* skip */ }
+  }
+}
+
+module.exports = { indexProjectCode, chatAboutProject, chatAboutProjectStream, invalidateIndex, autoIndexAfterDeploy, isIndexed, startBackgroundIndex };

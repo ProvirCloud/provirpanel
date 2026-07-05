@@ -13,15 +13,15 @@ const ciCdManager = new CICDManager();
 const dockerManager = new DockerManager();
 const githubDelivery = new GitHubDeliveryManager();
 
-// Helper: ensure project code is indexed for AI operations
-const ensureProjectIndexed = async (service) => {
+// Helper: ensure project code is indexed for AI operations (non-blocking)
+const ensureProjectIndexed = (service) => {
   try {
-    const { indexProjectCode } = require('../services/project-ai-chat');
+    const { isIndexed, startBackgroundIndex } = require('../services/project-ai-chat');
     const deployments = Array.isArray(service.deployments) ? service.deployments : [];
     const active = deployments.find(d => d.status === 'active') || deployments.find(d => d.id === service.activeDeploymentId);
     const projectDir = active?.projectDir || (service.volumes || [])[0]?.hostPath || null;
-    if (projectDir && fs.existsSync(projectDir)) {
-      await indexProjectCode(service.id, projectDir);
+    if (projectDir && fs.existsSync(projectDir) && !isIndexed(service.id, projectDir)) {
+      startBackgroundIndex(service.id, projectDir);
     }
   } catch { /* non-critical */ }
 };
@@ -553,7 +553,7 @@ router.post('/services/:serviceId/ai-validate', async (req, res, next) => {
     const service = dockerManager.listServices().find(s => s.id === req.params.serviceId);
     if (!service) return res.status(404).json({ message: 'Service not found' });
 
-    await ensureProjectIndexed(service);
+    ensureProjectIndexed(service);
     const validation = await infraAi.validatePreDeploy(service);
 
     // Auto-apply fixes if requested
@@ -593,7 +593,7 @@ router.post('/services/:serviceId/ai-infra-analysis', async (req, res, next) => 
     const service = dockerManager.listServices().find(s => s.id === req.params.serviceId);
     if (!service) return res.status(404).json({ message: 'Service not found' });
 
-    await ensureProjectIndexed(service);
+    ensureProjectIndexed(service);
     const analysis = await infraAi.analyzeInfrastructure(service);
     res.json({ analysis });
   } catch (err) { next(err); }
@@ -604,7 +604,7 @@ router.post('/services/:serviceId/ai-project-analysis', async (req, res, next) =
     const service = dockerManager.listServices().find(s => s.id === req.params.serviceId);
     if (!service) return res.status(404).json({ message: 'Service not found' });
 
-    await ensureProjectIndexed(service);
+    ensureProjectIndexed(service);
     const allServices = dockerManager.listServices();
     const analysis = await infraAi.analyzeProjectDependencies(service, allServices);
     res.json({ analysis });
@@ -651,7 +651,7 @@ router.post('/services/:serviceId/workflow-failed', async (req, res, next) => {
     const service = dockerManager.listServices().find(s => s.id === req.params.serviceId);
     if (!service) return res.status(404).json({ message: 'Service not found' });
 
-    await ensureProjectIndexed(service);
+    ensureProjectIndexed(service);
     const delivery = service.delivery || {};
     if (!delivery.connectionId || !delivery.repository) {
       return res.status(400).json({ message: 'Serviço sem delivery configurado' });
@@ -855,35 +855,47 @@ REGRAS CRÍTICAS:
 // --- AI Chat about project code ---
 router.post('/services/:serviceId/ai-chat', async (req, res, next) => {
   try {
-    const { message, history } = req.body;
+    const { message, history, stream } = req.body;
     if (!message) return res.status(400).json({ error: 'message is required' });
 
     const service = dockerManager.listServices().find(s => s.id === req.params.serviceId);
     if (!service) return res.status(404).json({ message: 'Service not found' });
 
-    const { indexProjectCode, chatAboutProject } = require('../services/project-ai-chat');
+    const { chatAboutProject, chatAboutProjectStream } = require('../services/project-ai-chat');
 
-    // Find project directory
     const deployments = Array.isArray(service.deployments) ? service.deployments : [];
     const active = deployments.find(d => d.status === 'active') || deployments.find(d => d.id === service.activeDeploymentId);
     const projectDir = active?.projectDir || (service.volumes || [])[0]?.hostPath || null;
 
-    // Index code if project dir exists
-    let indexed = null;
-    if (projectDir && fs.existsSync(projectDir)) {
-      indexed = await indexProjectCode(service.id, projectDir);
+    if (stream) {
+      // SSE streaming response
+      res.setHeader('Content-Type', 'text/event-stream');
+      res.setHeader('Cache-Control', 'no-cache');
+      res.setHeader('Connection', 'keep-alive');
+      res.setHeader('X-Accel-Buffering', 'no');
+      res.flushHeaders();
+      // Flush padding to force Cloudflare to start streaming immediately
+      res.write(`: ${' '.repeat(2048)}\n\n`);
+
+      await chatAboutProjectStream(service.id, message, history || [], projectDir, (event) => {
+        res.write(`data: ${JSON.stringify(event)}\n\n`);
+      });
+      res.end();
+    } else {
+      const result = await chatAboutProject(service.id, message, history || [], projectDir);
+      res.json({
+        answer: result.answer,
+        sources: result.sources,
+        model: result.model,
+        indexed: result.indexed,
+        indexing: result.indexing || false
+      });
     }
-
-    // Chat with RAG
-    const result = await chatAboutProject(service.id, message, history || []);
-
-    res.json({
-      answer: result.answer,
-      sources: result.sources,
-      model: result.model,
-      indexed: indexed ? { fileCount: indexed.fileCount, alreadyIndexed: indexed.alreadyIndexed } : null
-    });
-  } catch (err) { next(err); }
+  } catch (err) {
+    if (!res.headersSent) return next(err);
+    res.write(`data: ${JSON.stringify({ type: 'error', error: err.message })}\n\n`);
+    res.end();
+  }
 });
 
 // POST /services/:serviceId/ai-chat/reindex — force re-index project code
@@ -908,4 +920,44 @@ router.post('/services/:serviceId/ai-chat/reindex', async (req, res, next) => {
   } catch (err) { next(err); }
 });
 
+const initAiChatSocket = (io) => {
+  const jwt = require('jsonwebtoken');
+  const jwtSecret = process.env.JWT_SECRET || 'change-me';
+
+  const ns = io.of('/api/ai-chat');
+  ns.use((socket, next) => {
+    const token = socket.handshake.auth?.token || socket.handshake.query?.token ||
+      (socket.handshake.headers?.authorization?.startsWith('Bearer ') ? socket.handshake.headers.authorization.slice(7) : null);
+    if (!token) return next(new Error('Unauthorized'));
+    try {
+      jwt.verify(token, jwtSecret);
+      next();
+    } catch { next(new Error('Unauthorized')); }
+  });
+
+  ns.on('connection', (socket) => {
+    socket.on('chat', async ({ serviceId, message, history }) => {
+      try {
+        const service = dockerManager.listServices().find(s => s.id === serviceId);
+        if (!service) return socket.emit('error', { error: 'Service not found' });
+
+        const { chatAboutProjectStream } = require('../services/project-ai-chat');
+        const deployments = Array.isArray(service.deployments) ? service.deployments : [];
+        const active = deployments.find(d => d.status === 'active') || deployments.find(d => d.id === service.activeDeploymentId);
+        const projectDir = active?.projectDir || (service.volumes || [])[0]?.hostPath || null;
+
+        const tick = () => new Promise(resolve => setImmediate(resolve));
+        await chatAboutProjectStream(service.id, message, history || [], projectDir, async (event) => {
+          socket.emit('chat:event', event);
+          if (event.type === 'token') await tick();
+        });
+        socket.emit('chat:event', { type: 'end' });
+      } catch (err) {
+        socket.emit('chat:event', { type: 'error', error: err.message });
+      }
+    });
+  });
+};
+
 module.exports = router;
+module.exports.initAiChatSocket = initAiChatSocket;

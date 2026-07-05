@@ -47,7 +47,9 @@ import {
   serviceMetricsApi,
   servicesApi
 } from '../services/serviceDetailsApi.js'
-import { Send, RefreshCw, Bot } from 'lucide-react'
+import { Send, RefreshCw, Bot, ClipboardCopy } from 'lucide-react'
+import Markdown from 'react-markdown'
+import remarkGfm from 'remark-gfm'
 import { createDockerTerminalSocket } from '../services/socket.js'
 import AiFixPanel, { DeployAiDiagnosis } from '../components/AiFixPanel.jsx'
 
@@ -1737,148 +1739,196 @@ const ServiceAiTab = ({ service }) => {
   const [messages, setMessages] = useState([])
   const [input, setInput] = useState('')
   const [loading, setLoading] = useState(false)
-  const [indexInfo, setIndexInfo] = useState(null)
-  const messagesEndRef = useRef(null)
+  const scrollRef = useRef(null)
   const inputRef = useRef(null)
+  const contentRef = useRef('')
+  const idxRef = useRef(-1)
+  const abortRef = useRef(null)
 
-  const scrollToBottom = () => messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' })
-  useEffect(scrollToBottom, [messages])
+  useEffect(() => { scrollRef.current?.scrollTo({ top: scrollRef.current.scrollHeight, behavior: 'smooth' }) }, [messages])
   useEffect(() => { inputRef.current?.focus() }, [])
+
+  const copyText = (text) => {
+    navigator.clipboard.writeText(text)
+  }
 
   const sendMessage = async () => {
     const text = input.trim()
     if (!text || loading) return
     setInput('')
-    setMessages(prev => [...prev, { role: 'user', content: text }])
     setLoading(true)
+
+    const history = messages.filter(m => m.role !== 'system').map(m => ({ role: m.role, content: m.content }))
+    const idx = messages.length + 1
+    idxRef.current = idx
+    contentRef.current = ''
+    setMessages(prev => [...prev, { role: 'user', content: text }, { role: 'assistant', content: '' }])
+
+    const controller = new AbortController()
+    abortRef.current = controller
+
     try {
-      const history = messages.map(m => ({ role: m.role, content: m.content }))
-      const res = await githubDeliveryApi.aiChat(service.id, text, history)
-      setMessages(prev => [...prev, { role: 'assistant', content: res.answer, sources: res.sources }])
-      if (res.indexed) setIndexInfo(res.indexed)
+      const token = localStorage.getItem('provirpanel-token')
+      const res = await fetch(`/api/ci-cd/services/${service.id}/ai-chat`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', ...(token ? { Authorization: `Bearer ${token}` } : {}) },
+        body: JSON.stringify({ message: text, history, stream: true }),
+        signal: controller.signal
+      })
+
+      if (!res.ok) throw new Error(`HTTP ${res.status}`)
+
+      const reader = res.body.getReader()
+      const decoder = new TextDecoder()
+      let buf = ''
+
+      while (true) {
+        const { done, value } = await reader.read()
+        if (done) break
+        buf += decoder.decode(value, { stream: true })
+        const lines = buf.split('\n')
+        buf = lines.pop() || ''
+        for (const line of lines) {
+          if (!line.startsWith('data: ')) continue
+          try {
+            const ev = JSON.parse(line.slice(6))
+            if (ev.type === 'token') {
+              contentRef.current += ev.content
+              const c = contentRef.current
+              setMessages(prev => { const u = [...prev]; if (u[idx]) u[idx] = { ...u[idx], content: c }; return u })
+            } else if (ev.type === 'error') {
+              setMessages(prev => { const u = [...prev]; if (u[idx]) u[idx] = { role: 'assistant', content: ev.error, error: true }; return u })
+            }
+          } catch {}
+        }
+      }
     } catch (err) {
-      setMessages(prev => [...prev, { role: 'assistant', content: `Erro: ${err.message}`, error: true }])
+      if (err.name !== 'AbortError') {
+        setMessages(prev => { const u = [...prev]; if (u[idxRef.current]) u[idxRef.current] = { role: 'assistant', content: err.message, error: true }; return u })
+      }
     } finally {
       setLoading(false)
+      abortRef.current = null
     }
   }
+
+  const stopGeneration = () => { abortRef.current?.abort() }
 
   const handleReindex = async () => {
     setLoading(true)
     try {
       const res = await githubDeliveryApi.aiChatReindex(service.id)
-      setIndexInfo({ fileCount: res.fileCount, alreadyIndexed: false })
-      setMessages(prev => [...prev, { role: 'system', content: `✅ Código re-indexado: ${res.fileCount} arquivos processados (${res.chunks} chunks)` }])
+      setMessages(prev => [...prev, { role: 'system', content: `Re-indexado: ${res.fileCount} arquivos (${res.chunks} chunks)` }])
     } catch (err) {
-      setMessages(prev => [...prev, { role: 'system', content: `❌ Erro ao re-indexar: ${err.message}`, error: true }])
-    } finally {
-      setLoading(false)
-    }
+      setMessages(prev => [...prev, { role: 'system', content: `Erro: ${err.message}`, error: true }])
+    } finally { setLoading(false) }
   }
 
   return (
-    <div className="flex flex-col h-[calc(100vh-280px)] min-h-[500px]">
-      {/* Header */}
-      <div className="flex items-center justify-between px-4 py-3 border-b border-zinc-800">
-        <div className="flex items-center gap-2">
-          <Bot className="w-5 h-5 text-purple-400" />
-          <span className="text-sm font-medium text-zinc-200">Zeus AI — Conheço este projeto</span>
-          {indexInfo && (
-            <span className="text-xs text-zinc-500 ml-2">
-              {indexInfo.fileCount} arquivos indexados
-            </span>
-          )}
-        </div>
-        <button
-          onClick={handleReindex}
-          disabled={loading}
-          className="flex items-center gap-1.5 px-2.5 py-1.5 text-xs rounded bg-zinc-800 hover:bg-zinc-700 text-zinc-300 transition-colors disabled:opacity-50"
-          title="Re-indexar código do projeto"
-        >
-          <RefreshCw className={`w-3.5 h-3.5 ${loading ? 'animate-spin' : ''}`} />
-          Re-indexar
-        </button>
-      </div>
-
-      {/* Messages */}
-      <div className="flex-1 overflow-y-auto px-4 py-4 space-y-4">
+    <div className="flex flex-col h-[calc(100vh-280px)] min-h-[500px] bg-zinc-950 rounded-lg border border-zinc-800">
+      {/* Messages area */}
+      <div ref={scrollRef} className="flex-1 overflow-y-auto px-6 py-6 space-y-6">
         {messages.length === 0 && (
-          <div className="flex flex-col items-center justify-center h-full text-center">
-            <Brain className="w-12 h-12 text-purple-500/30 mb-4" />
-            <p className="text-zinc-400 text-sm max-w-md">
-              Pergunte qualquer coisa sobre este projeto. A AI leu o código-fonte e pode explicar o que o sistema faz, como funciona, quais rotas tem, etc.
-            </p>
-            <div className="flex flex-wrap gap-2 mt-4 justify-center">
-              {['O que esse sistema faz?', 'Quais são as rotas/endpoints?', 'Como está a arquitetura?', 'Tem algum problema no código?'].map(q => (
-                <button
-                  key={q}
-                  onClick={() => { setInput(q); inputRef.current?.focus() }}
-                  className="px-3 py-1.5 text-xs rounded-full bg-zinc-800 hover:bg-zinc-700 text-zinc-300 transition-colors"
-                >
+          <div className="flex flex-col items-center justify-center h-full gap-4">
+            <div className="w-14 h-14 rounded-full bg-purple-500/10 flex items-center justify-center">
+              <Bot className="w-7 h-7 text-purple-400" />
+            </div>
+            <p className="text-zinc-400 text-sm text-center max-w-sm">Pergunte sobre o código deste projeto</p>
+            <div className="flex flex-wrap gap-2 justify-center max-w-lg">
+              {['O que esse sistema faz?', 'Quais endpoints existem?', 'Explique a arquitetura', 'Tem problemas no código?'].map(q => (
+                <button key={q} onClick={() => { setInput(q); inputRef.current?.focus() }}
+                  className="px-3 py-1.5 text-xs rounded-full border border-zinc-700 hover:border-purple-500/50 hover:bg-purple-500/5 text-zinc-400 hover:text-zinc-200 transition-all">
                   {q}
                 </button>
               ))}
             </div>
           </div>
         )}
-        {messages.map((msg, i) => (
-          <div key={i} className={`flex ${msg.role === 'user' ? 'justify-end' : 'justify-start'}`}>
-            <div className={`max-w-[85%] rounded-lg px-4 py-3 text-sm whitespace-pre-wrap ${
-              msg.role === 'user'
-                ? 'bg-purple-600/20 text-purple-100 border border-purple-500/20'
-                : msg.role === 'system'
-                  ? 'bg-zinc-800/50 text-zinc-400 border border-zinc-700/50 text-xs'
-                  : msg.error
-                    ? 'bg-red-900/20 text-red-300 border border-red-500/20'
-                    : 'bg-zinc-800 text-zinc-200 border border-zinc-700/50'
-            }`}>
-              {msg.content}
-              {msg.sources?.length > 0 && msg.sources.some(s => s.score > 0.4) && (
-                <div className="mt-2 pt-2 border-t border-zinc-700/50">
-                  <span className="text-xs text-zinc-500">Fontes: </span>
-                  {msg.sources.filter(s => s.score > 0.4).slice(0, 3).map((s, j) => (
-                    <span key={j} className="text-xs text-zinc-500">
-                      {s.source?.replace('code:', '')}{j < 2 ? ', ' : ''}
-                    </span>
-                  ))}
-                </div>
-              )}
-            </div>
-          </div>
-        ))}
-        {loading && (
-          <div className="flex justify-start">
-            <div className="bg-zinc-800 border border-zinc-700/50 rounded-lg px-4 py-3">
-              <div className="flex items-center gap-2 text-sm text-zinc-400">
-                <Loader2 className="w-4 h-4 animate-spin" />
-                Pensando...
+
+        {messages.map((msg, i) => {
+          if (msg.role === 'user') return (
+            <div key={i} className="flex justify-end">
+              <div className="max-w-[75%] bg-purple-600/15 border border-purple-500/20 rounded-2xl rounded-br-sm px-4 py-2.5 text-sm text-purple-100 whitespace-pre-wrap">
+                {msg.content}
               </div>
+            </div>
+          )
+          if (msg.role === 'system') return (
+            <div key={i} className="flex justify-center">
+              <span className={`text-xs px-3 py-1 rounded-full ${msg.error ? 'bg-red-500/10 text-red-400' : 'bg-zinc-800 text-zinc-500'}`}>{msg.content}</span>
+            </div>
+          )
+          return (
+            <div key={i} className="flex gap-3">
+              <div className="shrink-0 w-7 h-7 rounded-full bg-purple-500/10 flex items-center justify-center mt-0.5">
+                <Bot className="w-4 h-4 text-purple-400" />
+              </div>
+              <div className="flex-1 min-w-0">
+                {msg.error ? (
+                  <p className="text-sm text-red-400">{msg.content}</p>
+                ) : (
+                  <div className="prose prose-invert prose-sm max-w-none
+                    prose-p:my-2 prose-p:leading-relaxed
+                    prose-headings:my-3 prose-headings:font-semibold
+                    prose-li:my-0.5
+                    prose-code:text-purple-300 prose-code:bg-zinc-800/80 prose-code:px-1.5 prose-code:py-0.5 prose-code:rounded prose-code:text-xs prose-code:font-normal
+                    prose-pre:bg-zinc-900 prose-pre:border prose-pre:border-zinc-800 prose-pre:rounded-lg prose-pre:my-3
+                    prose-a:text-purple-400 prose-a:no-underline hover:prose-a:underline
+                    prose-strong:text-zinc-100
+                    prose-blockquote:border-purple-500/30 prose-blockquote:text-zinc-400">
+                    <Markdown remarkPlugins={[remarkGfm]}>{msg.content || (loading && i === idxRef.current ? '\u2588' : '')}</Markdown>
+                  </div>
+                )}
+                {msg.content && !msg.error && !loading && (
+                  <div className="flex items-center gap-1 mt-2">
+                    <button onClick={() => copyText(msg.content)}
+                      className="flex items-center gap-1 px-2 py-1 text-xs rounded hover:bg-zinc-800 text-zinc-500 hover:text-zinc-300 transition-colors">
+                      <ClipboardCopy className="w-3 h-3" /> Copiar
+                    </button>
+                  </div>
+                )}
+              </div>
+            </div>
+          )
+        })}
+        {loading && !contentRef.current && (
+          <div className="flex gap-3">
+            <div className="shrink-0 w-7 h-7 rounded-full bg-purple-500/10 flex items-center justify-center">
+              <Bot className="w-4 h-4 text-purple-400" />
+            </div>
+            <div className="flex items-center gap-1.5 py-2">
+              <span className="w-1.5 h-1.5 rounded-full bg-purple-400 animate-pulse" />
+              <span className="w-1.5 h-1.5 rounded-full bg-purple-400 animate-pulse [animation-delay:150ms]" />
+              <span className="w-1.5 h-1.5 rounded-full bg-purple-400 animate-pulse [animation-delay:300ms]" />
             </div>
           </div>
         )}
-        <div ref={messagesEndRef} />
       </div>
 
-      {/* Input */}
+      {/* Input bar */}
       <div className="px-4 py-3 border-t border-zinc-800">
-        <div className="flex gap-2">
-          <input
-            ref={inputRef}
-            type="text"
-            value={input}
+        <div className="flex items-center gap-2">
+          <button onClick={handleReindex} disabled={loading} title="Re-indexar"
+            className="p-2.5 rounded-lg hover:bg-zinc-800 text-zinc-500 hover:text-zinc-300 transition-colors disabled:opacity-40">
+            <RefreshCw className={`w-4 h-4 ${loading ? 'animate-spin' : ''}`} />
+          </button>
+          <input ref={inputRef} type="text" value={input}
             onChange={e => setInput(e.target.value)}
             onKeyDown={e => e.key === 'Enter' && !e.shiftKey && sendMessage()}
             placeholder="Pergunte sobre o projeto..."
             disabled={loading}
-            className="flex-1 bg-zinc-900 border border-zinc-700 rounded-lg px-4 py-2.5 text-sm text-zinc-200 placeholder-zinc-500 focus:outline-none focus:border-purple-500/50 disabled:opacity-50"
+            className="flex-1 bg-zinc-900 border border-zinc-800 rounded-xl px-4 py-2.5 text-sm text-zinc-200 placeholder-zinc-600 focus:outline-none focus:border-purple-500/40 disabled:opacity-50"
           />
-          <button
-            onClick={sendMessage}
-            disabled={loading || !input.trim()}
-            className="px-4 py-2.5 rounded-lg bg-purple-600 hover:bg-purple-500 text-white text-sm font-medium transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
-          >
-            <Send className="w-4 h-4" />
-          </button>
+          {loading ? (
+            <button onClick={stopGeneration} className="p-2.5 rounded-lg bg-red-500/10 hover:bg-red-500/20 text-red-400 transition-colors">
+              <svg className="w-4 h-4" fill="currentColor" viewBox="0 0 16 16"><rect x="3" y="3" width="10" height="10" rx="1" /></svg>
+            </button>
+          ) : (
+            <button onClick={sendMessage} disabled={!input.trim()}
+              className="p-2.5 rounded-lg bg-purple-600 hover:bg-purple-500 text-white transition-colors disabled:opacity-40 disabled:cursor-not-allowed">
+              <Send className="w-4 h-4" />
+            </button>
+          )}
         </div>
       </div>
     </div>
