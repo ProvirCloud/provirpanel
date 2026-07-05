@@ -144,6 +144,42 @@ router.post('/chat', async (req, res, next) => {
       ? `${message}\n\n---\n${contextText}`
       : message;
 
+    if (req.body.stream) {
+      // SSE streaming
+      res.setHeader('Content-Type', 'text/event-stream');
+      res.setHeader('Cache-Control', 'no-cache');
+      res.setHeader('Connection', 'keep-alive');
+      res.setHeader('X-Accel-Buffering', 'no');
+      res.flushHeaders();
+      res.write(`: ${' '.repeat(2048)}\n\n`);
+
+      const streamRes = await fetch(`${ZEUS_GATEWAY_URL}/api/chat/stream`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', 'x-api-key': ZEUS_API_KEY },
+        body: JSON.stringify({ message: enhancedMessage, collection, history, options })
+      });
+      if (!streamRes.ok) {
+        const err = await streamRes.text();
+        res.write(`data: ${JSON.stringify({ type: 'error', error: err })}\n\n`);
+        return res.end();
+      }
+      const decoder = new TextDecoder();
+      let buf = '';
+      for await (const chunk of streamRes.body) {
+        buf += typeof chunk === 'string' ? chunk : decoder.decode(chunk, { stream: true });
+        const lines = buf.split('\n');
+        buf = lines.pop() || '';
+        for (const line of lines) {
+          if (line.startsWith('data: ')) {
+            res.write(line + '\n\n');
+          }
+        }
+      }
+      if (buf.startsWith('data: ')) res.write(buf + '\n\n');
+      res.write(`data: ${JSON.stringify({ type: 'end' })}\n\n`);
+      return res.end();
+    }
+
     const data = await zeusRequest('/api/chat', {
       message: enhancedMessage,
       collection,
@@ -153,7 +189,9 @@ router.post('/chat', async (req, res, next) => {
 
     res.json(data);
   } catch (err) {
-    next(err);
+    if (!res.headersSent) return next(err);
+    res.write(`data: ${JSON.stringify({ type: 'error', error: err.message })}\n\n`);
+    res.end();
   }
 });
 
