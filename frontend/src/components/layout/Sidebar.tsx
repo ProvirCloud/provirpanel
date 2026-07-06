@@ -6,6 +6,8 @@ import { useTheme } from '../../app/providers/theme-provider'
 import Card from '../ui/Card'
 import SidebarSection from './SidebarSection'
 
+declare const __BUILD_VERSION__: string
+
 const roleConfig: Record<string, { label: string; color: string; bg: string }> = {
   central: { label: 'Central AI', color: 'text-purple-300', bg: 'bg-purple-500/15 border-purple-500/30' },
   workspace: { label: 'Workspace', color: 'text-blue-300', bg: 'bg-blue-500/15 border-blue-500/30' },
@@ -18,7 +20,7 @@ const PanelBadge = () => {
   useEffect(() => {
     const fetchInfo = async () => {
       try {
-        const token = localStorage.getItem('token')
+        const token = localStorage.getItem('provirpanel-token')
         const res = await fetch('/api/zeus/panel-info', { headers: { Authorization: `Bearer ${token}` } })
         if (res.ok) setInfo(await res.json())
       } catch {}
@@ -112,6 +114,7 @@ const SidebarContent = ({ onNavigate, showClose = false }: SidebarContentProps) 
       <Card variant="default" className="mt-6 px-4 py-4">
         <p className="text-xs font-semibold uppercase tracking-[0.18em] text-[var(--color-text-soft)]">ZEUS AI CLOUD OS</p>
         <p className="mt-2 text-sm leading-6 text-[var(--color-text-muted)]">Console operacional para infraestrutura, aplicações, observabilidade e governança.</p>
+        <p className="mt-2 text-[10px] font-mono text-[var(--color-text-muted)] opacity-50">build {__BUILD_VERSION__}</p>
       </Card>
     </>
   )

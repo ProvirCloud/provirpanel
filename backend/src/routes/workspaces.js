@@ -110,35 +110,36 @@ router.delete('/companies/:companyId/projects/:id', async (req, res, next) => {
 
 // ─── Invite ───────────────────────────────────────────────────────────────────
 
-// ─── Invite (gerado via Gateway) ─────────────────────────────────────────────
-
 router.post('/workspaces/:workspaceId/companies/:companyId/invite', async (req, res, next) => {
   try {
     const { workspaceId, companyId } = req.params;
+    const expiresAt = new Date(Date.now() + 24 * 60 * 60 * 1000);
 
-    // Generate invite via Zeus Gateway
-    const response = await fetch(`${GATEWAY_URL}/api/panels/generate-invite`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json', 'x-api-key': GATEWAY_API_KEY },
-      body: JSON.stringify({
-        workspaceId: process.env.ZEUS_WORKSPACE_ID || workspaceId,
-        parentPanelId: process.env.ZEUS_PANEL_ID || null
-      }),
-      signal: AbortSignal.timeout(10000)
-    });
-
-    if (!response.ok) {
-      const err = await response.json().catch(() => ({}));
-      return res.status(response.status).json(err);
+    // Try Gateway-based invite if configured
+    if (GATEWAY_URL && GATEWAY_API_KEY) {
+      try {
+        const gwWorkspaceId = process.env.ZEUS_WORKSPACE_ID || process.env.ZEUS_SCOPE_ID || null;
+        if (gwWorkspaceId) {
+          const response = await fetch(`${GATEWAY_URL}/api/panels/generate-invite`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json', 'x-api-key': GATEWAY_API_KEY },
+            body: JSON.stringify({ workspaceId: gwWorkspaceId, parentPanelId: process.env.ZEUS_PANEL_ID || null }),
+            signal: AbortSignal.timeout(10000)
+          });
+          if (response.ok) {
+            const data = await response.json();
+            await prisma.workspaceInvite.create({ data: { token: data.token, workspaceId, companyId, expiresAt } }).catch(() => {});
+            return res.json({ token: data.token, expiresAt, workspaceName: data.workspaceName });
+          }
+        }
+      } catch {}
     }
 
-    const data = await response.json();
-
-    // Also save locally for reference
-    const expiresAt = new Date(Date.now() + 24 * 60 * 60 * 1000);
-    await prisma.workspaceInvite.create({ data: { token: data.token, workspaceId, companyId, expiresAt } }).catch(() => {});
-
-    res.json({ token: data.token, expiresAt, workspaceName: data.workspaceName });
+    // Fallback: generate locally
+    const panelUrl = process.env.PROVIRPANEL_PUBLIC_URL || '';
+    const token = jwt.sign({ workspaceId, companyId, panelUrl }, JWT_SECRET, { expiresIn: '24h' });
+    await prisma.workspaceInvite.create({ data: { token, workspaceId, companyId, expiresAt } });
+    res.json({ token, expiresAt });
   } catch (err) { next(err); }
 });
 
