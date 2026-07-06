@@ -17,6 +17,7 @@ const wsApi = {
   revokeChild: (id) => api.delete(`/children/${id}/revoke`),
   connect: (d) => api.post('/child/connect-remote', d).then(r => r.data),
   syncConnections: () => api.post('/workspaces/sync-connections').then(r => r.data).catch(() => null),
+  disconnect: () => api.post('/child/disconnect', { workspaceData: localStorage.getItem('provir-workspace') || '{}' }).then(r => r.data),
 }
 
 const collectionName = (ws, co, pr) =>
@@ -281,6 +282,9 @@ export default function WorkspacesPage() {
   const [addingWs, setAddingWs] = useState(false)
   const [showConnect, setShowConnect] = useState(false)
   const [error, setError] = useState('')
+  const [linked, setLinked] = useState(() => {
+    try { return JSON.parse(localStorage.getItem('provir-workspace') || 'null') } catch { return null }
+  })
 
   useEffect(() => {
     wsApi.syncConnections().then(() => wsApi.list().then(setWorkspaces).catch(e => setError(e.message)).finally(() => setLoading(false)))
@@ -297,6 +301,15 @@ export default function WorkspacesPage() {
     setWorkspaces(prev => prev.filter(ws => ws.id !== id))
   }
 
+  const handleDisconnect = async () => {
+    try {
+      await wsApi.disconnect()
+      localStorage.removeItem('provir-workspace')
+      setLinked(null)
+      wsApi.list().then(setWorkspaces)
+    } catch (e) { setError(e.message) }
+  }
+
   if (loading) return <div className="p-8 text-slate-400 text-sm">Carregando...</div>
 
   return (
@@ -311,6 +324,16 @@ export default function WorkspacesPage() {
           <Btn variant="primary" onClick={() => setAddingWs(true)}><Plus className="h-3.5 w-3.5" />Novo Workspace</Btn>
         </div>
       </div>
+
+      {linked && (
+        <div className="flex items-center justify-between rounded-xl border border-green-800/50 bg-green-900/20 px-4 py-3">
+          <div>
+            <p className="text-xs font-medium text-green-400">✅ Vinculado ao workspace: {linked.workspaceName || 'N/A'}</p>
+            <p className="text-[10px] text-green-600 mt-0.5">Painel ID: {linked.panelId || '—'}</p>
+          </div>
+          <Btn variant="danger" onClick={handleDisconnect}><Unlink className="h-3 w-3" />Desvincular</Btn>
+        </div>
+      )}
 
       {error && <p className="text-xs text-red-400">{error}</p>}
 

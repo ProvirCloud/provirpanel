@@ -165,7 +165,49 @@ router.get('/workspaces/:workspaceId/children', async (req, res, next) => {
 
 router.delete('/children/:id/revoke', async (req, res, next) => {
   try {
+    const child = await prisma.childPanel.findUnique({ where: { id: req.params.id } });
     await prisma.childPanel.update({ where: { id: req.params.id }, data: { revokedAt: new Date() } });
+
+    // Notify Gateway to remove the connection
+    if (GATEWAY_URL && GATEWAY_API_KEY && child) {
+      try {
+        await fetch(`${GATEWAY_URL}/api/panels/disconnect`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json', 'x-api-key': GATEWAY_API_KEY },
+          body: JSON.stringify({ childPanelUrl: child.url }),
+          signal: AbortSignal.timeout(10000)
+        });
+      } catch {}
+    }
+
+    res.json({ ok: true });
+  } catch (err) { next(err); }
+});
+
+// Child panel disconnects itself
+router.post('/child/disconnect', async (req, res, next) => {
+  try {
+    // Remove all local workspace data
+    try {
+      const allWs = await prisma.workspace.findMany();
+      for (const ws of allWs) {
+        await prisma.workspace.delete({ where: { id: ws.id } }).catch(() => {});
+      }
+    } catch {}
+
+    // Notify Gateway
+    if (GATEWAY_URL && GATEWAY_API_KEY) {
+      try {
+        const myUrl = process.env.PROVIRPANEL_PUBLIC_URL || '';
+        await fetch(`${GATEWAY_URL}/api/panels/disconnect`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json', 'x-api-key': GATEWAY_API_KEY },
+          body: JSON.stringify({ childPanelUrl: myUrl }),
+          signal: AbortSignal.timeout(10000)
+        });
+      } catch {}
+    }
+
     res.json({ ok: true });
   } catch (err) { next(err); }
 });
