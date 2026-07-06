@@ -504,3 +504,14 @@ export const githubDeliveryApi = {
     return response.data
   }
 }
+
+export const zeusAiApi = {
+  async indexGit({ org, repo, branch, collection, metadata }) {
+    const response = await api.post('/zeus/index-git', { org, repo, branch, collection, metadata })
+    return response.data
+  },
+  async listRepos(org) {
+    const response = await api.get(`/zeus/index-git/repos?org=${encodeURIComponent(org)}`)
+    return response.data
+  }
+}

@@ -320,4 +320,35 @@ router.post('/panels/:id/index', async (req, res, next) => {
   }
 });
 
+// POST /zeus/index-git — index a GitHub repository into Qdrant
+router.post('/index-git', async (req, res, next) => {
+  try {
+    const { org, repo, branch, collection, metadata } = req.body;
+    if (!org || !repo) return res.status(400).json({ error: 'org and repo are required' });
+    const data = await zeusRequest('/api/index/git', {
+      org,
+      repo,
+      branch: branch || 'main',
+      collection: collection || `project_${repo.replace(/[^a-z0-9]/gi, '_').toLowerCase()}`,
+      category: 'dev',
+      metadata: metadata || {}
+    });
+    res.status(202).json(data);
+  } catch (err) {
+    next(err);
+  }
+});
+
+// GET /zeus/index-git/repos — list repos from a GitHub org
+router.get('/index-git/repos', async (req, res, next) => {
+  try {
+    const org = req.query.org;
+    if (!org) return res.status(400).json({ error: 'org query param is required' });
+    const data = await zeusGet(`/api/index/git/repos?org=${encodeURIComponent(org)}`);
+    res.json(data);
+  } catch (err) {
+    next(err);
+  }
+});
+
 module.exports = router;

@@ -37,7 +37,8 @@ import {
   Trash2,
   UploadCloud,
   X,
-  Zap
+  Zap,
+  Sparkles
 } from 'lucide-react'
 import {
   serviceActivityApi,
@@ -45,7 +46,8 @@ import {
   githubDeliveryApi,
   serviceLogsApi,
   serviceMetricsApi,
-  servicesApi
+  servicesApi,
+  zeusAiApi
 } from '../services/serviceDetailsApi.js'
 import { Send, RefreshCw, Bot, ClipboardCopy } from 'lucide-react'
 import Markdown from 'react-markdown'
@@ -2285,6 +2287,16 @@ const ServiceDeliveryTab = ({ service, onReload }) => {
   const [projectAnalysis, setProjectAnalysis] = useState(null)
   const pollRef = useRef(null)
 
+  const [aiIndexed, setAiIndexed] = useState(null)
+  const [showGitIndex, setShowGitIndex] = useState(false)
+  const [gitIndexForm, setGitIndexForm] = useState(() => {
+    const [org = '', repo = ''] = (service.delivery?.repository || '').split('/')
+    const branch = service.delivery?.branch || 'main'
+    const collection = repo ? `project_${repo.replace(/[^a-z0-9]/gi, '_').toLowerCase()}` : ''
+    return { org, repo, branch, collection }
+  })
+  const [gitIndexStatus, setGitIndexStatus] = useState(null) // null | 'indexing' | 'done' | 'error'
+  const [gitIndexResult, setGitIndexResult] = useState(null)
   const connectionId = connectionState.defaultConnectionId
   const activeConnection = connectionState.connections?.[0] || null
   const selectedBlueprint = useMemo(() => {
@@ -2601,6 +2613,66 @@ const ServiceDeliveryTab = ({ service, onReload }) => {
     }
   }
 
+  const updateAiContext = async () => {
+    setLoadingAction('ai-context')
+    try {
+      const res = await githubDeliveryApi.aiChatReindex(service.id)
+      setAiIndexed(res)
+      setMessage(`AI indexou ${res.fileCount} arquivos (${res.chunks} chunks)`)
+    } catch (err) {
+      setMessage(err.response?.data?.message || err.message || 'Falha ao indexar')
+    } finally {
+      setLoadingAction('')
+    }
+  }
+
+  const submitGitIndex = async () => {
+    const { org, repo, branch, collection } = gitIndexForm
+    if (!org || !repo) return setMessage('Org e Repo são obrigatórios')
+    setGitIndexStatus('indexing')
+    setGitIndexResult(null)
+    try {
+      const col = collection || `project_${repo.replace(/[^a-z0-9]/gi, '_').toLowerCase()}`
+      const data = await zeusAiApi.indexGit({
+        org, repo, branch: branch || 'main', collection: col,
+        metadata: { service_name: service.name }
+      })
+      // Listen for socket events
+      const { io } = await import('socket.io-client')
+      const socket = io('https://zeusai.zeusengine.com.br', { transports: ['websocket'] })
+      const jobId = data.jobId
+      socket.on('git:index:progress', (ev) => {
+        if (ev.jobId === jobId) setGitIndexResult({ progress: ev.message || ev.progress })
+      })
+      socket.on('git:index:done', (ev) => {
+        if (ev.jobId === jobId) {
+          setGitIndexStatus('done')
+          setGitIndexResult({ files: ev.files, chunks: ev.chunks })
+          setAiIndexed({ fileCount: ev.files, chunks: ev.chunks })
+          socket.disconnect()
+        }
+      })
+      socket.on('git:index:error', (ev) => {
+        if (ev.jobId === jobId) {
+          setGitIndexStatus('error')
+          setGitIndexResult({ error: ev.error || ev.message })
+          socket.disconnect()
+        }
+      })
+      // Timeout fallback
+      setTimeout(() => {
+        if (gitIndexStatus === 'indexing') {
+          socket.disconnect()
+          setGitIndexStatus('done')
+          setGitIndexResult({ files: '?', chunks: '?', note: 'Indexação iniciada (timeout no acompanhamento)' })
+        }
+      }, 120000)
+    } catch (err) {
+      setGitIndexStatus('error')
+      setGitIndexResult({ error: err.response?.data?.error || err.message })
+    }
+  }
+
   return (
     <div className="grid gap-4 xl:grid-cols-[0.85fr_1.15fr]">
       <Panel title="GitHub connection" icon={GitBranch}>
@@ -2747,6 +2819,14 @@ const ServiceDeliveryTab = ({ service, onReload }) => {
               {loadingAction === 'project-analysis' ? <Loader2 className="h-4 w-4 animate-spin" /> : <Brain className="h-4 w-4" />}
               Diagnóstico AI
             </button>
+            <button className={smallButtonClass} type="button" onClick={updateAiContext} disabled={loadingAction === 'ai-context'}>
+              {loadingAction === 'ai-context' ? <Loader2 className="h-4 w-4 animate-spin" /> : <Sparkles className="h-4 w-4" />}
+              Indexar Projeto Local
+            </button>
+            <button className={smallButtonClass} type="button" onClick={() => setShowGitIndex(v => !v)}>
+              <GitBranch className="h-4 w-4" />
+              Indexar Repositório Git
+            </button>
             <button className={smallButtonClass} type="button" onClick={dispatchWorkflow} disabled={!(service.delivery?.workflowPath || workflow?.path) || loadingAction === 'dispatch'}>
               {loadingAction === 'dispatch' ? <Loader2 className="h-4 w-4 animate-spin" /> : <Play className="h-4 w-4" />}
               Executar workflow
@@ -2758,6 +2838,43 @@ const ServiceDeliveryTab = ({ service, onReload }) => {
           ) : null}
 
           {workflowRun ? <WorkflowRunPanel run={workflowRun} message={message} /> : null}
+
+          {showGitIndex && (
+            <div className="space-y-3 rounded-xl border border-purple-500/20 bg-purple-500/5 p-4">
+              <h4 className="flex items-center gap-2 text-sm font-semibold text-purple-200">
+                <Sparkles className="h-4 w-4" /> Indexar Repositório no Zeus AI
+              </h4>
+              <div className="grid gap-2 sm:grid-cols-2">
+                <input className={`${fieldClass} w-full`} placeholder="Org (ex: Legacy-Empreendimentos)" value={gitIndexForm.org} onChange={e => setGitIndexForm(f => ({ ...f, org: e.target.value }))} />
+                <input className={`${fieldClass} w-full`} placeholder="Repo (ex: legacy-node-queue)" value={gitIndexForm.repo} onChange={e => setGitIndexForm(f => ({ ...f, repo: e.target.value }))} />
+                <input className={`${fieldClass} w-full`} placeholder="Branch (default: main)" value={gitIndexForm.branch} onChange={e => setGitIndexForm(f => ({ ...f, branch: e.target.value }))} />
+                <input className={`${fieldClass} w-full`} placeholder={`Collection (default: project_${(gitIndexForm.repo || service.name).replace(/[^a-z0-9]/gi, '_').toLowerCase()})`} value={gitIndexForm.collection} onChange={e => setGitIndexForm(f => ({ ...f, collection: e.target.value }))} />
+              </div>
+              <div className="flex items-center gap-3">
+                <button className={primaryButtonClass} type="button" onClick={submitGitIndex} disabled={gitIndexStatus === 'indexing' || !gitIndexForm.org || !gitIndexForm.repo}>
+                  {gitIndexStatus === 'indexing' ? <Loader2 className="h-4 w-4 animate-spin" /> : <Sparkles className="h-4 w-4" />}
+                  {gitIndexStatus === 'indexing' ? 'Indexando...' : 'Indexar'}
+                </button>
+                <button className={smallButtonClass} type="button" onClick={() => setShowGitIndex(false)}>Fechar</button>
+              </div>
+              {gitIndexStatus === 'indexing' && gitIndexResult?.progress && (
+                <p className="text-xs text-purple-300 animate-pulse">{gitIndexResult.progress}</p>
+              )}
+              {gitIndexStatus === 'done' && gitIndexResult && (
+                <p className="text-xs text-green-300">✅ Indexado: {gitIndexResult.files} arquivos, {gitIndexResult.chunks} chunks {gitIndexResult.note ? `(${gitIndexResult.note})` : ''}</p>
+              )}
+              {gitIndexStatus === 'error' && gitIndexResult && (
+                <p className="text-xs text-red-400">❌ {gitIndexResult.error}</p>
+              )}
+            </div>
+          )}
+
+          {aiIndexed && (
+            <div className="flex items-center gap-2 rounded-lg border border-purple-500/20 bg-purple-500/5 px-3 py-2">
+              <Sparkles className="h-4 w-4 text-purple-400" />
+              <span className="text-xs text-purple-200">AI aprendeu sobre este projeto — {aiIndexed.fileCount} arquivos, {aiIndexed.chunks} chunks indexados</span>
+            </div>
+          )}
 
           {service.delivery?.workflowUpdatedAt || service.delivery?.lastWorkflowDispatchAt ? (
             <div className="rounded-lg border border-slate-800 bg-slate-900/40 p-3 text-xs text-slate-400 space-y-1">
