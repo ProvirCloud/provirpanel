@@ -27,6 +27,7 @@ import ServiceDetailsPage from './pages/ServiceDetailsPage.jsx'
 import StacksPanel from './components/StacksPanel.jsx'
 import ZeusChat from './components/ZeusChat.jsx'
 import ZeusPanels from './components/ZeusPanels.jsx'
+import DatabaseConnectionsPanel from './components/DatabaseConnectionsPanel.jsx'
 import api from './services/api.js'
 import { getPanelBasename } from './utils/panelPath.js'
 
@@ -140,6 +141,7 @@ const App = () => {
           <Route path="security" element={<ModulePage title="Auditoria" subtitle="Governança, trilhas críticas e segurança"><SecurityAuditPanel showPageIntro={false} /></ModulePage>} />
           <Route path="logs" element={<ModulePage title="Logs" subtitle="Observabilidade, eventos e troubleshooting"><LogsPanel showPageIntro={false} /></ModulePage>} />
           <Route path="zeus-panels" element={<ModulePage title="Zeus AI" subtitle="Painéis conectados e inteligência centralizada"><ZeusPanels /></ModulePage>} />
+          <Route path="databases" element={<ModulePage title="Database Connections" subtitle="Conexões, schemas e indexação para AI"><DatabaseConnectionsPanel /></ModulePage>} />
         </Route>
         <Route path="*" element={<Navigate to="/" replace />} />
       </Routes>

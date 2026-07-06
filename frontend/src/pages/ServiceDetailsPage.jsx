@@ -1738,7 +1738,10 @@ const ServiceMetricsTab = ({ service }) => {
 }
 
 const ServiceAiTab = ({ service }) => {
-  const [messages, setMessages] = useState([])
+  const storageKey = `ai-chat-${service.id}`
+  const [messages, setMessages] = useState(() => {
+    try { return JSON.parse(sessionStorage.getItem(storageKey)) || [] } catch { return [] }
+  })
   const [input, setInput] = useState('')
   const [loading, setLoading] = useState(false)
   const scrollRef = useRef(null)
@@ -1749,6 +1752,7 @@ const ServiceAiTab = ({ service }) => {
 
   useEffect(() => { scrollRef.current?.scrollTo({ top: scrollRef.current.scrollHeight, behavior: 'smooth' }) }, [messages])
   useEffect(() => { inputRef.current?.focus() }, [])
+  useEffect(() => { if (messages.length) sessionStorage.setItem(storageKey, JSON.stringify(messages)) }, [messages, storageKey])
 
   const copyText = (text) => {
     navigator.clipboard.writeText(text)
@@ -1913,6 +1917,10 @@ const ServiceAiTab = ({ service }) => {
           <button onClick={handleReindex} disabled={loading} title="Re-indexar"
             className="p-2.5 rounded-lg hover:bg-zinc-800 text-zinc-500 hover:text-zinc-300 transition-colors disabled:opacity-40">
             <RefreshCw className={`w-4 h-4 ${loading ? 'animate-spin' : ''}`} />
+          </button>
+          <button onClick={() => { setMessages([]); sessionStorage.removeItem(storageKey) }} title="Limpar conversa"
+            className="p-2.5 rounded-lg hover:bg-zinc-800 text-zinc-500 hover:text-zinc-300 transition-colors">
+            <Trash2 className="w-4 h-4" />
           </button>
           <input ref={inputRef} type="text" value={input}
             onChange={e => setInput(e.target.value)}
@@ -2280,12 +2288,17 @@ const ServiceDeliveryTab = ({ service, onReload }) => {
   const [selectedBlueprintId, setSelectedBlueprintId] = useState(service.delivery?.blueprint?.id || '')
   const [deployMode, setDeployMode] = useState(service.delivery?.deployMode || 'manual')
   const [workflow, setWorkflow] = useState(null)
-  const [message, setMessage] = useState('')
+  const [message, setMessage] = useState(() => sessionStorage.getItem(`delivery-msg-${service.id}`) || '')
   const [loadingAction, setLoadingAction] = useState('')
   const [editingToken, setEditingToken] = useState(false)
   const [workflowRun, setWorkflowRun] = useState(null)
-  const [projectAnalysis, setProjectAnalysis] = useState(null)
+  const [projectAnalysis, setProjectAnalysis] = useState(() => {
+    try { return JSON.parse(sessionStorage.getItem(`delivery-analysis-${service.id}`)) } catch { return null }
+  })
   const pollRef = useRef(null)
+
+  useEffect(() => { if (message) sessionStorage.setItem(`delivery-msg-${service.id}`, message); else sessionStorage.removeItem(`delivery-msg-${service.id}`) }, [message, service.id])
+  useEffect(() => { if (projectAnalysis) sessionStorage.setItem(`delivery-analysis-${service.id}`, JSON.stringify(projectAnalysis)); else sessionStorage.removeItem(`delivery-analysis-${service.id}`) }, [projectAnalysis, service.id])
 
   const [aiIndexed, setAiIndexed] = useState(null)
   const [showGitIndex, setShowGitIndex] = useState(false)
@@ -2883,6 +2896,26 @@ const ServiceDeliveryTab = ({ service, onReload }) => {
               {service.delivery.workflowHtmlUrl ? <p><a href={service.delivery.workflowHtmlUrl} target="_blank" rel="noreferrer" className="text-blue-400 underline hover:text-blue-300">Ver workflow no GitHub</a></p> : null}
             </div>
           ) : null}
+
+          {service.delivery?.repository && (
+            <div className="rounded-lg border border-amber-500/20 bg-amber-500/5 p-3 space-y-2 w-full max-w-full overflow-hidden">
+              <p className="text-xs font-medium text-amber-200">GitHub Secrets</p>
+              <div className="space-y-2">
+                {[{ key: 'PROVIRPANEL_URL', value: `${window.location.origin}/api/ci-cd/webhook` }, { key: 'PROVIRPANEL_TOKEN', value: service.delivery?.deployToken || localStorage.getItem('provirpanel-token') || '' }].map(s => (
+                  <div key={s.key} className="space-y-0.5">
+                    <div className="flex items-center justify-between">
+                      <span className="text-[11px] text-slate-400 font-mono">{s.key}</span>
+                      <button onClick={() => { navigator.clipboard.writeText(s.value); setMessage(`Copiado: ${s.key}`) }} className="text-[10px] text-slate-400 hover:text-white flex items-center gap-1"><Copy className="h-3 w-3" /> copiar</button>
+                    </div>
+                    <div className="rounded bg-slate-900 px-2 py-1 overflow-x-auto">
+                      <code className="text-[11px] text-slate-300 font-mono whitespace-nowrap">{s.value}</code>
+                    </div>
+                  </div>
+                ))}
+              </div>
+              <p className="text-[10px] text-slate-500">Repo → Settings → Secrets and variables → Actions</p>
+            </div>
+          )}
 
           {projectAnalysis ? (
             <div className="space-y-3 rounded-xl border border-indigo-500/20 bg-indigo-500/5 p-4">

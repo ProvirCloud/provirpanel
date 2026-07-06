@@ -173,3 +173,18 @@ model ApiGatewayRoute {
   @@index([method, path], name: "idx_gateway_method_path")
   @@map("api_gateway_routes")
 }
+
+model DatabaseConnection {
+  id        String   @id @default(uuid()) @db.Uuid
+  name      String   @db.VarChar(120)
+  type      String   @db.VarChar(20) // postgres | mysql | mongodb
+  host      String   @db.VarChar(255)
+  port      Int
+  user      String   @db.VarChar(255)
+  password  String   @db.Text // encrypted
+  database  String   @db.VarChar(255)
+  projects Json     @default("[]") // [{id, name, type: 'backend'|'frontend'}]
+  createdAt DateTime @default(now()) @map("created_at")
+
+  @@map("database_connections")
+}

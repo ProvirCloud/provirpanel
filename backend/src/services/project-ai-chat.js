@@ -200,20 +200,22 @@ REGRAS:
 - Use português brasileiro, informal mas técnico
 - Se o contexto não tiver informação suficiente pra responder, diga exatamente o que falta`;
 
-async function chatAboutProject(serviceId, message, history = [], projectDir = null) {
+async function chatAboutProject(serviceId, message, history = [], projectDir = null, { gitCollection, serviceContext } = {}) {
   const collection = `project_${serviceId.split('-')[0]}`;
   const hasIndex = isIndexed(serviceId, projectDir);
 
   // If indexed → use RAG (fast, context from Qdrant)
-  if (hasIndex) {
+  if (hasIndex || gitCollection) {
+    const queryCollection = gitCollection || collection;
+    const systemCtx = serviceContext ? `Contexto do serviço:\n${serviceContext}\n\n` : '';
     const res = await fetch(`${ZEUS_GATEWAY_URL}/api/chat`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json', 'x-api-key': ZEUS_API_KEY },
       body: JSON.stringify({
-        message,
-        collection,
+        message: systemCtx + message,
+        collection: queryCollection,
         history: history.slice(-10),
-        options: { large: true, topK: 10, num_ctx: 16384 }
+        options: { large: true, topK: 12, num_ctx: 16384 }
       })
     });
     if (res.ok) {
@@ -229,9 +231,10 @@ async function chatAboutProject(serviceId, message, history = [], projectDir = n
   }
 
   const sourceCode = projectDir ? readInlineSource(projectDir) : '';
+  const systemCtx = serviceContext ? `Contexto do serviço:\n${serviceContext}\n\n` : '';
   const userContent = sourceCode
-    ? `Código-fonte do projeto:\n\n${sourceCode}\n\n---\n\nPergunta: ${message}`
-    : message;
+    ? `${systemCtx}Código-fonte do projeto:\n\n${sourceCode}\n\n---\n\nPergunta: ${message}`
+    : `${systemCtx}Pergunta: ${message}`;
 
   const res = await fetch(`${ZEUS_GATEWAY_URL}/api/chat/direct`, {
     method: 'POST',
@@ -264,20 +267,22 @@ function autoIndexAfterDeploy(serviceId, projectDir) {
   startBackgroundIndex(serviceId, projectDir);
 }
 
-async function chatAboutProjectStream(serviceId, message, history = [], projectDir = null, onEvent) {
+async function chatAboutProjectStream(serviceId, message, history = [], projectDir = null, onEvent, { gitCollection, serviceContext } = {}) {
   const collection = `project_${serviceId.split('-')[0]}`;
   const hasIndex = isIndexed(serviceId, projectDir);
 
   let streamUrl, streamBody;
+  const systemCtx = serviceContext ? `Contexto do serviço:\n${serviceContext}\n\n` : '';
 
-  if (hasIndex) {
+  if (hasIndex || gitCollection) {
+    const queryCollection = gitCollection || collection;
     // Use RAG stream
     streamUrl = `${ZEUS_GATEWAY_URL}/api/chat/stream`;
     streamBody = {
-      message,
-      collection,
+      message: systemCtx + message,
+      collection: queryCollection,
       history: history.slice(-10),
-      options: { large: true, topK: 10, num_ctx: 16384 }
+      options: { large: true, topK: 12, num_ctx: 16384 }
     };
   } else {
     // Direct stream with inline source
@@ -286,8 +291,8 @@ async function chatAboutProjectStream(serviceId, message, history = [], projectD
     }
     const sourceCode = projectDir ? readInlineSource(projectDir) : '';
     const userContent = sourceCode
-      ? `C\u00f3digo-fonte do projeto:\n\n${sourceCode}\n\n---\n\nPergunta: ${message}`
-      : message;
+      ? `${systemCtx}Código-fonte do projeto:\n\n${sourceCode}\n\n---\n\nPergunta: ${message}`
+      : `${systemCtx}Pergunta: ${message}`;
 
     streamUrl = `${ZEUS_GATEWAY_URL}/api/chat/direct/stream`;
     streamBody = {

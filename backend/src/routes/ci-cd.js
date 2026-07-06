@@ -853,6 +853,15 @@ REGRAS CRÍTICAS:
 });
 
 // --- AI Chat about project code ---
+function buildServiceContext(service) {
+  const parts = [`Serviço: ${service.name}`, `Template: ${service.templateId || 'custom'}`];
+  if (service.nodeServiceMode === 'sites') parts.push('Modo: Node Sites (hospeda build estático de qualquer framework frontend — Vue, React, Angular — de forma monolítica via Express. O deploy envia o dist/build para uma pasta e o Node serve como static files com fallback SPA.)');
+  if (service.delivery?.repository) parts.push(`Repositório Git: ${service.delivery.repository} (branch: ${service.delivery.branch || 'main'})`);
+  if (service.containerPort) parts.push(`Porta: ${service.containerPort}`);
+  if (service.command) parts.push(`Comando: ${Array.isArray(service.command) ? service.command.join(' ') : service.command}`);
+  return parts.join('\n');
+}
+
 router.post('/services/:serviceId/ai-chat', async (req, res, next) => {
   try {
     const { message, history, stream } = req.body;
@@ -877,12 +886,20 @@ router.post('/services/:serviceId/ai-chat', async (req, res, next) => {
       // Flush padding to force Cloudflare to start streaming immediately
       res.write(`: ${' '.repeat(2048)}\n\n`);
 
+      // Resolve Git-indexed collection if service has delivery repo
+      const gitCollection = service.delivery?.repository
+        ? `project_${service.delivery.repository.split('/').pop().replace(/[^a-z0-9]/gi, '_').toLowerCase()}`
+        : null;
+
       await chatAboutProjectStream(service.id, message, history || [], projectDir, (event) => {
         res.write(`data: ${JSON.stringify(event)}\n\n`);
-      });
+      }, { gitCollection, serviceContext: buildServiceContext(service) });
       res.end();
     } else {
-      const result = await chatAboutProject(service.id, message, history || [], projectDir);
+      const gitCollection = service.delivery?.repository
+        ? `project_${service.delivery.repository.split('/').pop().replace(/[^a-z0-9]/gi, '_').toLowerCase()}`
+        : null;
+      const result = await chatAboutProject(service.id, message, history || [], projectDir, { gitCollection, serviceContext: buildServiceContext(service) });
       res.json({
         answer: result.answer,
         sources: result.sources,

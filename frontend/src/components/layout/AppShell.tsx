@@ -30,6 +30,7 @@ const routeMeta: Record<string, { title: string; context: string }> = {
   '/users': { title: 'Usuários', context: 'Acessos e administração do workspace' },
   '/email': { title: 'E-mail', context: 'Fluxos de comunicação e entrega transacional' },
   '/zeus-panels': { title: 'Zeus AI', context: 'Painéis conectados e inteligência centralizada' },
+  '/databases': { title: 'Database Connections', context: 'Conexões, schemas e indexação para AI' },
 }
 
 const AppShell = ({ username, onLogout, onChangePassword, onCreateUser, onManageMfa, children }: AppShellProps) => {

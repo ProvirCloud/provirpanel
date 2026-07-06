@@ -1,4 +1,4 @@
-import { Activity, Boxes, Brain, Files, FileText, Globe, Layers3, Route, SearchCheck, Terminal, X } from 'lucide-react'
+import { Activity, Boxes, Brain, Database, Files, FileText, Globe, Layers3, Route, SearchCheck, Terminal, X } from 'lucide-react'
 import logoNameDark from '../../assets/images/logoname.webp'
 import logoNameLight from '../../assets/images/logoname_w.webp'
 import { useTheme } from '../../app/providers/theme-provider'
@@ -29,6 +29,7 @@ const sections = [
       { to: '/nginx', label: 'Nginx Manager', icon: Boxes },
       { to: '/domains', label: 'DNS & WAF', icon: Globe },
       { to: '/gateway', label: 'Gateway', icon: Route },
+      { to: '/databases', label: 'Databases', icon: Database },
       { to: '/security', label: 'Auditoria', icon: SearchCheck },
     ],
   },
