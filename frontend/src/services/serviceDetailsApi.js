@@ -441,6 +441,21 @@ export const githubDeliveryApi = {
     return response.data
   },
 
+  async saveWorkflowContent(serviceId, { content, connectionId, repository, branch }) {
+    const response = await api.put(`/ci-cd/github/services/${serviceId}/workflow/content`, { content, connectionId, repository, branch })
+    return response.data
+  },
+
+  async getWorkflowContent(serviceId) {
+    const response = await api.get(`/ci-cd/github/services/${serviceId}/workflow/content`)
+    return response.data
+  },
+
+  async getDeployToken() {
+    const response = await api.get('/ci-cd/deploy-token')
+    return response.data?.token || ''
+  },
+
   async dispatchWorkflow(serviceId, payload = {}) {
     const response = await api.post(`/ci-cd/github/services/${serviceId}/workflow/dispatch`, payload)
     return response.data
@@ -471,8 +486,8 @@ export const githubDeliveryApi = {
     return response.data
   },
 
-  async aiProjectAnalysis(serviceId) {
-    const response = await api.post(`/docker/services/${serviceId}/ai-project-analysis`)
+  async aiProjectAnalysis(serviceId, userInstruction) {
+    const response = await api.post(`/docker/services/${serviceId}/ai-project-analysis`, { userInstruction })
     return response.data
   },
 

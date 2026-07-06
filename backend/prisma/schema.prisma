@@ -188,3 +188,70 @@ model DatabaseConnection {
 
   @@map("database_connections")
 }
+
+// ==================== WORKSPACES ====================
+
+model Workspace {
+  id        String    @id @default(uuid())
+  name      String
+  slug      String    @unique
+  createdAt DateTime  @default(now()) @map("created_at")
+  companies Company[]
+  invites   WorkspaceInvite[]
+
+  @@map("workspaces")
+}
+
+model Company {
+  id          String    @id @default(uuid())
+  name        String
+  slug        String
+  workspaceId String    @map("workspace_id")
+  workspace   Workspace @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+  createdAt   DateTime  @default(now()) @map("created_at")
+  projects    Project[]
+  childPanel  ChildPanel?
+
+  @@unique([workspaceId, slug])
+  @@map("companies")
+}
+
+model Project {
+  id        String   @id @default(uuid())
+  name      String
+  slug      String
+  companyId String   @map("company_id")
+  company   Company  @relation(fields: [companyId], references: [id], onDelete: Cascade)
+  gitUrl    String?
+  gitBranch String   @default("main") @map("git_branch")
+  createdAt DateTime @default(now()) @map("created_at")
+
+  @@unique([companyId, slug])
+  @@map("projects")
+}
+
+model WorkspaceInvite {
+  id          String    @id @default(uuid())
+  token       String    @unique
+  workspaceId String    @map("workspace_id")
+  workspace   Workspace @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+  companyId   String    @map("company_id")
+  usedAt      DateTime? @map("used_at")
+  expiresAt   DateTime  @map("expires_at")
+  createdAt   DateTime  @default(now()) @map("created_at")
+
+  @@map("workspace_invites")
+}
+
+model ChildPanel {
+  id        String    @id @default(uuid())
+  name      String
+  url       String
+  companyId String    @unique @map("company_id")
+  company   Company   @relation(fields: [companyId], references: [id], onDelete: Cascade)
+  apiKey    String    @map("api_key")
+  revokedAt DateTime? @map("revoked_at")
+  createdAt DateTime  @default(now()) @map("created_at")
+
+  @@map("child_panels")
+}

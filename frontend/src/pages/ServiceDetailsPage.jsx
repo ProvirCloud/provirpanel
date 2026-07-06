@@ -2370,6 +2370,15 @@ const ServiceDeliveryTab = ({ service, onReload }) => {
     loadBranches().catch(() => {})
   }, [loadBranches])
 
+  // Load current workflow from GitHub on mount
+  useEffect(() => {
+    if (service.delivery?.workflowPath && service.delivery?.connectionId) {
+      githubDeliveryApi.getWorkflowContent(service.id).then(res => {
+        if (res.content) setWorkflow({ content: res.content, path: res.path })
+      }).catch(() => {})
+    }
+  }, [service.id, service.delivery?.workflowPath, service.delivery?.connectionId])
+
   const connectGithub = async () => {
     setLoadingAction('connect')
     setMessage('')
@@ -2898,18 +2907,27 @@ const ServiceDeliveryTab = ({ service, onReload }) => {
           ) : null}
 
           {service.delivery?.repository && (
-            <div className="rounded-lg border border-amber-500/20 bg-amber-500/5 p-3 space-y-2 w-full max-w-full overflow-hidden">
+            <div className="rounded-lg border border-amber-500/20 bg-amber-500/5 p-3 space-y-2">
               <p className="text-xs font-medium text-amber-200">GitHub Secrets</p>
               <div className="space-y-2">
-                {[{ key: 'PROVIRPANEL_URL', value: `${window.location.origin}/api/ci-cd/webhook` }, { key: 'PROVIRPANEL_TOKEN', value: service.delivery?.deployToken || localStorage.getItem('provirpanel-token') || '' }].map(s => (
-                  <div key={s.key} className="space-y-0.5">
-                    <div className="flex items-center justify-between">
-                      <span className="text-[11px] text-slate-400 font-mono">{s.key}</span>
-                      <button onClick={() => { navigator.clipboard.writeText(s.value); setMessage(`Copiado: ${s.key}`) }} className="text-[10px] text-slate-400 hover:text-white flex items-center gap-1"><Copy className="h-3 w-3" /> copiar</button>
-                    </div>
-                    <div className="rounded bg-slate-900 px-2 py-1 overflow-x-auto">
-                      <code className="text-[11px] text-slate-300 font-mono whitespace-nowrap">{s.value}</code>
-                    </div>
+                {['PROVIRPANEL_URL', 'PROVIRPANEL_TOKEN'].map(key => (
+                  <div key={key} className="flex items-center justify-between gap-2 rounded bg-slate-900 px-2 py-1.5">
+                    <span className="text-[11px] text-slate-300 font-mono">{key}</span>
+                    <button onClick={async () => {
+                      let val = ''
+                      if (key === 'PROVIRPANEL_URL') {
+                        val = window.location.origin
+                      } else {
+                        try {
+                          val = await githubDeliveryApi.getDeployToken()
+                        } catch { val = '' }
+                      }
+                      if (!val) { setMessage(`⚠️ ${key} está vazio.`); return }
+                      const ta = document.createElement('textarea')
+                      ta.value = val; ta.style.position = 'fixed'; ta.style.opacity = '0'
+                      document.body.appendChild(ta); ta.select(); document.execCommand('copy'); document.body.removeChild(ta)
+                      setMessage(`✅ Copiado: ${key}`)
+                    }} className="text-[10px] text-blue-400 hover:text-blue-300 shrink-0">copiar</button>
                   </div>
                 ))}
               </div>
@@ -2969,7 +2987,9 @@ const ServiceDeliveryTab = ({ service, onReload }) => {
                       setLoadingAction('apply-actions')
                       try {
                         const autoActions = projectAnalysis.actions.filter(a => a.autoApply)
-                        for (const action of autoActions) {
+                        const workflowActions = autoActions.filter(a => a.type === 'update_workflow' || a.type === 'fix_workflow')
+                        const otherActions = autoActions.filter(a => a.type !== 'update_workflow' && a.type !== 'fix_workflow')
+                        for (const action of otherActions) {
                           if (action.type === 'update_env' && action.config?.key) {
                             await githubDeliveryApi.aiApplyFixes(service.id, [{ type: 'env', field: action.config.key, newValue: action.config.value, reason: action.title }])
                           } else if (action.type === 'update_command' && action.config?.command) {
@@ -2978,8 +2998,22 @@ const ServiceDeliveryTab = ({ service, onReload }) => {
                             await githubDeliveryApi.aiApplyFixes(service.id, [{ type: 'healthcheck', newValue: JSON.stringify({ enabled: true, target: action.config.target || '/', intervalSeconds: action.config.intervalSeconds || 10, timeoutSeconds: 5, retries: 6, startPeriodSeconds: 5 }), reason: action.title }])
                           }
                         }
-                        setMessage(`✅ ${autoActions.length} ação(ões) aplicada(s) automaticamente.`)
-                        await onReload()
+                        if (otherActions.length) await onReload()
+                        if (workflowActions.length) {
+                          const wfAction = workflowActions[0]
+                          if (wfAction.type === 'fix_workflow' && wfAction.config?.workflowContent) {
+                            setWorkflow({ content: wfAction.config.workflowContent })
+                            setMessage(`✅ ${otherActions.length} ação(ões) aplicada(s). Workflow gerado abaixo — revise e salve no GitHub.`)
+                          } else if (wfAction.type === 'update_workflow' && wfAction.config) {
+                            await githubDeliveryApi.aiApplyFixes(service.id, [{ type: 'update_workflow', config: wfAction.config, reason: wfAction.title }])
+                            await onReload()
+                            const result = await githubDeliveryApi.generateWorkflow(service.id, { connectionId, repository: selectedRepo || service.delivery?.repository, branch: selectedBranch || service.delivery?.branch })
+                            setWorkflow(result.workflow)
+                            setMessage(`✅ ${otherActions.length} ação(ões) aplicada(s). Workflow gerado abaixo — revise e salve no GitHub.`)
+                          }
+                        } else {
+                          setMessage(`✅ ${otherActions.length} ação(ões) aplicada(s).`)
+                        }
                       } catch (err) {
                         setMessage(err.message || 'Erro ao aplicar ações')
                       } finally {
@@ -2992,6 +3026,66 @@ const ServiceDeliveryTab = ({ service, onReload }) => {
                   </button>
                 </div>
               ) : null}
+
+              <form className="flex gap-2" onSubmit={async (e) => {
+                e.preventDefault()
+                const input = e.target.elements.aiInstruction
+                const text = input.value.trim()
+                if (!text) return
+                setLoadingAction('project-analysis')
+                setProjectAnalysis(null)
+                try {
+                  const { analysis } = await githubDeliveryApi.aiProjectAnalysis(service.id, text)
+                  setProjectAnalysis(analysis)
+                } catch (err) {
+                  setMessage(err.response?.data?.message || err.message || 'Falha na análise')
+                } finally {
+                  setLoadingAction('')
+                }
+              }}>
+                <input name="aiInstruction" className="flex-1 rounded-lg border border-slate-700 bg-slate-900 px-3 py-1.5 text-xs text-slate-200 placeholder-slate-500" placeholder="Pedir modificação à AI..." />
+                <button type="submit" disabled={loadingAction === 'project-analysis'} className="rounded-lg border border-indigo-500/30 bg-indigo-500/10 px-3 py-1.5 text-xs text-indigo-200 hover:bg-indigo-500/20 disabled:opacity-50">
+                  {loadingAction === 'project-analysis' ? <Loader2 className="h-3 w-3 animate-spin" /> : <Send className="h-3 w-3" />}
+                </button>
+              </form>
+
+              {workflow?.content && (
+                <div className="space-y-1.5">
+                  <p className="text-[11px] font-semibold text-green-300">Workflow:</p>
+                  <textarea
+                    className="w-full rounded-lg bg-slate-950 border border-slate-700 p-3 text-[11px] text-slate-300 font-mono resize-y min-h-[200px] max-h-[500px]"
+                    rows={16}
+                    value={workflow.content}
+                    onChange={(e) => setWorkflow({ ...workflow, content: e.target.value })}
+                  />
+                  <button
+                    className="rounded-lg border border-green-500/30 bg-green-500/10 px-3 py-1.5 text-xs text-green-200 hover:bg-green-500/20 disabled:opacity-50"
+                    disabled={loadingAction === 'save-workflow-edit'}
+                    onClick={async () => {
+                      setLoadingAction('save-workflow-edit')
+                      try {
+                        const delivery = service.delivery || {}
+                        const [owner, repo] = (selectedRepo || delivery.repository || '').split('/')
+                        if (!owner || !repo) { setMessage('Repositório não configurado'); return }
+                        const GitHubDeliveryManager = githubDeliveryApi
+                        await GitHubDeliveryManager.saveWorkflowContent(service.id, {
+                          content: workflow.content,
+                          connectionId: connectionId || delivery.connectionId,
+                          repository: selectedRepo || delivery.repository,
+                          branch: selectedBranch || delivery.branch || 'main'
+                        })
+                        setMessage('✅ Workflow salvo no GitHub.')
+                      } catch (err) {
+                        setMessage(err.response?.data?.message || err.message || 'Falha ao salvar')
+                      } finally {
+                        setLoadingAction('')
+                      }
+                    }}
+                  >
+                    {loadingAction === 'save-workflow-edit' ? 'Salvando...' : '💾 Salvar no GitHub'}
+                  </button>
+                </div>
+              )}
             </div>
           ) : null}
         </div>

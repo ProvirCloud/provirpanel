@@ -317,6 +317,50 @@ router.put('/github/services/:serviceId/delivery', (req, res, next) => {
   }
 });
 
+router.get('/github/services/:serviceId/workflow/content', async (req, res, next) => {
+  try {
+    const service = dockerManager.listServices().find((entry) => entry.id === req.params.serviceId);
+    if (!service) return res.status(404).json({ message: 'Service not found' });
+    const delivery = service.delivery || {};
+    if (!delivery.connectionId || !delivery.repository || !delivery.workflowPath) {
+      return res.json({ content: null });
+    }
+    const [owner, repo] = delivery.repository.split('/');
+    const connection = githubDelivery.getConnection(delivery.connectionId);
+    try {
+      const wfRes = await githubDelivery.githubRequest(connection, 'GET', `/repos/${owner}/${repo}/contents/${delivery.workflowPath}?ref=${delivery.branch || 'main'}`);
+      const content = wfRes.data?.content ? Buffer.from(wfRes.data.content, 'base64').toString('utf8') : null;
+      res.json({ content, path: delivery.workflowPath });
+    } catch (err) {
+      if (err.status === 404) return res.json({ content: null });
+      throw err;
+    }
+  } catch (err) { next(err); }
+});
+
+router.put('/github/services/:serviceId/workflow/content', async (req, res, next) => {
+  try {
+    const service = dockerManager.listServices().find((entry) => entry.id === req.params.serviceId);
+    if (!service) return res.status(404).json({ message: 'Service not found' });
+    const delivery = service.delivery || {};
+    const content = req.body?.content;
+    if (!content) return res.status(400).json({ message: 'content é obrigatório' });
+    const repoFullName = String(req.body?.repository || delivery.repository || '');
+    const [owner, repo] = repoFullName.split('/');
+    if (!owner || !repo) return res.status(400).json({ message: 'Repositório inválido' });
+    const workflowPath = delivery.workflowPath || `.github/workflows/provirpanel-${normalizeServiceName(service.name)}.yml`;
+    const branch = req.body?.branch || delivery.branch || 'main';
+    const savedWorkflow = await githubDelivery.saveWorkflow({
+      connectionId: req.body?.connectionId || delivery.connectionId,
+      owner, repo, branch, workflowPath, content,
+      message: `Update ProvirPanel workflow for ${service.name}`
+    });
+    const updatedDelivery = { ...delivery, workflowPath, workflowUpdatedAt: new Date().toISOString(), workflowCommitSha: savedWorkflow.commitSha, workflowHtmlUrl: savedWorkflow.htmlUrl };
+    dockerManager.saveService({ ...service, delivery: updatedDelivery, updatedAt: new Date().toISOString() });
+    res.json({ savedWorkflow, delivery: updatedDelivery });
+  } catch (err) { next(err); }
+});
+
 router.post('/github/services/:serviceId/workflow', async (req, res, next) => {
   try {
     const service = dockerManager.listServices().find((entry) => entry.id === req.params.serviceId);
@@ -332,13 +376,32 @@ router.post('/github/services/:serviceId/workflow', async (req, res, next) => {
       req.body?.workflowPath ||
       delivery.workflowPath ||
       `.github/workflows/provirpanel-${normalizeServiceName(service.name)}.yml`;
+    // Auto-detect project config from GitHub repo
+    const repoFullName = String(req.body?.repository || delivery.repository || blueprint.repository || '');
+    const [repoOwner, repoName] = repoFullName.split('/');
+    const projectPath = blueprint.projectPath && blueprint.projectPath !== '.' ? blueprint.projectPath : '.';
+    let detectedConfig = {};
+    if (repoOwner && repoName && (req.body?.connectionId || delivery.connectionId)) {
+      try {
+        detectedConfig = await githubDelivery.detectProjectConfig({
+          connectionId: req.body?.connectionId || delivery.connectionId,
+          owner: repoOwner, repo: repoName,
+          branch: req.body?.branch || delivery.branch || blueprint.branch || 'main',
+          projectPath
+        });
+      } catch {}
+    }
+
+    // Merge: detectedConfig fills in what blueprint doesn't have explicitly
+    const mergedBlueprint = { ...blueprint, branch: req.body?.branch || delivery.branch || blueprint.branch };
+    for (const [k, v] of Object.entries(detectedConfig)) {
+      if (!mergedBlueprint[k]) mergedBlueprint[k] = v;
+    }
+
     const content = githubDelivery.generateWorkflow({
       serviceId: service.id,
       serviceName: service.name,
-      blueprint: {
-        ...blueprint,
-        branch: req.body?.branch || delivery.branch || blueprint.branch
-      },
+      blueprint: mergedBlueprint,
       provirPanelUrl: req.body?.provirPanelUrl,
       deployMode: req.body?.deployMode || delivery.deployMode || 'manual'
     });
@@ -560,7 +623,7 @@ router.post('/services/:serviceId/ai-validate', async (req, res, next) => {
     let applied = [];
     let gitPushed = 0;
     if (req.body?.autoFix && validation.autoFixes?.length) {
-      const result = infraAi.applyAutoFixes(service, validation.autoFixes, dockerManager);
+      const result = await infraAi.applyAutoFixes(service, validation.autoFixes, dockerManager);
       applied = result.applied;
 
       // Push config fixes to GitHub if any
@@ -606,7 +669,7 @@ router.post('/services/:serviceId/ai-project-analysis', async (req, res, next) =
 
     ensureProjectIndexed(service);
     const allServices = dockerManager.listServices();
-    const analysis = await infraAi.analyzeProjectDependencies(service, allServices);
+    const analysis = await infraAi.analyzeProjectDependencies(service, allServices, req.body?.userInstruction);
     res.json({ analysis });
   } catch (err) { next(err); }
 });
@@ -619,7 +682,7 @@ router.post('/services/:serviceId/ai-apply-fixes', async (req, res, next) => {
     const fixes = req.body?.fixes;
     if (!fixes?.length) return res.status(400).json({ message: 'Nenhum fix fornecido' });
 
-    const result = infraAi.applyAutoFixes(service, fixes, dockerManager);
+    const result = await infraAi.applyAutoFixes(service, fixes, dockerManager);
     res.json(result);
   } catch (err) { next(err); }
 });
@@ -645,6 +708,10 @@ const generateDeployToken = () => {
   const secret = process.env.JWT_SECRET || 'change-me';
   return jwt.sign({ userId: 'github-deploy', role: 'admin' }, secret, { expiresIn: '365d' });
 };
+
+router.get('/deploy-token', (req, res) => {
+  res.json({ token: generateDeployToken() });
+});
 
 router.post('/services/:serviceId/workflow-failed', async (req, res, next) => {
   try {

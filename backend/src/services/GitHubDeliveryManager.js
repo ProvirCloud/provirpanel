@@ -524,11 +524,21 @@ class GitHubDeliveryManager {
   }
 
   generateWorkflow({ serviceId, serviceName, blueprint, provirPanelUrl = '', deployMode = 'manual' }) {
+    const fs = require('fs');
+    const path = require('path');
     const formJson = (name, value) =>
       `            -F '${name}=${JSON.stringify(value).replace(/'/g, "'\"'\"'")}'`;
     const projectPath = blueprint.projectPath && blueprint.projectPath !== '.' ? blueprint.projectPath : '.';
     const workflowName = `ProvirPanel Deploy - ${serviceName || blueprint.serviceName || 'service'}`;
     const branch = blueprint.branch || 'main';
+
+    // Use pre-detected values from async detectProjectConfig() or blueprint overrides
+    const nodeVersion = blueprint.nodeVersion || '20';
+    const packageManager = blueprint.packageManager || 'npm';
+    const buildCommand = blueprint.buildCommand || `${packageManager === 'yarn' ? 'yarn' : 'npm run'} build`;
+    const installCommand = blueprint.installCommand || (packageManager === 'yarn' ? 'yarn install --frozen-lockfile' : packageManager === 'pnpm' ? 'pnpm install --frozen-lockfile' : 'npm ci');
+    const artifactPath = blueprint.artifactPath || 'dist';
+
     const triggers = deployMode === 'push'
       ? `  workflow_dispatch:\n  push:\n    branches:\n      - ${branch}\n`
       : deployMode === 'tag'
@@ -584,12 +594,11 @@ class GitHubDeliveryManager {
       return base.join('\n') + '\n';
     }
 
-    const packageManager = blueprint.packageManager || 'npm';
     const setupNode = [
       '',
       '      - uses: actions/setup-node@v4',
       '        with:',
-      "          node-version: '20'"
+      `          node-version: '${nodeVersion}'`
     ];
     base.push(...setupNode);
 
@@ -598,17 +607,17 @@ class GitHubDeliveryManager {
         '',
         '      - name: Install dependencies',
         `        working-directory: ${projectPath}`,
-        `        run: ${blueprint.installCommand || 'npm ci'}`,
+        `        run: ${installCommand}`,
         '',
         '      - name: Build static output',
         `        working-directory: ${projectPath}`,
-        `        run: ${blueprint.buildCommand || `${packageManager} run build`}`,
+        `        run: ${buildCommand}`,
         '',
         '      - name: Package static output',
         `        working-directory: ${projectPath}`,
         '        run: |',
         '          mkdir -p "$GITHUB_WORKSPACE/.provirpanel-release"',
-        `          tar -czf "$GITHUB_WORKSPACE/.provirpanel-release/site.tgz" -C "${blueprint.artifactPath || 'dist'}" .`,
+        `          tar -czf "$GITHUB_WORKSPACE/.provirpanel-release/site.tgz" -C "${artifactPath}" .`,
         '',
         '      - name: Deploy to ProvirPanel',
         '        run: |',
@@ -642,6 +651,82 @@ class GitHubDeliveryManager {
       formJson('versionMetadata', { mode: 'auto', changeType: 'feature', commitSha: '${{ github.sha }}' })
     );
     return base.join('\n') + '\n';
+  }
+
+  async detectProjectConfig({ connectionId, owner, repo, branch = 'main', projectPath = '.' }) {
+    const conn = this.getConnection(connectionId);
+    const prefix = projectPath === '.' ? '' : `${projectPath}/`;
+    const config = {};
+
+    // Fetch .nvmrc
+    try {
+      const res = await this.githubRequest(conn, 'GET', `/repos/${owner}/${repo}/contents/${prefix}.nvmrc?ref=${branch}`);
+      if (res.data?.content) {
+        config.nodeVersion = Buffer.from(res.data.content, 'base64').toString('utf8').trim().replace(/^v/i, '');
+      }
+    } catch {}
+
+    // Fetch package.json
+    try {
+      const res = await this.githubRequest(conn, 'GET', `/repos/${owner}/${repo}/contents/${prefix}package.json?ref=${branch}`);
+      if (res.data?.content) {
+        const pkg = JSON.parse(Buffer.from(res.data.content, 'base64').toString('utf8'));
+        // Node version from engines
+        if (!config.nodeVersion && pkg.engines?.node) {
+          const m = pkg.engines.node.match(/(\d+\.?\d*\.?\d*)/);
+          if (m) config.nodeVersion = m[1];
+        }
+        // Package manager
+        if (pkg.packageManager) {
+          const pm = pkg.packageManager.split('@')[0];
+          if (['yarn', 'pnpm', 'npm'].includes(pm)) config.packageManager = pm;
+        }
+        // Build command
+        if (pkg.scripts?.build) {
+          const pm = config.packageManager || 'npm';
+          config.buildCommand = pm === 'yarn' ? 'yarn build' : pm === 'pnpm' ? 'pnpm build' : 'npm run build';
+          // Check for specific build modes
+          if (pkg.scripts.build.includes('--mode')) config.buildCommand = `${pm === 'yarn' ? 'yarn' : pm === 'pnpm' ? 'pnpm' : 'npm run'} build`;
+        }
+        // Install command
+        const pm = config.packageManager || 'npm';
+        config.installCommand = pm === 'yarn' ? 'yarn install --frozen-lockfile' : pm === 'pnpm' ? 'pnpm install --frozen-lockfile' : 'npm ci';
+      }
+    } catch {}
+
+    // Detect lock file for package manager if not yet detected
+    if (!config.packageManager) {
+      try {
+        await this.githubRequest(conn, 'GET', `/repos/${owner}/${repo}/contents/${prefix}yarn.lock?ref=${branch}`);
+        config.packageManager = 'yarn';
+        config.installCommand = 'yarn install --frozen-lockfile';
+      } catch {
+        try {
+          await this.githubRequest(conn, 'GET', `/repos/${owner}/${repo}/contents/${prefix}pnpm-lock.yaml?ref=${branch}`);
+          config.packageManager = 'pnpm';
+          config.installCommand = 'pnpm install --frozen-lockfile';
+        } catch {
+          config.packageManager = config.packageManager || 'npm';
+        }
+      }
+    }
+
+    // Detect artifact path from config files
+    if (!config.artifactPath) {
+      const checks = ['vite.config.ts', 'vite.config.js', 'vue.config.js', 'angular.json', 'next.config.js', 'next.config.mjs', 'nuxt.config.ts'];
+      for (const file of checks) {
+        try {
+          await this.githubRequest(conn, 'GET', `/repos/${owner}/${repo}/contents/${prefix}${file}?ref=${branch}`);
+          if (file.includes('next')) config.artifactPath = '.next';
+          else if (file.includes('nuxt')) config.artifactPath = '.output/public';
+          else config.artifactPath = 'dist';
+          break;
+        } catch {}
+      }
+      if (!config.artifactPath) config.artifactPath = 'dist';
+    }
+
+    return config;
   }
 
   async saveWorkflow({ connectionId = null, owner, repo, branch, workflowPath, content, message }) {

@@ -105,11 +105,16 @@ function collectFullContext(service) {
       envVars: (service.envVars || []).map(e => ({ key: e.key, hasValue: !!e.value })),
       networkName: service.networkName,
       templateId: service.templateId,
+      nodeServiceMode: service.nodeServiceMode || null,
+      nodeSiteConfig: service.nodeSiteConfig || null,
       url: service.url,
       externalUrl: service.externalUrl,
       activeDeploymentId: service.activeDeploymentId,
       delivery: service.delivery ? { deployMode: service.delivery.deployMode, repository: service.delivery.repository, branch: service.delivery.branch } : null
     },
+    // IMPORTANT: If nodeServiceMode === 'sites', this service hosts static builds (Vue/React/Angular dist).
+    // The workflow should build the frontend and upload the dist folder. Do NOT suggest changing the container command.
+    hostingMode: service.nodeServiceMode === 'sites' ? 'static-site-hosting' : 'full-service',
     container,
     // HIGHLIGHT: This is the REAL command running in Docker - the source of truth
     realDockerCommand: container?.cmd || null,
@@ -310,13 +315,27 @@ ${JSON.stringify(ctx, null, 2).slice(0, 12000)}
  * Deep project analysis: detects infrastructure dependencies (Redis, Postgres, etc),
  * checks configuration, and suggests services to create for the project to run correctly.
  */
-async function analyzeProjectDependencies(service, allServices) {
+async function analyzeProjectDependencies(service, allServices, userInstruction) {
   const ctx = collectFullContext(service);
   const existingServices = (allServices || []).map(s => ({
     id: s.id, name: s.name, image: s.image, hostPort: s.hostPort,
     containerPort: s.containerPort, networkName: s.networkName,
     envVars: (s.envVars || []).map(e => ({ key: e.key, hasValue: !!e.value }))
   }));
+
+  // Fetch current workflow from GitHub if available
+  let currentWorkflow = '';
+  const delivery = service.delivery || {};
+  if (delivery.connectionId && delivery.repository && delivery.workflowPath) {
+    try {
+      const GitHubDeliveryManager = require('./GitHubDeliveryManager');
+      const ghManager = new GitHubDeliveryManager();
+      const conn = ghManager.getConnection(delivery.connectionId);
+      const [owner, repo] = delivery.repository.split('/');
+      const wfRes = await ghManager.githubRequest(conn, 'GET', `/repos/${owner}/${repo}/contents/${delivery.workflowPath}?ref=${delivery.branch || 'main'}`);
+      if (wfRes.data?.content) currentWorkflow = Buffer.from(wfRes.data.content, 'base64').toString('utf8');
+    } catch { /* workflow not accessible */ }
+  }
 
   const prompt = `${SYSTEM_PROMPT}
 
@@ -328,8 +347,15 @@ Analise o código-fonte, package.json, docker-compose.yml, .env.example e identi
 ## Contexto do Projeto
 ${JSON.stringify(ctx, null, 2).slice(0, 10000)}
 
-## Serviços já existentes no painel
+${currentWorkflow ? `## Workflow atual no GitHub (${delivery.workflowPath}):\n\`\`\`yaml\n${currentWorkflow}\n\`\`\`\n\n` : ''}## Serviços já existentes no painel
 ${JSON.stringify(existingServices, null, 2).slice(0, 4000)}
+
+## MODO DE HOSPEDAGEM
+${ctx.hostingMode === 'static-site-hosting' ? `ATENÇÃO: Este serviço está no modo "Node Sites" — ele hospeda builds estáticos (Vue/React/Angular dist) de forma monolítica via Express.
+- O container já roda um server.js que serve arquivos estáticos. NÃO mude o command.
+- O healthcheck pode ser "/" pois o server.js responde na raiz.
+- O foco deve ser no WORKFLOW do GitHub Actions: buildar o frontend e fazer upload do dist para o painel via webhook.
+- NÃO sugira mudanças no command ou no container. Foque em: workflow, secrets (PROVIRPANEL_URL, PROVIRPANEL_TOKEN), e configuração do build.` : 'Serviço completo (backend). Analise command, healthcheck, envs normalmente.'}
 
 ## Responda com JSON:
 {
@@ -360,7 +386,16 @@ ${JSON.stringify(existingServices, null, 2).slice(0, 4000)}
         "intervalSeconds": 10,
         // Para fix_config (push to GitHub):
         "file": "tsconfig.json",
-        "content": "conteúdo completo"
+        "content": "conteúdo completo",
+        // Para update_workflow (gerar/atualizar workflow do GitHub Actions):
+        "buildType": "node-site|node-service|java-jar",
+        "buildCommand": "npm run build",
+        "installCommand": "npm ci",
+        "artifactPath": "dist",
+        "packageManager": "npm|yarn|pnpm",
+        "nodeVersion": "18",
+        // Para fix_workflow (corrigir workflow existente e pushar no GitHub):
+        "workflowContent": "conteúdo YAML completo corrigido"
       }
     }
   ]
@@ -373,10 +408,13 @@ ${JSON.stringify(existingServices, null, 2).slice(0, 4000)}
 - Se o command está errado: retorne action "update_command".
 - Se o healthcheck aponta pra rota que não existe: retorne action "update_healthcheck" com target correto (ex: "/" ou "/api" ou desabilite).
 - Se o tsconfig precisa de skipLibCheck: retorne action "fix_config".
-- "autoApply": true = o sistema aplica sem perguntar. Use para fixes simples (env, command, healthcheck).
+- Se o serviço está em modo "static-site-hosting" (Node Sites) e NÃO existe workflow ainda: retorne action "update_workflow" com buildType "node-site", buildCommand, artifactPath, installCommand, packageManager e nodeVersion.
+- Se JÁ EXISTE um workflow (mostrado acima) e precisa de QUALQUER correção (versão de Node, comando, path, etc): SEMPRE retorne action "fix_workflow" com o YAML COMPLETO corrigido em config.workflowContent. Isso inclui quando o usuário pede para mudar a versão do Node.
+- NUNCA retorne "update_workflow" se já existe um workflow. Use SEMPRE "fix_workflow" com o YAML completo.
+- "autoApply": true = o sistema aplica sem perguntar. Use para fixes simples (env, command, healthcheck, workflow).
 - "autoApply": false = o sistema pergunta ao usuário antes. Use para criação de serviços novos.
 - Ordene por priority (1 = mais urgente).
-- O objetivo é que o projeto RODE. Nada de sugestões vagas.`;
+- O objetivo é que o projeto RODE. Nada de sugestões vagas.${userInstruction ? `\n\n## INSTRUÇÃO DO USUÁRIO (prioridade máxima):\n${userInstruction}` : ''}`;
 
   const answer = await zeusChat(prompt);
   try {
@@ -389,7 +427,7 @@ ${JSON.stringify(existingServices, null, 2).slice(0, 4000)}
 /**
  * Apply auto-fixes suggested by the AI to the service
  */
-function applyAutoFixes(service, fixes, dockerManager) {
+async function applyAutoFixes(service, fixes, dockerManager) {
   if (!fixes || !fixes.length) return { applied: [], service };
   const applied = [];
   let updated = { ...service };
@@ -422,6 +460,36 @@ function applyAutoFixes(service, fixes, dockerManager) {
       } else if (fix.type === 'containerPort' && fix.newValue) {
         updated.containerPort = Number(fix.newValue);
         applied.push({ ...fix, success: true });
+      } else if (fix.type === 'update_workflow' && fix.config) {
+        // Update the blueprint with workflow config from AI
+        const delivery = updated.delivery || {};
+        const blueprint = { ...(delivery.blueprint || {}), ...fix.config };
+        updated.delivery = { ...delivery, blueprint };
+        applied.push({ ...fix, success: true, note: 'Blueprint atualizado. Regenere o workflow.' });
+      } else if (fix.type === 'fix_workflow' && fix.config?.workflowContent) {
+        // Push corrected workflow directly to GitHub
+        const delivery = updated.delivery || {};
+        if (delivery.connectionId && delivery.repository && delivery.workflowPath) {
+          try {
+            const GitHubDeliveryManager = require('./GitHubDeliveryManager');
+            const ghManager = new GitHubDeliveryManager();
+            const conn = ghManager.getConnection(delivery.connectionId);
+            const [owner, repo] = delivery.repository.split('/');
+            let sha = null;
+            try {
+              const existing = await ghManager.githubRequest(conn, 'GET', `/repos/${owner}/${repo}/contents/${delivery.workflowPath}?ref=${delivery.branch || 'main'}`);
+              sha = existing.data?.sha;
+            } catch {}
+            await ghManager.githubRequest(conn, 'PUT', `/repos/${owner}/${repo}/contents/${delivery.workflowPath}`, {
+              data: { message: `fix(ai): ${fix.title || 'workflow fix'} [Zeus AI]`, content: Buffer.from(fix.config.workflowContent).toString('base64'), branch: delivery.branch || 'main', ...(sha ? { sha } : {}) }
+            });
+            applied.push({ ...fix, success: true, workflowContent: fix.config.workflowContent });
+          } catch (e) {
+            applied.push({ ...fix, success: false, error: e.message });
+          }
+        } else {
+          applied.push({ ...fix, success: false, error: 'Delivery n\u00e3o configurado' });
+        }
       } else if (fix.type === 'tsconfig' && fix.newValue) {
         // Push tsconfig fix to GitHub repo
         applied.push({ ...fix, success: true, requiresGitPush: true });
