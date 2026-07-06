@@ -282,13 +282,29 @@ export default function WorkspacesPage() {
   const [addingWs, setAddingWs] = useState(false)
   const [showConnect, setShowConnect] = useState(false)
   const [error, setError] = useState('')
+  const [panelRole, setPanelRole] = useState(null)
   const [linked, setLinked] = useState(() => {
     try { return JSON.parse(localStorage.getItem('provir-workspace') || 'null') } catch { return null }
   })
 
   useEffect(() => {
-    wsApi.syncConnections().then(() => wsApi.list().then(setWorkspaces).catch(e => setError(e.message)).finally(() => setLoading(false)))
+    const init = async () => {
+      try {
+        const token = localStorage.getItem('provirpanel-token')
+        const infoRes = await fetch('/api/zeus/panel-info', { headers: { Authorization: `Bearer ${token}` } })
+        if (infoRes.ok) {
+          const info = await infoRes.json()
+          setPanelRole(info.role)
+        }
+      } catch {}
+      await wsApi.syncConnections()
+      try { setWorkspaces(await wsApi.list()) } catch (e) { setError(e.message) }
+      setLoading(false)
+    }
+    init()
   }, [])
+
+  const isReadOnly = panelRole === 'project'
 
   const addWorkspace = async (data) => {
     const ws = await wsApi.create(data)
@@ -317,12 +333,17 @@ export default function WorkspacesPage() {
       <div className="flex items-center justify-between">
         <div>
           <h1 className="text-lg font-semibold text-slate-100">Workspaces</h1>
-          <p className="text-xs text-slate-500 mt-0.5">Grupos → Empresas → Projetos com painéis filhos vinculados</p>
+          <p className="text-xs text-slate-500 mt-0.5">{isReadOnly ? 'Visualização do vínculo com o grupo' : 'Grupos → Empresas → Projetos com painéis filhos vinculados'}</p>
         </div>
-        <div className="flex gap-2">
+        {!isReadOnly && (
+          <div className="flex gap-2">
+            <Btn onClick={() => setShowConnect(true)}><Link className="h-3.5 w-3.5" />Vincular ao Grupo</Btn>
+            <Btn variant="primary" onClick={() => setAddingWs(true)}><Plus className="h-3.5 w-3.5" />Novo Workspace</Btn>
+          </div>
+        )}
+        {isReadOnly && !linked && (
           <Btn onClick={() => setShowConnect(true)}><Link className="h-3.5 w-3.5" />Vincular ao Grupo</Btn>
-          <Btn variant="primary" onClick={() => setAddingWs(true)}><Plus className="h-3.5 w-3.5" />Novo Workspace</Btn>
-        </div>
+        )}
       </div>
 
       {linked && (
@@ -337,24 +358,60 @@ export default function WorkspacesPage() {
 
       {error && <p className="text-xs text-red-400">{error}</p>}
 
-      <div className="space-y-3">
-        {workspaces.map(ws => (
-          <WorkspaceRow key={ws.id} workspace={ws} onUpdate={setWorkspaces} onDelete={() => delWorkspace(ws.id)} />
-        ))}
-        {addingWs && (
-          <div className="rounded-xl border border-slate-700 bg-slate-800/50 px-4 py-3">
-            <InlineForm placeholder="Nome do workspace" slugPlaceholder="slug" onSubmit={addWorkspace} onCancel={() => setAddingWs(false)} />
-          </div>
-        )}
-        {workspaces.length === 0 && !addingWs && (
-          <div className="rounded-xl border border-slate-700/50 bg-slate-800/20 px-6 py-10 text-center">
-            <p className="text-sm text-slate-400">Nenhum workspace criado</p>
-            <p className="text-xs text-slate-600 mt-1">Clique em "Novo Workspace" para começar</p>
-          </div>
-        )}
-      </div>
+      {isReadOnly ? (
+        <div className="space-y-3">
+          {workspaces.map(ws => (
+            <div key={ws.id} className="rounded-xl border border-slate-700 bg-slate-800/50 px-4 py-3">
+              <p className="text-sm font-semibold text-slate-100">{ws.name}</p>
+              <div className="mt-2 space-y-1.5">
+                {(ws.companies || []).map(c => (
+                  <div key={c.id} className="rounded-lg bg-slate-900/50 px-3 py-2">
+                    <div className="flex items-center gap-2">
+                      <span className="text-xs text-slate-300">{c.name}</span>
+                      <code className="text-[10px] text-slate-500 font-mono">{c.slug}</code>
+                      {c.childPanel && !c.childPanel.revokedAt && (
+                        <span className="ml-auto flex items-center gap-1 text-[10px] text-green-400"><Link className="h-3 w-3" />{c.childPanel.url}</span>
+                      )}
+                    </div>
+                    {c.projects && c.projects.length > 0 && (
+                      <div className="mt-1.5 pl-2 space-y-0.5">
+                        {c.projects.map(p => (
+                          <p key={p.id} className="text-[11px] text-slate-400">• {p.name}</p>
+                        ))}
+                      </div>
+                    )}
+                  </div>
+                ))}
+              </div>
+            </div>
+          ))}
+          {workspaces.length === 0 && !linked && (
+            <div className="rounded-xl border border-slate-700/50 bg-slate-800/20 px-6 py-10 text-center">
+              <p className="text-sm text-slate-400">Nenhum vínculo ativo</p>
+              <p className="text-xs text-slate-600 mt-1">Clique em "Vincular ao Grupo" para conectar a um workspace</p>
+            </div>
+          )}
+        </div>
+      ) : (
+        <div className="space-y-3">
+          {workspaces.map(ws => (
+            <WorkspaceRow key={ws.id} workspace={ws} onUpdate={setWorkspaces} onDelete={() => delWorkspace(ws.id)} />
+          ))}
+          {addingWs && (
+            <div className="rounded-xl border border-slate-700 bg-slate-800/50 px-4 py-3">
+              <InlineForm placeholder="Nome do workspace" slugPlaceholder="slug" onSubmit={addWorkspace} onCancel={() => setAddingWs(false)} />
+            </div>
+          )}
+          {workspaces.length === 0 && !addingWs && (
+            <div className="rounded-xl border border-slate-700/50 bg-slate-800/20 px-6 py-10 text-center">
+              <p className="text-sm text-slate-400">Nenhum workspace criado</p>
+              <p className="text-xs text-slate-600 mt-1">Clique em "Novo Workspace" para começar</p>
+            </div>
+          )}
+        </div>
+      )}
 
-      {showConnect && <ConnectModal onClose={() => setShowConnect(false)} onSuccess={() => wsApi.list().then(setWorkspaces)} />}
+      {showConnect && <ConnectModal onClose={() => setShowConnect(false)} onSuccess={() => { wsApi.list().then(setWorkspaces); setLinked(JSON.parse(localStorage.getItem('provir-workspace') || 'null')) }} />}
     </div>
   )
 }
