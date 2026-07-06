@@ -115,6 +115,13 @@ router.post('/workspaces/:workspaceId/companies/:companyId/invite', async (req, 
     const { workspaceId, companyId } = req.params;
     const expiresAt = new Date(Date.now() + 24 * 60 * 60 * 1000);
 
+    // Get company name for the token
+    let companyName = '';
+    try {
+      const company = await prisma.company.findUnique({ where: { id: companyId } });
+      if (company) companyName = company.name;
+    } catch {}
+
     // Try Gateway-based invite if configured
     if (GATEWAY_URL && GATEWAY_API_KEY) {
       try {
@@ -123,7 +130,7 @@ router.post('/workspaces/:workspaceId/companies/:companyId/invite', async (req, 
           const response = await fetch(`${GATEWAY_URL}/api/panels/generate-invite`, {
             method: 'POST',
             headers: { 'Content-Type': 'application/json', 'x-api-key': GATEWAY_API_KEY },
-            body: JSON.stringify({ workspaceId: gwWorkspaceId, parentPanelId: process.env.ZEUS_PANEL_ID || null }),
+            body: JSON.stringify({ workspaceId: gwWorkspaceId, parentPanelId: process.env.ZEUS_PANEL_ID || null, companyId, companyName }),
             signal: AbortSignal.timeout(10000)
           });
           if (response.ok) {
@@ -137,7 +144,7 @@ router.post('/workspaces/:workspaceId/companies/:companyId/invite', async (req, 
 
     // Fallback: generate locally
     const panelUrl = process.env.PROVIRPANEL_PUBLIC_URL || '';
-    const token = jwt.sign({ workspaceId, companyId, panelUrl }, JWT_SECRET, { expiresIn: '24h' });
+    const token = jwt.sign({ workspaceId, companyId, companyName, panelUrl }, JWT_SECRET, { expiresIn: '24h' });
     await prisma.workspaceInvite.create({ data: { token, workspaceId, companyId, expiresAt } });
     res.json({ token, expiresAt });
   } catch (err) { next(err); }
@@ -160,6 +167,46 @@ router.delete('/children/:id/revoke', async (req, res, next) => {
   try {
     await prisma.childPanel.update({ where: { id: req.params.id }, data: { revokedAt: new Date() } });
     res.json({ ok: true });
+  } catch (err) { next(err); }
+});
+
+// Poll Gateway for pending connections and auto-register ChildPanels
+router.post('/workspaces/sync-connections', async (req, res, next) => {
+  try {
+    if (!GATEWAY_URL || !GATEWAY_API_KEY || !process.env.ZEUS_PANEL_ID) {
+      return res.status(400).json({ message: 'Gateway not configured' });
+    }
+
+    const response = await fetch(`${GATEWAY_URL}/api/panels/connections/pending?parentPanelId=${process.env.ZEUS_PANEL_ID}`, {
+      headers: { 'x-api-key': GATEWAY_API_KEY },
+      signal: AbortSignal.timeout(10000)
+    });
+    if (!response.ok) return res.status(502).json({ message: 'Gateway error' });
+
+    const { connections } = await response.json();
+    const registered = [];
+
+    for (const conn of connections) {
+      if (!conn.companyId) continue;
+
+      try {
+        await prisma.childPanel.upsert({
+          where: { companyId: conn.companyId },
+          update: { name: conn.childPanelName, url: conn.childPanelUrl, apiKey: conn.childApiKey, revokedAt: null },
+          create: { name: conn.childPanelName, url: conn.childPanelUrl, companyId: conn.companyId, apiKey: conn.childApiKey }
+        });
+
+        await fetch(`${GATEWAY_URL}/api/panels/connections/${conn.id}/confirm`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json', 'x-api-key': GATEWAY_API_KEY },
+          signal: AbortSignal.timeout(5000)
+        });
+
+        registered.push(conn.childPanelName);
+      } catch {}
+    }
+
+    res.json({ synced: registered.length, registered });
   } catch (err) { next(err); }
 });
 

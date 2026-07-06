@@ -16,6 +16,7 @@ const wsApi = {
   invite: (wId, cId) => api.post(`/workspaces/${wId}/companies/${cId}/invite`).then(r => r.data),
   revokeChild: (id) => api.delete(`/children/${id}/revoke`),
   connect: (d) => api.post('/child/connect-remote', d).then(r => r.data),
+  syncConnections: () => api.post('/workspaces/sync-connections').then(r => r.data).catch(() => null),
 }
 
 const collectionName = (ws, co, pr) =>
@@ -282,7 +283,7 @@ export default function WorkspacesPage() {
   const [error, setError] = useState('')
 
   useEffect(() => {
-    wsApi.list().then(setWorkspaces).catch(e => setError(e.message)).finally(() => setLoading(false))
+    wsApi.syncConnections().then(() => wsApi.list().then(setWorkspaces).catch(e => setError(e.message)).finally(() => setLoading(false)))
   }, [])
 
   const addWorkspace = async (data) => {
