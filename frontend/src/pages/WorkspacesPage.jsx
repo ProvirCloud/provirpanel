@@ -15,7 +15,7 @@ const wsApi = {
   delProject: (cId, id) => api.delete(`/companies/${cId}/projects/${id}`),
   invite: (wId, cId) => api.post(`/workspaces/${wId}/companies/${cId}/invite`).then(r => r.data),
   revokeChild: (id) => api.delete(`/children/${id}/revoke`),
-  connect: (d) => api.post('/child/connect', d).then(r => r.data),
+  connect: (d) => api.post('/child/connect-remote', d).then(r => r.data),
 }
 
 const collectionName = (ws, co, pr) =>

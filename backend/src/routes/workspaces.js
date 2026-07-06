@@ -113,8 +113,9 @@ router.delete('/companies/:companyId/projects/:id', async (req, res, next) => {
 router.post('/workspaces/:workspaceId/companies/:companyId/invite', async (req, res, next) => {
   try {
     const { workspaceId, companyId } = req.params;
+    const panelUrl = process.env.PROVIRPANEL_PUBLIC_URL || '';
     const expiresAt = new Date(Date.now() + 24 * 60 * 60 * 1000);
-    const token = jwt.sign({ workspaceId, companyId }, JWT_SECRET, { expiresIn: '24h' });
+    const token = jwt.sign({ workspaceId, companyId, panelUrl }, JWT_SECRET, { expiresIn: '24h' });
     await prisma.workspaceInvite.create({ data: { token, workspaceId, companyId, expiresAt } });
     res.json({ token, expiresAt });
   } catch (err) { next(err); }
@@ -142,6 +143,7 @@ router.delete('/children/:id/revoke', async (req, res, next) => {
 
 // ─── Handshake (chamado pelo filho) ──────────────────────────────────────────
 
+// This endpoint is called ON the parent panel (the one that generated the invite)
 router.post('/child/connect', async (req, res, next) => {
   try {
     const { token, panelName, panelUrl } = req.body;
@@ -177,6 +179,40 @@ router.post('/child/connect', async (req, res, next) => {
       gatewayApiKey: GATEWAY_API_KEY,
       childPanelId: childPanel.id
     });
+  } catch (err) { next(err); }
+});
+
+// This endpoint is called ON the child panel — it proxies the connect to the parent
+router.post('/child/connect-remote', async (req, res, next) => {
+  try {
+    const { token, panelName, panelUrl } = req.body;
+    if (!token) return res.status(400).json({ message: 'token é obrigatório' });
+
+    // Decode token (without verifying — the parent will verify)
+    const decoded = jwt.decode(token);
+    if (!decoded || !decoded.panelUrl) {
+      return res.status(400).json({ message: 'Token inválido — não contém panelUrl do pai' });
+    }
+
+    const parentUrl = decoded.panelUrl.replace(/\/$/, '');
+    const myName = panelName || process.env.ZEUS_PANEL_NAME || 'Unknown';
+    const myUrl = panelUrl || process.env.PROVIRPANEL_PUBLIC_URL || '';
+
+    // Forward handshake to parent panel
+    const response = await fetch(`${parentUrl}/api/child/connect`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ token, panelName: myName, panelUrl: myUrl }),
+      signal: AbortSignal.timeout(15000)
+    });
+
+    if (!response.ok) {
+      const err = await response.json().catch(() => ({ message: `Parent returned ${response.status}` }));
+      return res.status(response.status).json(err);
+    }
+
+    const data = await response.json();
+    res.json(data);
   } catch (err) { next(err); }
 });
 
