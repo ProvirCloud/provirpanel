@@ -107,7 +107,7 @@ const ConnectModal = ({ onClose }) => {
         {result ? (
           <div className="space-y-2">
             <p className="text-xs text-green-400 font-medium">✅ Painel vinculado com sucesso!</p>
-            {[['Workspace', result.workspaceSlug], ['Company', result.companySlug], ['Gateway URL', result.gatewayUrl]].map(([k, v]) => (
+            {[['Workspace', result.workspaceName || result.workspaceSlug], ['Projeto', result.projectId || result.companySlug], ['Painel ID', result.panelId], ['API Key', result.apiKey || result.gatewayUrl]].filter(([,v]) => v).map(([k, v]) => (
               <div key={k} className="flex items-center justify-between rounded bg-slate-800 px-3 py-1.5">
                 <span className="text-[11px] text-slate-400">{k}</span>
                 <span className="text-[11px] text-slate-200 font-mono">{v || '—'}<CopyBtn value={v || ''} /></span>
