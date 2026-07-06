@@ -187,6 +187,25 @@ router.post('/child/connect-remote', async (req, res, next) => {
     }
 
     const data = await response.json();
+
+    // Create local workspace/company record to show in the UI
+    if (data.success && data.workspaceName) {
+      try {
+        const slug = data.workspaceName.toLowerCase().replace(/[^a-z0-9]/g, '_');
+        const ws = await prisma.workspace.upsert({
+          where: { slug },
+          update: { name: data.workspaceName },
+          create: { name: data.workspaceName, slug }
+        });
+        const companySlug = myName.toLowerCase().replace(/[^a-z0-9]/g, '_');
+        await prisma.company.upsert({
+          where: { workspaceId_slug: { workspaceId: ws.id, slug: companySlug } },
+          update: { name: myName },
+          create: { name: myName, slug: companySlug, workspaceId: ws.id }
+        });
+      } catch {}
+    }
+
     res.json(data);
   } catch (err) { next(err); }
 });

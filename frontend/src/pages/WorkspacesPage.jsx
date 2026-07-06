@@ -81,7 +81,7 @@ const InviteModal = ({ token, expiresAt, onClose }) => (
 )
 
 // ─── Connect Modal (filho) ────────────────────────────────────────────────────
-const ConnectModal = ({ onClose }) => {
+const ConnectModal = ({ onClose, onSuccess }) => {
   const [form, setForm] = useState({ token: '', panelName: '', panelUrl: '' })
   const [result, setResult] = useState(null)
   const [loading, setLoading] = useState(false)
@@ -93,6 +93,7 @@ const ConnectModal = ({ onClose }) => {
       const data = await wsApi.connect(form)
       setResult(data)
       localStorage.setItem('provir-workspace', JSON.stringify(data))
+      if (onSuccess) onSuccess()
     } catch (e) { setError(e.response?.data?.message || e.message) }
     finally { setLoading(false) }
   }
@@ -329,7 +330,7 @@ export default function WorkspacesPage() {
         )}
       </div>
 
-      {showConnect && <ConnectModal onClose={() => setShowConnect(false)} />}
+      {showConnect && <ConnectModal onClose={() => setShowConnect(false)} onSuccess={() => wsApi.list().then(setWorkspaces)} />}
     </div>
   )
 }
