@@ -110,14 +110,35 @@ router.delete('/companies/:companyId/projects/:id', async (req, res, next) => {
 
 // ─── Invite ───────────────────────────────────────────────────────────────────
 
+// ─── Invite (gerado via Gateway) ─────────────────────────────────────────────
+
 router.post('/workspaces/:workspaceId/companies/:companyId/invite', async (req, res, next) => {
   try {
     const { workspaceId, companyId } = req.params;
-    const panelUrl = process.env.PROVIRPANEL_PUBLIC_URL || '';
+
+    // Generate invite via Zeus Gateway
+    const response = await fetch(`${GATEWAY_URL}/api/panels/generate-invite`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', 'x-api-key': GATEWAY_API_KEY },
+      body: JSON.stringify({
+        workspaceId: process.env.ZEUS_WORKSPACE_ID || workspaceId,
+        parentPanelId: process.env.ZEUS_PANEL_ID || null
+      }),
+      signal: AbortSignal.timeout(10000)
+    });
+
+    if (!response.ok) {
+      const err = await response.json().catch(() => ({}));
+      return res.status(response.status).json(err);
+    }
+
+    const data = await response.json();
+
+    // Also save locally for reference
     const expiresAt = new Date(Date.now() + 24 * 60 * 60 * 1000);
-    const token = jwt.sign({ workspaceId, companyId, panelUrl }, JWT_SECRET, { expiresIn: '24h' });
-    await prisma.workspaceInvite.create({ data: { token, workspaceId, companyId, expiresAt } });
-    res.json({ token, expiresAt });
+    await prisma.workspaceInvite.create({ data: { token: data.token, workspaceId, companyId, expiresAt } }).catch(() => {});
+
+    res.json({ token: data.token, expiresAt, workspaceName: data.workspaceName });
   } catch (err) { next(err); }
 });
 
@@ -141,73 +162,26 @@ router.delete('/children/:id/revoke', async (req, res, next) => {
   } catch (err) { next(err); }
 });
 
-// ─── Handshake (chamado pelo filho) ──────────────────────────────────────────
+// ─── Handshake ───────────────────────────────────────────────────────────────
 
-// This endpoint is called ON the parent panel (the one that generated the invite)
-router.post('/child/connect', async (req, res, next) => {
-  try {
-    const { token, panelName, panelUrl } = req.body;
-    if (!token || !panelName || !panelUrl) return res.status(400).json({ message: 'token, panelName e panelUrl são obrigatórios' });
-
-    let payload;
-    try { payload = jwt.verify(token, JWT_SECRET); }
-    catch { return res.status(401).json({ message: 'Token inválido ou expirado' }); }
-
-    const invite = await prisma.workspaceInvite.findUnique({ where: { token } });
-    if (!invite) return res.status(404).json({ message: 'Convite não encontrado' });
-    if (invite.usedAt) return res.status(409).json({ message: 'Token já utilizado' });
-    if (invite.expiresAt < new Date()) return res.status(410).json({ message: 'Token expirado' });
-
-    await prisma.workspaceInvite.update({ where: { id: invite.id }, data: { usedAt: new Date() } });
-
-    const apiKey = crypto.randomBytes(32).toString('hex');
-    const childPanel = await prisma.childPanel.upsert({
-      where: { companyId: invite.companyId },
-      update: { name: panelName, url: panelUrl, apiKey, revokedAt: null },
-      create: { name: panelName, url: panelUrl, companyId: invite.companyId, apiKey }
-    });
-
-    const company = await prisma.company.findUnique({
-      where: { id: invite.companyId },
-      include: { workspace: true }
-    });
-
-    res.json({
-      workspaceSlug: company.workspace.slug,
-      companySlug: company.slug,
-      gatewayUrl: GATEWAY_URL,
-      gatewayApiKey: GATEWAY_API_KEY,
-      childPanelId: childPanel.id
-    });
-  } catch (err) { next(err); }
-});
-
-// This endpoint is called ON the child panel — it proxies the connect to the parent
+// Called by child panel frontend — handshake goes entirely through Gateway
 router.post('/child/connect-remote', async (req, res, next) => {
   try {
-    const { token, panelName, panelUrl } = req.body;
+    const { token } = req.body;
     if (!token) return res.status(400).json({ message: 'token é obrigatório' });
 
-    // Decode token (without verifying — the parent will verify)
-    const decoded = jwt.decode(token);
-    if (!decoded || !decoded.panelUrl) {
-      return res.status(400).json({ message: 'Token inválido — não contém panelUrl do pai' });
-    }
+    const myName = process.env.ZEUS_PANEL_NAME || 'Unknown';
+    const myUrl = process.env.PROVIRPANEL_PUBLIC_URL || '';
 
-    const parentUrl = decoded.panelUrl.replace(/\/$/, '');
-    const myName = panelName || process.env.ZEUS_PANEL_NAME || 'Unknown';
-    const myUrl = panelUrl || process.env.PROVIRPANEL_PUBLIC_URL || '';
-
-    // Forward handshake to parent panel
-    const response = await fetch(`${parentUrl}/api/child/connect`, {
+    const response = await fetch(`${GATEWAY_URL}/api/panels/proxy-connect`, {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
+      headers: { 'Content-Type': 'application/json', 'x-api-key': GATEWAY_API_KEY },
       body: JSON.stringify({ token, panelName: myName, panelUrl: myUrl }),
       signal: AbortSignal.timeout(15000)
     });
 
     if (!response.ok) {
-      const err = await response.json().catch(() => ({ message: `Parent returned ${response.status}` }));
+      const err = await response.json().catch(() => ({ message: `Gateway returned ${response.status}` }));
       return res.status(response.status).json(err);
     }
 

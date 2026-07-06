@@ -1,9 +1,44 @@
 import { Activity, Boxes, Brain, Database, Files, FileText, Globe, Layers3, Route, SearchCheck, Terminal, X } from 'lucide-react'
+import { useEffect, useState } from 'react'
 import logoNameDark from '../../assets/images/logoname.webp'
 import logoNameLight from '../../assets/images/logoname_w.webp'
 import { useTheme } from '../../app/providers/theme-provider'
 import Card from '../ui/Card'
 import SidebarSection from './SidebarSection'
+
+const roleConfig: Record<string, { label: string; color: string; bg: string }> = {
+  central: { label: 'Central AI', color: 'text-purple-300', bg: 'bg-purple-500/15 border-purple-500/30' },
+  workspace: { label: 'Workspace', color: 'text-blue-300', bg: 'bg-blue-500/15 border-blue-500/30' },
+  project: { label: 'Projeto', color: 'text-emerald-300', bg: 'bg-emerald-500/15 border-emerald-500/30' },
+}
+
+const PanelBadge = () => {
+  const [info, setInfo] = useState<{ panelName: string; role: string; scopeName: string | null } | null>(null)
+
+  useEffect(() => {
+    const fetchInfo = async () => {
+      try {
+        const token = localStorage.getItem('token')
+        const res = await fetch('/api/zeus/panel-info', { headers: { Authorization: `Bearer ${token}` } })
+        if (res.ok) setInfo(await res.json())
+      } catch {}
+    }
+    fetchInfo()
+  }, [])
+
+  if (!info) return null
+  const cfg = roleConfig[info.role] || roleConfig.project
+
+  return (
+    <div className={`mb-4 rounded-lg border px-3 py-2 ${cfg.bg}`}>
+      <div className={`text-[10px] font-bold uppercase tracking-widest ${cfg.color}`}>{cfg.label}</div>
+      <div className="mt-0.5 text-sm font-medium text-[var(--color-text)]">{info.panelName}</div>
+      {info.scopeName && info.role !== 'central' && (
+        <div className="mt-0.5 text-[11px] text-[var(--color-text-muted)]">└ {info.scopeName}</div>
+      )}
+    </div>
+  )
+}
 
 const sections = [
   {
@@ -65,6 +100,8 @@ const SidebarContent = ({ onNavigate, showClose = false }: SidebarContentProps) 
           </button>
         ) : null}
       </div>
+
+      <PanelBadge />
 
       <div className="flex-1 space-y-8 overflow-y-auto pr-1">
         {sections.map((section) => (

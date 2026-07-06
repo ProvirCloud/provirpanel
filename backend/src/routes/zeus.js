@@ -260,6 +260,23 @@ router.get('/panels', async (_req, res, next) => {
   }
 });
 
+router.get('/panel-info', async (_req, res) => {
+  let scopeName = null;
+  try {
+    if (ZEUS_PANEL_ID) {
+      const scope = await zeusGet(`/api/hierarchy/scope/${ZEUS_PANEL_ID}`);
+      if (scope.workspace) scopeName = scope.workspace.name;
+      if (scope.project) scopeName = scope.project.name;
+    }
+  } catch {}
+  res.json({
+    panelId: ZEUS_PANEL_ID || null,
+    panelName: PANEL_NAME,
+    role: ZEUS_PANEL_ROLE,
+    scopeName
+  });
+});
+
 router.post('/panels/register', async (req, res, next) => {
   try {
     const data = await zeusRequest('/api/panels/register', req.body);
