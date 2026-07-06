@@ -1,5 +1,6 @@
-import { ChevronDown, KeyRound, LogOut, Shield, UserPlus } from 'lucide-react'
+import { ChevronDown, KeyRound, LogOut, Shield, UserPlus, Building2 } from 'lucide-react'
 import { useEffect, useRef, useState } from 'react'
+import { useNavigate } from 'react-router-dom'
 import Avatar from '../ui/Avatar'
 
 type UserMenuProps = {
@@ -13,6 +14,7 @@ type UserMenuProps = {
 const UserMenu = ({ username, onLogout, onChangePassword, onCreateUser, onManageMfa }: UserMenuProps) => {
   const [open, setOpen] = useState(false)
   const ref = useRef<HTMLDivElement | null>(null)
+  const navigate = useNavigate()
 
   useEffect(() => {
     const handleClick = (event: MouseEvent) => {
@@ -23,6 +25,7 @@ const UserMenu = ({ username, onLogout, onChangePassword, onCreateUser, onManage
   }, [])
 
   const items = [
+    { label: 'Workspaces', icon: Building2, action: () => navigate('/workspaces') },
     { label: 'Alterar senha', icon: KeyRound, action: onChangePassword },
     { label: 'Novo usuário', icon: UserPlus, action: onCreateUser },
     { label: 'Configurar MFA', icon: Shield, action: onManageMfa },
