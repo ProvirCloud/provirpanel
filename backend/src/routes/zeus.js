@@ -7,6 +7,8 @@ process.env.NODE_TLS_REJECT_UNAUTHORIZED = '0';
 
 const ZEUS_GATEWAY_URL = process.env.ZEUS_GATEWAY_URL || 'http://localhost:3002';
 const ZEUS_API_KEY = process.env.ZEUS_API_KEY || 'zeus_master_key_change_me';
+const ZEUS_PANEL_ID = process.env.ZEUS_PANEL_ID || '';
+const ZEUS_PANEL_ROLE = process.env.ZEUS_PANEL_ROLE || 'project';
 const PANEL_NAME = process.env.ZEUS_PANEL_NAME || 'Local';
 
 // Cache tokens for remote panels (avoid login on every request)
@@ -250,7 +252,8 @@ router.get('/health', async (_req, res, next) => {
 
 router.get('/panels', async (_req, res, next) => {
   try {
-    const data = await zeusGet('/api/panels');
+    const scopeParam = ZEUS_PANEL_ROLE !== 'central' && ZEUS_PANEL_ID ? `?panelId=${ZEUS_PANEL_ID}` : '';
+    const data = await zeusGet(`/api/panels${scopeParam}`);
     res.json(data);
   } catch (err) {
     next(err);
@@ -349,6 +352,88 @@ router.get('/index-git/repos', async (req, res, next) => {
   } catch (err) {
     next(err);
   }
+});
+
+// --- Hierarchy Management (proxy to Gateway) ---
+
+router.get('/hierarchy/workspaces', async (_req, res, next) => {
+  try { res.json(await zeusGet('/api/hierarchy/workspaces')); } catch (err) { next(err); }
+});
+
+router.post('/hierarchy/workspaces', async (req, res, next) => {
+  try { res.json(await zeusRequest('/api/hierarchy/workspaces', req.body)); } catch (err) { next(err); }
+});
+
+router.put('/hierarchy/workspaces/:id', async (req, res, next) => {
+  try {
+    const r = await fetch(`${ZEUS_GATEWAY_URL}/api/hierarchy/workspaces/${req.params.id}`, {
+      method: 'PUT', headers: { 'Content-Type': 'application/json', 'x-api-key': ZEUS_API_KEY }, body: JSON.stringify(req.body)
+    });
+    res.json(await r.json());
+  } catch (err) { next(err); }
+});
+
+router.delete('/hierarchy/workspaces/:id', async (req, res, next) => {
+  try {
+    const r = await fetch(`${ZEUS_GATEWAY_URL}/api/hierarchy/workspaces/${req.params.id}`, {
+      method: 'DELETE', headers: { 'x-api-key': ZEUS_API_KEY }
+    });
+    res.json(await r.json());
+  } catch (err) { next(err); }
+});
+
+router.get('/hierarchy/workspaces/:wsId/projects', async (req, res, next) => {
+  try { res.json(await zeusGet(`/api/hierarchy/workspaces/${req.params.wsId}/projects`)); } catch (err) { next(err); }
+});
+
+router.post('/hierarchy/workspaces/:wsId/projects', async (req, res, next) => {
+  try { res.json(await zeusRequest(`/api/hierarchy/workspaces/${req.params.wsId}/projects`, req.body)); } catch (err) { next(err); }
+});
+
+router.put('/hierarchy/workspaces/:wsId/projects/:projId', async (req, res, next) => {
+  try {
+    const r = await fetch(`${ZEUS_GATEWAY_URL}/api/hierarchy/workspaces/${req.params.wsId}/projects/${req.params.projId}`, {
+      method: 'PUT', headers: { 'Content-Type': 'application/json', 'x-api-key': ZEUS_API_KEY }, body: JSON.stringify(req.body)
+    });
+    res.json(await r.json());
+  } catch (err) { next(err); }
+});
+
+router.delete('/hierarchy/workspaces/:wsId/projects/:projId', async (req, res, next) => {
+  try {
+    const r = await fetch(`${ZEUS_GATEWAY_URL}/api/hierarchy/workspaces/${req.params.wsId}/projects/${req.params.projId}`, {
+      method: 'DELETE', headers: { 'x-api-key': ZEUS_API_KEY }
+    });
+    res.json(await r.json());
+  } catch (err) { next(err); }
+});
+
+router.get('/hierarchy/scope', async (_req, res, next) => {
+  try {
+    const panelId = ZEUS_PANEL_ID || 'central';
+    res.json(await zeusGet(`/api/hierarchy/scope/${panelId}`));
+  } catch (err) { next(err); }
+});
+
+router.get('/hierarchy/context', async (_req, res, next) => {
+  try {
+    const panelId = ZEUS_PANEL_ID || 'central';
+    res.json(await zeusGet(`/api/hierarchy/context-for/${panelId}`));
+  } catch (err) { next(err); }
+});
+
+// Join this panel to a workspace (plug & play)
+router.post('/hierarchy/join', async (req, res, next) => {
+  try {
+    const { workspaceId, projectName } = req.body;
+    if (!workspaceId) return res.status(400).json({ error: 'workspaceId is required' });
+    const data = await zeusRequest('/api/hierarchy/join', {
+      panelId: ZEUS_PANEL_ID,
+      workspaceId,
+      projectName: projectName || process.env.ZEUS_PANEL_NAME || 'Unknown'
+    });
+    res.json(data);
+  } catch (err) { next(err); }
 });
 
 module.exports = router;
