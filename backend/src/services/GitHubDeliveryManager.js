@@ -526,13 +526,10 @@ class GitHubDeliveryManager {
   generateWorkflow({ serviceId, serviceName, blueprint, provirPanelUrl = '', deployMode = 'manual' }) {
     const fs = require('fs');
     const path = require('path');
-    const formJson = (name, value) =>
-      `            -F '${name}=${JSON.stringify(value).replace(/'/g, "'\"'\"'")}'`;
     const projectPath = blueprint.projectPath && blueprint.projectPath !== '.' ? blueprint.projectPath : '.';
     const workflowName = `ProvirPanel Deploy - ${serviceName || blueprint.serviceName || 'service'}`;
     const branch = blueprint.branch || 'main';
 
-    // Use pre-detected values from async detectProjectConfig() or blueprint overrides
     const nodeVersion = blueprint.nodeVersion || '20';
     const packageManager = blueprint.packageManager || 'npm';
     const buildCommand = blueprint.buildCommand || `${packageManager === 'yarn' ? 'yarn' : 'npm run'} build`;
@@ -563,6 +560,70 @@ class GitHubDeliveryManager {
       '      - uses: actions/checkout@v4'
     ];
 
+    // Helper: generates chunked upload deploy step
+    const chunkedDeployStep = (archiveFile, extraFields = {}) => {
+      const fieldsJson = JSON.stringify({
+        autoRollback: true,
+        healthcheck: blueprint.healthcheck || {},
+        versionMetadata: { mode: 'auto', changeType: 'feature', commitSha: '${{ github.sha }}' },
+        ...extraFields
+      });
+      return [
+        '',
+        '      - name: Deploy to ProvirPanel (chunked upload)',
+        '        env:',
+        '          PANEL_URL: ${{ secrets.PROVIRPANEL_URL }}',
+        '          PANEL_TOKEN: ${{ secrets.PROVIRPANEL_TOKEN }}',
+        `          SERVICE_ID: ${serviceTarget}`,
+        `          ARCHIVE_FILE: ${archiveFile.replace('$GITHUB_WORKSPACE', '${{ github.workspace }}')}`,
+        `          EXTRA_FIELDS: '${fieldsJson.replace(/'/g, "'\\''")}' `,
+        '        run: |',
+        '          CHUNK_SIZE=50000000',
+        '          FILE_SIZE=$(stat --printf="%s" "$ARCHIVE_FILE")',
+        '          TOTAL_CHUNKS=$(( (FILE_SIZE + CHUNK_SIZE - 1) / CHUNK_SIZE ))',
+        '          FILENAME=$(basename "$ARCHIVE_FILE")',
+        '          echo "Uploading $FILENAME ($FILE_SIZE bytes) in $TOTAL_CHUNKS chunk(s)"',
+        '          ',
+        '          # Parse extra fields for init',
+        '          INIT_BODY=$(echo "$EXTRA_FIELDS" | jq -c --arg fn "$FILENAME" --argjson tc $TOTAL_CHUNKS --argjson sz $FILE_SIZE \'. + {totalChunks: $tc, filename: $fn, size: $sz}\')',
+        '          ',
+        '          # Init upload',
+        '          UPLOAD_ID=$(curl -sf -X POST "$PANEL_URL/api/docker/services/$SERVICE_ID/project-upload/init" \\',
+        '            -H "Authorization: Bearer $PANEL_TOKEN" \\',
+        '            -H "Content-Type: application/json" \\',
+        '            -d "$INIT_BODY" | jq -r .uploadId)',
+        '          ',
+        '          if [ -z "$UPLOAD_ID" ] || [ "$UPLOAD_ID" = "null" ]; then',
+        '            echo "❌ Failed to init upload"; exit 1',
+        '          fi',
+        '          echo "Upload ID: $UPLOAD_ID"',
+        '          ',
+        '          # Split and send chunks',
+        '          split -b $CHUNK_SIZE -d --additional-suffix=.chunk "$ARCHIVE_FILE" /tmp/chunk_',
+        '          CHUNK_INDEX=0',
+        '          for CHUNK_FILE in /tmp/chunk_*.chunk; do',
+        '            echo "  Sending chunk $CHUNK_INDEX / $((TOTAL_CHUNKS - 1))..."',
+        '            HTTP_CODE=$(curl -sf -o /dev/null -w "%{http_code}" -X POST \\',
+        '              "$PANEL_URL/api/docker/services/$SERVICE_ID/project-upload/chunk" \\',
+        '              -H "Authorization: Bearer $PANEL_TOKEN" \\',
+        '              -F "uploadId=$UPLOAD_ID" \\',
+        '              -F "chunkIndex=$CHUNK_INDEX" \\',
+        '              -F "chunk=@$CHUNK_FILE")',
+        '            if [ "$HTTP_CODE" != "200" ]; then',
+        '              echo "❌ Chunk $CHUNK_INDEX failed (HTTP $HTTP_CODE)"; exit 1',
+        '            fi',
+        '            CHUNK_INDEX=$((CHUNK_INDEX + 1))',
+        '          done',
+        '          ',
+        '          # Complete upload',
+        '          RESULT=$(curl -sf -X POST "$PANEL_URL/api/docker/services/$SERVICE_ID/project-upload/complete" \\',
+        '            -H "Authorization: Bearer $PANEL_TOKEN" \\',
+        '            -H "Content-Type: application/json" \\',
+        '            -d "{\\"uploadId\\": \\"$UPLOAD_ID\\"}")',
+        '          echo "✅ Deploy initiated: $(echo $RESULT | jq -r \'(.message // .jobId // "ok")\')"'
+      ];
+    };
+
     if (blueprint.buildType === 'java-jar') {
       const javaVersion = String(blueprint.imageName || '').match(/temurin:([0-9]+)/)?.[1] || '11';
       base.push(
@@ -580,16 +641,8 @@ class GitHubDeliveryManager {
         `        working-directory: ${projectPath}`,
         `        run: |`,
         `          mkdir -p "$GITHUB_WORKSPACE/.provirpanel-release"`,
-        `          cp ${blueprint.artifactPath || 'target/*.jar'} "$GITHUB_WORKSPACE/.provirpanel-release/app.jar"`,
-        '',
-        '      - name: Deploy to ProvirPanel',
-        '        run: |',
-        `          curl -f -X POST "${uploadUrl}/api/docker/services/${serviceTarget}/project-upload" \\`,
-        '            -H "Authorization: Bearer ${{ secrets.PROVIRPANEL_TOKEN }}" \\',
-        '            -F "archive=@.provirpanel-release/app.jar" \\',
-        '            -F "autoRollback=true" \\',
-        `${formJson('healthcheck', blueprint.healthcheck || {})} \\`,
-        formJson('versionMetadata', { mode: 'auto', changeType: 'feature', commitSha: '${{ github.sha }}' })
+        `          cp ${(blueprint.artifactPath && blueprint.artifactPath !== '.') ? blueprint.artifactPath : 'target/*.jar'} "$GITHUB_WORKSPACE/.provirpanel-release/app.jar"`,
+        ...chunkedDeployStep('$GITHUB_WORKSPACE/.provirpanel-release/app.jar')
       );
       return base.join('\n') + '\n';
     }
@@ -618,17 +671,10 @@ class GitHubDeliveryManager {
         '        run: |',
         '          mkdir -p "$GITHUB_WORKSPACE/.provirpanel-release"',
         `          tar -czf "$GITHUB_WORKSPACE/.provirpanel-release/site.tgz" -C "${artifactPath}" .`,
-        '',
-        '      - name: Deploy to ProvirPanel',
-        '        run: |',
-        `          curl -f -X POST "${uploadUrl}/api/docker/services/${serviceTarget}/project-upload" \\`,
-        '            -H "Authorization: Bearer ${{ secrets.PROVIRPANEL_TOKEN }}" \\',
-        '            -F "archive=@.provirpanel-release/site.tgz" \\',
-        '            -F "autoRollback=true" \\',
-        `            -F "nodeServiceMode=sites" \\`,
-        `${formJson('nodeSiteConfig', blueprint.nodeSiteConfig || { siteType: 'spa', siteFolder: 'publish', fallbackFile: 'index.html' })} \\`,
-        `${formJson('healthcheck', blueprint.healthcheck || {})} \\`,
-        formJson('versionMetadata', { mode: 'auto', changeType: 'content', commitSha: '${{ github.sha }}' })
+        ...chunkedDeployStep('$GITHUB_WORKSPACE/.provirpanel-release/site.tgz', {
+          nodeServiceMode: 'sites',
+          nodeSiteConfig: blueprint.nodeSiteConfig || { siteType: 'spa', siteFolder: 'publish', fallbackFile: 'index.html' }
+        })
       );
       return base.join('\n') + '\n';
     }
@@ -640,15 +686,7 @@ class GitHubDeliveryManager {
       '        run: |',
       '          mkdir -p "$GITHUB_WORKSPACE/.provirpanel-release"',
       '          tar --exclude=.git --exclude=node_modules --exclude=.next --exclude=dist --exclude=build -czf "$GITHUB_WORKSPACE/.provirpanel-release/source.tgz" .',
-      '',
-      '      - name: Deploy to ProvirPanel',
-      '        run: |',
-      `          curl -f -X POST "${uploadUrl}/api/docker/services/${serviceTarget}/project-upload" \\`,
-      '            -H "Authorization: Bearer ${{ secrets.PROVIRPANEL_TOKEN }}" \\',
-      '            -F "archive=@.provirpanel-release/source.tgz" \\',
-      '            -F "autoRollback=true" \\',
-      `${formJson('healthcheck', blueprint.healthcheck || {})} \\`,
-      formJson('versionMetadata', { mode: 'auto', changeType: 'feature', commitSha: '${{ github.sha }}' })
+      ...chunkedDeployStep('$GITHUB_WORKSPACE/.provirpanel-release/source.tgz')
     );
     return base.join('\n') + '\n';
   }

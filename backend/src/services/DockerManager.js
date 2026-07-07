@@ -328,7 +328,9 @@ class DockerManager {
       externalUrl: hostPort && !bindLocalOnly ? `http://localhost:${hostPort}` : null,
       createdAt: containerInfo.Created || new Date().toISOString(),
       containerStatus: containerInfo.State?.Status || null,
-      healthStatus: extractContainerHealthStatus(containerInfo),
+      healthStatus: labels['provirpanel.healthcheck.enabled'] === 'false'
+        ? null
+        : extractContainerHealthStatus(containerInfo),
       hasProject: Boolean(labels['provirpanel.has_project'] === 'true'),
       parentService: labels['provirpanel.parent.id'] || null,
       envVars: []
@@ -379,7 +381,9 @@ class DockerManager {
           url: hostPort ? `http://localhost:${hostPort}` : service.url,
           externalUrl: hostPort && !bindLocalOnly ? `http://localhost:${hostPort}` : service.externalUrl,
           containerStatus: matchedContainer.Status || matchedContainer.State || null,
-          healthStatus: extractContainerHealthStatus(matchedContainer)
+          healthStatus: (service.healthcheck?.enabled === false || service.healthcheck?.enabled === 'false')
+            ? null
+            : extractContainerHealthStatus(matchedContainer)
         });
       } else if (service.containerId) {
         // Container gone — mark for removal from registry

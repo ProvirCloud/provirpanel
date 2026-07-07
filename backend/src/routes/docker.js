@@ -2197,7 +2197,8 @@ const createDeploymentLogEmitter = ({ containerId, pushProgress, phase = 'compil
 
 const buildDockerHealthcheckConfig = (healthcheck, containerPort) => {
   const config = normalizeHealthcheckConfig(healthcheck);
-  if (!config.enabled || !config.containerEnabled) return null;
+  if (!config.enabled) return { Test: ['NONE'] };
+  if (!config.containerEnabled) return null;
 
   const target = String(config.target || '/').trim() || '/';
   const containerUrl = /^https?:\/\//i.test(target)
