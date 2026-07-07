@@ -564,6 +564,7 @@ class GitHubDeliveryManager {
     const chunkedDeployStep = (archiveFile, extraFields = {}) => {
       const fieldsJson = JSON.stringify({
         autoRollback: true,
+        healthcheck: blueprint.healthcheck || {},
         versionMetadata: { mode: 'auto', changeType: 'feature', commitSha: '${{ github.sha }}' },
         ...extraFields
       });
