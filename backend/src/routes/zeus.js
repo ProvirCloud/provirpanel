@@ -515,4 +515,25 @@ router.get('/openapi/status/:jobId', async (req, res, next) => {
   } catch (err) { next(err); }
 });
 
+
+// POST /zeus/storage/index — indexar bucket MinIO/S3
+router.post('/storage/index', async (req, res, next) => {
+  try {
+    const { endpoint, accessKey, secretKey, region, bucket, prefix, collection } = req.body;
+    if (!accessKey || !secretKey || !bucket) return res.status(400).json({ error: 'accessKey, secretKey and bucket are required' });
+    const data = await zeusRequest('/api/storage/index', {
+      endpoint, accessKey, secretKey, region, bucket, prefix, collection,
+      panelId: ZEUS_PANEL_ID || undefined
+    });
+    res.status(202).json(data);
+  } catch (err) { next(err); }
+});
+
+// GET /zeus/storage/status/:jobId
+router.get('/storage/status/:jobId', async (req, res, next) => {
+  try {
+    res.json(await zeusGet(`/api/storage/status/${encodeURIComponent(req.params.jobId)}`));
+  } catch (err) { next(err); }
+});
+
 module.exports = router;
