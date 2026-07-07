@@ -400,7 +400,7 @@ class GitHubDeliveryManager {
       nodeSiteConfig: null,
       healthcheck: {
         enabled: true,
-        target: '/actuator/health',
+        target: '/api/authenticate',
         intervalSeconds: 10,
         timeoutSeconds: 5,
         retries: 8,
@@ -523,7 +523,7 @@ class GitHubDeliveryManager {
     };
   }
 
-  generateWorkflow({ serviceId, serviceName, blueprint, provirPanelUrl = '', deployMode = 'manual' }) {
+  generateWorkflow({ serviceId, serviceName, service, blueprint, provirPanelUrl = '', deployMode = 'manual' }) {
     const fs = require('fs');
     const path = require('path');
     const projectPath = blueprint.projectPath && blueprint.projectPath !== '.' ? blueprint.projectPath : '.';
@@ -562,9 +562,13 @@ class GitHubDeliveryManager {
 
     // Helper: generates chunked upload deploy step
     const chunkedDeployStep = (archiveFile, extraFields = {}) => {
+      const svc = service || {};
+      const serviceHealthcheck = svc.healthcheck && typeof svc.healthcheck === 'object'
+        ? svc.healthcheck
+        : blueprint.healthcheck || {};
       const fieldsJson = JSON.stringify({
-        autoRollback: true,
-        healthcheck: blueprint.healthcheck || {},
+        autoRollback: svc.autoRollback !== false,
+        healthcheck: serviceHealthcheck,
         versionMetadata: { mode: 'auto', changeType: 'feature', commitSha: '${{ github.sha }}' },
         ...extraFields
       });

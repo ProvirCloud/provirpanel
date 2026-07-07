@@ -2128,8 +2128,13 @@ const waitForServiceHealth = async ({
     }
   }
 
+  const errorMsg = lastError?.message || 'sem resposta';
+  const all404 = errorMsg.includes('HTTP 404') && !errorMsg.includes('HTTP 5') && !errorMsg.includes('HTTP 4') || /HTTP 404.*HTTP 404/.test(errorMsg) || (errorMsg.match(/HTTP 404/g) || []).length >= 1 && !/HTTP [^4]/.test(errorMsg.replace(/HTTP 404/g, ''));
+  const hint = all404
+    ? ` — O endpoint de healthcheck retorna 404 (não encontrado). Verifique se o path '${config.target}' existe na aplicação ou desative o healthcheck em Settings.`
+    : '';
   throw createHttpError(
-    `Healthcheck falhou para ${serviceName}: ${lastError?.message || 'sem resposta'}`,
+    `Healthcheck falhou para ${serviceName}: ${errorMsg}${hint}`,
     502
   );
 };
