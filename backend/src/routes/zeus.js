@@ -350,6 +350,7 @@ router.post('/index-git', async (req, res, next) => {
       repo,
       branch: branch || 'main',
       collection: collection || `project_${repo.replace(/[^a-z0-9]/gi, '_').toLowerCase()}`,
+      panelId: ZEUS_PANEL_ID || null,
       category: 'dev',
       metadata: metadata || {}
     });
