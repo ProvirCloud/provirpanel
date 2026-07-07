@@ -481,12 +481,28 @@ const ServiceStatusBadge = ({ service }) => {
 }
 
 const HealthBadge = ({ service }) => {
-  const health = service?.healthStatus || (service?.healthcheck?.enabled ? 'configured' : 'not configured')
-  const className = HEALTH_META[health] || 'border-slate-700 bg-slate-950 text-slate-400'
+  const status = service?.healthStatus;
+  const enabled = service?.healthcheck?.enabled;
+  let label, className;
+  if (status === 'healthy') {
+    label = 'Saudável';
+    className = HEALTH_META.healthy;
+  } else if (status === 'unhealthy') {
+    label = 'Indisponível';
+    className = HEALTH_META.unhealthy;
+  } else if (status === 'starting') {
+    label = 'Iniciando';
+    className = HEALTH_META.starting;
+  } else if (enabled) {
+    label = 'Health ativo';
+    className = 'border-sky-500/30 bg-sky-500/10 text-sky-200';
+  } else {
+    return null;
+  }
   return (
     <span className={`inline-flex items-center gap-1.5 rounded-full border px-2.5 py-1 text-xs font-medium ${className}`}>
       <ShieldCheck className="h-3.5 w-3.5" />
-      {health}
+      {label}
     </span>
   )
 }
@@ -805,7 +821,7 @@ const ServiceOverviewTab = ({ service, detail, activity }) => {
             <InfoRow label="Imagem" value={service.image} copyable />
             <InfoRow label="Template" value={service.templateId || '-'} />
             <InfoRow label="Status Docker" value={service.containerStatus || inspect.State?.Status || '-'} />
-            <InfoRow label="Healthcheck" value={service.healthStatus || (service.healthcheck?.enabled ? 'configured' : 'not configured')} />
+            <InfoRow label="Healthcheck" value={service.healthStatus === 'healthy' ? 'Saudável' : service.healthStatus === 'unhealthy' ? 'Indisponível' : service.healthStatus === 'starting' ? 'Iniciando' : service.healthcheck?.enabled ? `Ativo (${service.healthcheck.target || '/'})` : 'Desativado'} />
           </div>
           <div>
             <InfoRow label="Porta host" value={service.hostPort || 'auto'} />
@@ -1315,7 +1331,7 @@ const ServiceDeploysTab = ({
             </label>
           </div>
           <div className="rounded-lg border border-slate-800 bg-slate-900/40 px-3 py-2 text-xs text-slate-400">
-            Healthcheck: {service.healthcheck?.enabled ? `${service.healthcheck.target} / ${service.healthcheck.retries} tentativa(s)` : 'não configurado'}.
+            Healthcheck: {service.healthcheck?.enabled ? `${service.healthcheck.target || '/'} — ${service.healthcheck.retries || 6} tentativa(s), ${service.healthcheck.intervalSeconds || 10}s intervalo` : 'desativado (deploy finaliza ao iniciar o container)'}.
             Rollback automático: {service.autoRollback === false ? 'desativado' : 'ativado'}.
           </div>
           <button className={primaryButtonClass} type="button" onClick={handleDeploy} disabled={deployRunning}>
@@ -2926,20 +2942,33 @@ const ServiceSettingsTab = ({ service, settingsState, setSettingsState, onReload
           </div>
         </div>
         <div className="mt-5 rounded-xl border border-slate-800 bg-slate-900/40 p-3">
-          <h3 className="mb-3 text-sm font-semibold text-white">Healthcheck</h3>
+          <h3 className="mb-1 text-sm font-semibold text-white">Healthcheck</h3>
+          <p className="mb-3 text-xs text-slate-500">Verifica se a aplicação está respondendo após o deploy. Quando desativado, o deploy finaliza assim que o container iniciar.</p>
           <div className="grid gap-3 md:grid-cols-2 xl:grid-cols-3">
-            <label className="inline-flex items-center gap-2 rounded-lg border border-slate-800 bg-slate-950 px-3 py-2 text-sm text-slate-300">
+            <label className="inline-flex items-center gap-2 rounded-lg border border-slate-800 bg-slate-950 px-3 py-2 text-sm text-slate-300" title="Após o deploy, o painel faz requisições HTTP no path abaixo para confirmar que a aplicação está online.">
               <input type="checkbox" checked={settingsState.healthcheck?.enabled || false} onChange={(event) => setHealthcheck({ enabled: event.target.checked })} />
-              Validar URL/path
+              Verificar saúde após deploy
             </label>
-            <label className="inline-flex items-center gap-2 rounded-lg border border-slate-800 bg-slate-950 px-3 py-2 text-sm text-slate-300">
-              <input type="checkbox" checked={settingsState.healthcheck?.containerEnabled || false} onChange={(event) => setHealthcheck({ containerEnabled: event.target.checked })} />
-              Health no container
+            <label className="inline-flex items-center gap-2 rounded-lg border border-slate-800 bg-slate-950 px-3 py-2 text-sm text-slate-300" title="Adiciona um HEALTHCHECK no próprio container Docker. O Docker marca o container como unhealthy se o path não responder.">
+              <input type="checkbox" checked={settingsState.healthcheck?.containerEnabled || false} onChange={(event) => setHealthcheck({ containerEnabled: event.target.checked })} disabled={!settingsState.healthcheck?.enabled} />
+              Monitoramento contínuo (Docker)
             </label>
-            <input className={fieldClass} value={settingsState.healthcheck?.target || '/'} onChange={(event) => setHealthcheck({ target: event.target.value })} placeholder="/health" />
-            <input className={fieldClass} type="number" value={settingsState.healthcheck?.intervalSeconds || 10} onChange={(event) => setHealthcheck({ intervalSeconds: Number(event.target.value) })} placeholder="intervalo" />
-            <input className={fieldClass} type="number" value={settingsState.healthcheck?.timeoutSeconds || 5} onChange={(event) => setHealthcheck({ timeoutSeconds: Number(event.target.value) })} placeholder="timeout" />
-            <input className={fieldClass} type="number" value={settingsState.healthcheck?.retries || 6} onChange={(event) => setHealthcheck({ retries: Number(event.target.value) })} placeholder="tentativas" />
+            <div className="flex flex-col gap-1">
+              <label className="text-xs text-slate-500">Path da verificação (ex: /health, /api/status)</label>
+              <input className={fieldClass} value={settingsState.healthcheck?.target || '/'} onChange={(event) => setHealthcheck({ target: event.target.value })} placeholder="/health" disabled={!settingsState.healthcheck?.enabled} />
+            </div>
+            <div className="flex flex-col gap-1">
+              <label className="text-xs text-slate-500">Intervalo entre tentativas (segundos)</label>
+              <input className={fieldClass} type="number" value={settingsState.healthcheck?.intervalSeconds || 10} onChange={(event) => setHealthcheck({ intervalSeconds: Number(event.target.value) })} placeholder="10" disabled={!settingsState.healthcheck?.enabled} />
+            </div>
+            <div className="flex flex-col gap-1">
+              <label className="text-xs text-slate-500">Tempo limite por tentativa (segundos)</label>
+              <input className={fieldClass} type="number" value={settingsState.healthcheck?.timeoutSeconds || 5} onChange={(event) => setHealthcheck({ timeoutSeconds: Number(event.target.value) })} placeholder="5" disabled={!settingsState.healthcheck?.enabled} />
+            </div>
+            <div className="flex flex-col gap-1">
+              <label className="text-xs text-slate-500">Número máximo de tentativas</label>
+              <input className={fieldClass} type="number" value={settingsState.healthcheck?.retries || 6} onChange={(event) => setHealthcheck({ retries: Number(event.target.value) })} placeholder="6" disabled={!settingsState.healthcheck?.enabled} />
+            </div>
           </div>
         </div>
         {message ? <p className="mt-3 rounded-lg border border-slate-800 bg-slate-900 px-3 py-2 text-sm text-slate-300">{message}</p> : null}
