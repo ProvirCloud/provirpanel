@@ -287,26 +287,31 @@ router.post('/github/services/from-blueprint', async (req, res, next) => {
   }
 });
 
-router.put('/github/services/:serviceId/delivery', (req, res, next) => {
+const handleSaveDelivery = (req, res, next) => {
   try {
+    // Decode base64-encoded payload (Cloudflare WAF bypass)
+    let body = req.body;
+    if (body._encoded) {
+      try { body = JSON.parse(decodeURIComponent(escape(Buffer.from(body._encoded, 'base64').toString()))); } catch { body = req.body; }
+    }
     const services = dockerManager.listServices();
     const service = services.find((entry) => entry.id === req.params.serviceId);
     if (!service) {
       return res.status(404).json({ message: 'Service not found' });
     }
-    const blueprint = req.body?.blueprint || service.delivery?.blueprint || {};
+    const blueprint = body?.blueprint || service.delivery?.blueprint || {};
     const delivery = buildDeliveryConfig({
-      connectionId: req.body?.connectionId,
-      repository: req.body?.repository,
-      branch: req.body?.branch,
+      connectionId: body?.connectionId,
+      repository: body?.repository,
+      branch: body?.branch,
       blueprint,
-      deployMode: req.body?.deployMode,
-      workflowPath: req.body?.workflowPath
+      deployMode: body?.deployMode,
+      workflowPath: body?.workflowPath
     });
     const updatedService = dockerManager.saveService({
       ...service,
       delivery,
-      healthcheck: req.body?.healthcheck || service.healthcheck,
+      healthcheck: body?.healthcheck || service.healthcheck,
       nodeServiceMode: blueprint.nodeServiceMode || service.nodeServiceMode,
       nodeSiteConfig: blueprint.nodeSiteConfig || service.nodeSiteConfig,
       updatedAt: new Date().toISOString()
@@ -315,7 +320,9 @@ router.put('/github/services/:serviceId/delivery', (req, res, next) => {
   } catch (err) {
     next(err);
   }
-});
+};
+router.put('/github/services/:serviceId/delivery', handleSaveDelivery);
+router.post('/github/services/:serviceId/save-delivery', handleSaveDelivery);
 
 router.get('/github/services/:serviceId/workflow/content', async (req, res, next) => {
   try {
@@ -988,6 +995,26 @@ router.post('/services/:serviceId/ai-chat/reindex', async (req, res, next) => {
     const service = dockerManager.listServices().find(s => s.id === req.params.serviceId);
     if (!service) return res.status(404).json({ message: 'Service not found' });
 
+    // If service has a Git repo linked, index via Gateway (git clone)
+    const delivery = service.delivery || {};
+    if (delivery.repository && delivery.connectionId) {
+      const [org, repo] = delivery.repository.split('/');
+      if (org && repo) {
+        const ZEUS_GATEWAY_URL = process.env.ZEUS_GATEWAY_URL || 'http://localhost:3002';
+        const ZEUS_API_KEY = process.env.ZEUS_API_KEY || 'zeus_master_key_change_me';
+        const ZEUS_PANEL_ID = process.env.ZEUS_PANEL_ID || '';
+        const collection = `project_${repo.replace(/[^a-z0-9]/gi, '_').toLowerCase()}`;
+        const gitRes = await fetch(`${ZEUS_GATEWAY_URL}/api/index/git`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json', 'x-api-key': ZEUS_API_KEY },
+          body: JSON.stringify({ org, repo, branch: delivery.branch || 'main', collection, panelId: ZEUS_PANEL_ID || null })
+        });
+        const gitData = await gitRes.json();
+        return res.json({ success: true, method: 'git', collection, ...gitData });
+      }
+    }
+
+    // Fallback: index local project files
     const { indexProjectCode, invalidateIndex } = require('../services/project-ai-chat');
 
     const deployments = Array.isArray(service.deployments) ? service.deployments : [];
@@ -995,12 +1022,12 @@ router.post('/services/:serviceId/ai-chat/reindex', async (req, res, next) => {
     const projectDir = active?.projectDir || (service.volumes || [])[0]?.hostPath || null;
 
     if (!projectDir || !fs.existsSync(projectDir)) {
-      return res.status(400).json({ error: 'Projeto não encontrado no servidor' });
+      return res.status(400).json({ error: 'Projeto não encontrado no servidor e sem repositório Git vinculado' });
     }
 
     invalidateIndex(service.id);
     const result = await indexProjectCode(service.id, projectDir);
-    res.json({ success: true, ...result });
+    res.json({ success: true, method: 'local', ...result });
   } catch (err) { next(err); }
 });
 

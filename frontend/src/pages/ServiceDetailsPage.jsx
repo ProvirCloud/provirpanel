@@ -54,6 +54,7 @@ import Markdown from 'react-markdown'
 import remarkGfm from 'remark-gfm'
 import { createDockerTerminalSocket } from '../services/socket.js'
 import AiFixPanel, { DeployAiDiagnosis } from '../components/AiFixPanel.jsx'
+import { DeliveryCodeOrigin, DeliveryStack, DeliveryPipeline, DeliveryAI } from '../components/delivery'
 
 const TABS = [
   { id: 'overview', label: 'Overview', icon: Layers },
@@ -2702,405 +2703,103 @@ const ServiceDeliveryTab = ({ service, onReload }) => {
   }
 
   return (
-    <div className="grid gap-4 xl:grid-cols-[0.85fr_1.15fr]">
-      <Panel title="GitHub connection" icon={GitBranch}>
-        <div className="space-y-4">
-          {activeConnection ? (
-            <div className="rounded-lg border border-emerald-500/20 bg-emerald-500/10 p-3 text-sm text-emerald-100">
-              <div className="flex flex-wrap items-center justify-between gap-3">
-                <span>Conectado como {activeConnection.accountLogin}. Repositórios disponíveis: {repos.length}.</span>
-                <div className="flex flex-wrap gap-2">
-                  <button className={smallButtonClass} type="button" onClick={() => setEditingToken((value) => !value)}>
-                    {editingToken ? 'Cancelar alteração' : 'Alterar token'}
-                  </button>
-                  <button className="inline-flex items-center justify-center gap-2 rounded-lg border border-rose-500/30 bg-rose-500/10 px-3 py-2 text-xs font-medium text-rose-200 transition hover:bg-rose-500/20 disabled:cursor-not-allowed disabled:opacity-50" type="button" onClick={removeGithubConnection} disabled={loadingAction === 'remove-connection'}>
-                    {loadingAction === 'remove-connection' ? <Loader2 className="h-4 w-4 animate-spin" /> : <Trash2 className="h-4 w-4" />}
-                    Remover
-                  </button>
-                </div>
-              </div>
-            </div>
-          ) : null}
-          {!activeConnection || editingToken ? (
-            <div className="space-y-3">
-              <p className="text-sm text-slate-400">
-                {activeConnection ? 'Cole o novo token para substituir a conexão atual.' : <>
-                  Use um <a href="https://github.com/settings/personal-access-tokens/new" target="_blank" rel="noreferrer" className="text-blue-400 underline hover:text-blue-300">fine-grained token</a> com acesso de leitura aos repositórios. Para salvar workflow, inclua permissão de conteúdo escrita.
-                </>}
-              </p>
-              <input className={`${fieldClass} w-full`} type="password" value={token} onChange={(event) => setToken(event.target.value)} placeholder="github_pat_..." />
-              <button className={primaryButtonClass} type="button" onClick={connectGithub} disabled={!token || loadingAction === 'connect'}>
-                {loadingAction === 'connect' ? <Loader2 className="h-4 w-4 animate-spin" /> : <GitBranch className="h-4 w-4" />}
-                {activeConnection ? 'Atualizar token' : 'Conectar GitHub'}
-              </button>
-            </div>
-          ) : null}
-
-          <div className="grid gap-3">
-            <label className="block">
-              <span className="mb-2 block text-xs text-slate-500">Repositório</span>
-              <select className={`${fieldClass} w-full`} value={selectedRepo} onChange={(event) => setSelectedRepo(event.target.value)} disabled={!repos.length}>
-                <option value="">Selecione</option>
-                {repos.map((repo) => (
-                  <option key={repo.id} value={repo.fullName}>{repo.fullName}</option>
-                ))}
-              </select>
-            </label>
-            <label className="block">
-              <span className="mb-2 block text-xs text-slate-500">Branch</span>
-              <select className={`${fieldClass} w-full`} value={selectedBranch} onChange={(event) => setSelectedBranch(event.target.value)}>
-                {branches.length ? branches.map((branch) => (
-                  <option key={branch.name} value={branch.name}>{branch.name}</option>
-                )) : <option value={selectedBranch}>{selectedBranch}</option>}
-              </select>
-            </label>
-            <label className="block">
-              <span className="mb-2 block text-xs text-slate-500">Deploy</span>
-              <select className={`${fieldClass} w-full`} value={deployMode} onChange={(event) => setDeployMode(event.target.value)}>
-                <option value="manual">Manual</option>
-                <option value="push">Automático por push</option>
-                <option value="tag">Automático por tag v*</option>
-              </select>
-            </label>
-            <button className={smallButtonClass} type="button" onClick={analyzeRepo} disabled={!selectedRepo || !selectedBranch || loadingAction === 'analyze'}>
-              {loadingAction === 'analyze' ? <Loader2 className="h-4 w-4 animate-spin" /> : <Search className="h-4 w-4" />}
-              Analisar projeto
-            </button>
+    <div className="space-y-4">
+      {/* Bloco 1: Service Summary */}
+      <div className="rounded-xl border border-slate-800 bg-slate-900/60 p-4">
+        <div className="flex items-center justify-between">
+          <div>
+            <h2 className="text-base font-semibold text-white">{service.name}</h2>
+            <p className="text-xs text-slate-400">{service.delivery?.repository || 'Nenhum repositório vinculado'} {service.delivery?.branch ? `· ${service.delivery.branch}` : ''}</p>
           </div>
-          {message ? (
-            <div className={`rounded-xl border p-3 text-sm whitespace-pre-wrap font-sans ${
-              message.includes('✅') ? 'border-emerald-500/20 bg-emerald-500/5 text-emerald-100' :
-              message.includes('❌') ? 'border-rose-500/20 bg-rose-500/5 text-rose-100' :
-              message.includes('🤖') || message.includes('🔍') ? 'border-amber-500/20 bg-amber-500/5 text-amber-100' :
-              message.includes('⚠️') ? 'border-amber-500/20 bg-amber-500/5 text-amber-100' :
-              'border-slate-800 bg-slate-900 text-slate-300'
-            }`}>{message}</div>
-          ) : null}
+          {service.delivery?.blueprint && (
+            <span className="rounded-full border border-slate-700 bg-slate-800 px-2 py-1 text-[10px] text-slate-300">
+              {service.delivery.blueprint.label || service.delivery.blueprint.buildType}
+            </span>
+          )}
         </div>
-      </Panel>
+      </div>
 
-      <Panel title="Project blueprint" icon={Package}>
-        <div className="space-y-4">
-          {service.delivery ? (
-            <div className="rounded-lg border border-blue-500/20 bg-blue-500/10 p-3 text-sm text-blue-100">
-              Vinculado em {service.delivery.repository || '-'} / {service.delivery.branch || '-'} / {service.delivery.projectPath || '.'}
-            </div>
-          ) : null}
+      {/* Bloco 2: Code Origin */}
+      <DeliveryCodeOrigin
+        activeConnection={activeConnection}
+        editingToken={editingToken} setEditingToken={setEditingToken}
+        token={token} setToken={setToken}
+        repos={repos} branches={branches}
+        selectedRepo={selectedRepo} setSelectedRepo={setSelectedRepo}
+        selectedBranch={selectedBranch} setSelectedBranch={setSelectedBranch}
+        deployMode={deployMode} setDeployMode={setDeployMode}
+        loadingAction={loadingAction}
+        connectGithub={connectGithub}
+        removeGithubConnection={removeGithubConnection}
+        analyzeRepo={analyzeRepo}
+      />
 
-          <div className="grid gap-3 lg:grid-cols-2">
-            {(analysis?.blueprints || (service.delivery?.blueprint ? [service.delivery.blueprint] : [])).map((blueprint) => (
-              <button
-                key={blueprint.id}
-                type="button"
-                className={`rounded-xl border p-3 text-left transition ${
-                  selectedBlueprint?.id === blueprint.id
-                    ? 'border-blue-500/50 bg-blue-500/10'
-                    : 'border-slate-800 bg-slate-900/40 hover:border-slate-600'
-                }`}
-                onClick={() => setSelectedBlueprintId(blueprint.id)}
-              >
-                <div className="flex items-center justify-between gap-3">
-                  <p className="font-semibold text-white">{blueprint.label}</p>
-                  <span className="rounded-full border border-slate-700 px-2 py-1 text-xs text-slate-400">{blueprint.confidence}</span>
-                </div>
-                <p className="mt-2 text-sm text-slate-400">{blueprint.projectPath || '.'}</p>
-                <p className="mt-1 text-xs text-slate-500">{blueprint.buildType} / {blueprint.imageName}</p>
-              </button>
-            ))}
-          </div>
+      {/* Bloco 3: Stack */}
+      <DeliveryStack
+        service={service}
+        analysis={analysis}
+        selectedBlueprint={selectedBlueprint}
+        selectedBlueprintId={selectedBlueprintId}
+        setSelectedBlueprintId={setSelectedBlueprintId}
+        loadingAction={loadingAction}
+        saveDelivery={saveDelivery}
+        generateSmartBlueprint={generateSmartBlueprint}
+      />
 
-          {selectedBlueprint ? (
-            <div className="rounded-lg border border-slate-800 bg-slate-900/40 p-3 text-sm text-slate-300">
-              <div className="grid gap-2 sm:grid-cols-2">
-                <InfoRow label="Build" value={selectedBlueprint.buildCommand || selectedBlueprint.buildType} />
-                <InfoRow label="Artefato" value={selectedBlueprint.artifactPath || '.'} />
-                <InfoRow label="Porta" value={selectedBlueprint.containerPort} />
-                <InfoRow label="Healthcheck" value={selectedBlueprint.healthcheck?.target || '-'} />
-              </div>
-            </div>
-          ) : (
-            <p className="text-sm text-slate-500">Conecte o GitHub e analise um repositório para escolher o blueprint.</p>
-          )}
+      {/* Bloco 4: Pipeline */}
+      <DeliveryPipeline
+        service={service}
+        workflow={workflow} setWorkflow={setWorkflow}
+        workflowRun={workflowRun}
+        selectedBlueprint={selectedBlueprint}
+        selectedRepo={selectedRepo} selectedBranch={selectedBranch}
+        connectionId={connectionId}
+        loadingAction={loadingAction} setLoadingAction={setLoadingAction} setMessage={setMessage}
+        generateWorkflow={generateWorkflow}
+        dispatchWorkflow={dispatchWorkflow}
+        validateAndFix={validateAndFix}
+        githubDeliveryApi={githubDeliveryApi}
+        onReload={onReload}
+        WorkflowRunPanel={WorkflowRunPanel}
+      />
 
-          <div className="flex flex-wrap gap-2">
-            <button className={smallButtonClass} type="button" onClick={generateSmartBlueprint} disabled={loadingAction === 'smart-blueprint'}>
-              {loadingAction === 'smart-blueprint' ? <Loader2 className="h-4 w-4 animate-spin" /> : <Brain className="h-4 w-4" />}
-              Blueprint Inteligente
-            </button>
-            <button className={smallButtonClass} type="button" onClick={saveDelivery} disabled={!selectedBlueprint || loadingAction === 'save'}>
-              <Save className="h-4 w-4" />
-              Salvar vínculo
-            </button>
-            <button className={smallButtonClass} type="button" onClick={() => generateWorkflow(false)} disabled={!selectedBlueprint || loadingAction === 'workflow'}>
-              <Copy className="h-4 w-4" />
-              Gerar workflow
-            </button>
-            <button className={primaryButtonClass} type="button" onClick={() => generateWorkflow(true)} disabled={!selectedBlueprint || !selectedRepo || loadingAction === 'save-workflow'}>
-              {loadingAction === 'save-workflow' ? <Loader2 className="h-4 w-4 animate-spin" /> : <UploadCloud className="h-4 w-4" />}
-              Salvar workflow no GitHub
-            </button>
-            <button className={smallButtonClass} type="button" onClick={validateAndFix} disabled={loadingAction === 'validate'}>
-              {loadingAction === 'validate' ? <Loader2 className="h-4 w-4 animate-spin" /> : <ShieldCheck className="h-4 w-4" />}
-              Validar
-            </button>
-            <button className={smallButtonClass} type="button" onClick={runProjectAnalysis} disabled={loadingAction === 'project-analysis'}>
-              {loadingAction === 'project-analysis' ? <Loader2 className="h-4 w-4 animate-spin" /> : <Brain className="h-4 w-4" />}
-              Diagnóstico AI
-            </button>
-            <button className={smallButtonClass} type="button" onClick={updateAiContext} disabled={loadingAction === 'ai-context'}>
-              {loadingAction === 'ai-context' ? <Loader2 className="h-4 w-4 animate-spin" /> : <Sparkles className="h-4 w-4" />}
-              Indexar Projeto Local
-            </button>
-            <button className={smallButtonClass} type="button" onClick={() => setShowGitIndex(v => !v)}>
-              <GitBranch className="h-4 w-4" />
-              Indexar Repositório Git
-            </button>
-            <button className={smallButtonClass} type="button" onClick={dispatchWorkflow} disabled={!(service.delivery?.workflowPath || workflow?.path) || loadingAction === 'dispatch'}>
-              {loadingAction === 'dispatch' ? <Loader2 className="h-4 w-4 animate-spin" /> : <Play className="h-4 w-4" />}
-              Executar workflow
-            </button>
-          </div>
+      {/* Bloco 5: Zeus AI */}
+      <DeliveryAI
+        service={service}
+        loadingAction={loadingAction} setLoadingAction={setLoadingAction} setMessage={setMessage}
+        aiIndexed={aiIndexed} updateAiContext={updateAiContext}
+        showGitIndex={showGitIndex} setShowGitIndex={setShowGitIndex}
+        gitIndexForm={gitIndexForm} setGitIndexForm={setGitIndexForm}
+        gitIndexStatus={gitIndexStatus} gitIndexResult={gitIndexResult}
+        submitGitIndex={submitGitIndex}
+        projectAnalysis={projectAnalysis} setProjectAnalysis={setProjectAnalysis}
+        runProjectAnalysis={runProjectAnalysis}
+        workflow={workflow} setWorkflow={setWorkflow}
+        selectedRepo={selectedRepo} selectedBranch={selectedBranch}
+        connectionId={connectionId}
+        githubDeliveryApi={githubDeliveryApi}
+        onReload={onReload}
+      />
 
-          {workflow?.content ? (
-            <textarea className={`${fieldClass} h-80 w-full font-mono text-xs`} value={workflow.content} readOnly />
-          ) : null}
-
-          {workflowRun ? <WorkflowRunPanel run={workflowRun} message={message} /> : null}
-
-          {showGitIndex && (
-            <div className="space-y-3 rounded-xl border border-purple-500/20 bg-purple-500/5 p-4">
-              <h4 className="flex items-center gap-2 text-sm font-semibold text-purple-200">
-                <Sparkles className="h-4 w-4" /> Indexar Repositório no Zeus AI
-              </h4>
-              <div className="grid gap-2 sm:grid-cols-2">
-                <input className={`${fieldClass} w-full`} placeholder="Org (ex: Legacy-Empreendimentos)" value={gitIndexForm.org} onChange={e => setGitIndexForm(f => ({ ...f, org: e.target.value }))} />
-                <input className={`${fieldClass} w-full`} placeholder="Repo (ex: legacy-node-queue)" value={gitIndexForm.repo} onChange={e => setGitIndexForm(f => ({ ...f, repo: e.target.value }))} />
-                <input className={`${fieldClass} w-full`} placeholder="Branch (default: main)" value={gitIndexForm.branch} onChange={e => setGitIndexForm(f => ({ ...f, branch: e.target.value }))} />
-                <input className={`${fieldClass} w-full`} placeholder={`Collection (default: project_${(gitIndexForm.repo || service.name).replace(/[^a-z0-9]/gi, '_').toLowerCase()})`} value={gitIndexForm.collection} onChange={e => setGitIndexForm(f => ({ ...f, collection: e.target.value }))} />
-              </div>
-              <div className="flex items-center gap-3">
-                <button className={primaryButtonClass} type="button" onClick={submitGitIndex} disabled={gitIndexStatus === 'indexing' || !gitIndexForm.org || !gitIndexForm.repo}>
-                  {gitIndexStatus === 'indexing' ? <Loader2 className="h-4 w-4 animate-spin" /> : <Sparkles className="h-4 w-4" />}
-                  {gitIndexStatus === 'indexing' ? 'Indexando...' : 'Indexar'}
-                </button>
-                <button className={smallButtonClass} type="button" onClick={() => setShowGitIndex(false)}>Fechar</button>
-              </div>
-              {gitIndexStatus === 'indexing' && gitIndexResult?.progress && (
-                <p className="text-xs text-purple-300 animate-pulse">{gitIndexResult.progress}</p>
-              )}
-              {gitIndexStatus === 'done' && gitIndexResult && (
-                <p className="text-xs text-green-300">✅ Indexado: {gitIndexResult.files} arquivos, {gitIndexResult.chunks} chunks {gitIndexResult.note ? `(${gitIndexResult.note})` : ''}</p>
-              )}
-              {gitIndexStatus === 'error' && gitIndexResult && (
-                <p className="text-xs text-red-400">❌ {gitIndexResult.error}</p>
-              )}
-            </div>
-          )}
-
-          {aiIndexed && (
-            <div className="flex items-center gap-2 rounded-lg border border-purple-500/20 bg-purple-500/5 px-3 py-2">
-              <Sparkles className="h-4 w-4 text-purple-400" />
-              <span className="text-xs text-purple-200">AI aprendeu sobre este projeto — {aiIndexed.fileCount} arquivos, {aiIndexed.chunks} chunks indexados</span>
-            </div>
-          )}
-
-          {service.delivery?.workflowUpdatedAt || service.delivery?.lastWorkflowDispatchAt ? (
-            <div className="rounded-lg border border-slate-800 bg-slate-900/40 p-3 text-xs text-slate-400 space-y-1">
-              {service.delivery.workflowUpdatedAt ? <p>Workflow atualizado: {new Date(service.delivery.workflowUpdatedAt).toLocaleString()}</p> : null}
-              {service.delivery.lastWorkflowDispatchAt ? <p>Último dispatch: {new Date(service.delivery.lastWorkflowDispatchAt).toLocaleString()}</p> : null}
-              {service.delivery.workflowHtmlUrl ? <p><a href={service.delivery.workflowHtmlUrl} target="_blank" rel="noreferrer" className="text-blue-400 underline hover:text-blue-300">Ver workflow no GitHub</a></p> : null}
-            </div>
-          ) : null}
-
-          {service.delivery?.repository && (
-            <div className="rounded-lg border border-amber-500/20 bg-amber-500/5 p-3 space-y-2">
-              <p className="text-xs font-medium text-amber-200">GitHub Secrets</p>
-              <div className="space-y-2">
-                {['PROVIRPANEL_URL', 'PROVIRPANEL_TOKEN'].map(key => (
-                  <div key={key} className="flex items-center justify-between gap-2 rounded bg-slate-900 px-2 py-1.5">
-                    <span className="text-[11px] text-slate-300 font-mono">{key}</span>
-                    <button onClick={async () => {
-                      let val = ''
-                      if (key === 'PROVIRPANEL_URL') {
-                        val = window.location.origin
-                      } else {
-                        try {
-                          val = await githubDeliveryApi.getDeployToken()
-                        } catch { val = '' }
-                      }
-                      if (!val) { setMessage(`⚠️ ${key} está vazio.`); return }
-                      const ta = document.createElement('textarea')
-                      ta.value = val; ta.style.position = 'fixed'; ta.style.opacity = '0'
-                      document.body.appendChild(ta); ta.select(); document.execCommand('copy'); document.body.removeChild(ta)
-                      setMessage(`✅ Copiado: ${key}`)
-                    }} className="text-[10px] text-blue-400 hover:text-blue-300 shrink-0">copiar</button>
-                  </div>
-                ))}
-              </div>
-              <p className="text-[10px] text-slate-500">Repo → Settings → Secrets and variables → Actions</p>
-            </div>
-          )}
-
-          {projectAnalysis ? (
-            <div className="space-y-3 rounded-xl border border-indigo-500/20 bg-indigo-500/5 p-4">
-              <div className="flex items-center justify-between">
-                <h4 className="flex items-center gap-2 text-sm font-semibold text-indigo-200">
-                  <Brain className="h-4 w-4" />
-                  Diagnóstico do Projeto
-                </h4>
-                <button onClick={() => setProjectAnalysis(null)} className="text-slate-500 hover:text-slate-300"><X className="h-4 w-4" /></button>
-              </div>
-              <p className="text-xs text-slate-300">{projectAnalysis.summary}</p>
-              <div className="flex items-center gap-2">
-                <span className={`rounded-full px-2 py-0.5 text-[10px] font-bold ${projectAnalysis.canRun ? 'bg-green-500/20 text-green-300' : 'bg-red-500/20 text-red-300'}`}>
-                  {projectAnalysis.canRun ? '✅ Pronto para rodar' : '❌ Precisa de ações'}
-                </span>
-                <span className="text-[10px] text-slate-500">{projectAnalysis.projectType}</span>
-              </div>
-
-              {projectAnalysis.actions?.length ? (
-                <div className="space-y-2">
-                  <p className="text-[11px] font-semibold text-blue-300">Ações necessárias ({projectAnalysis.actions.length}):</p>
-                  {projectAnalysis.actions.sort((a, b) => (a.priority || 99) - (b.priority || 99)).map((action, i) => (
-                    <div key={i} className="rounded-lg border border-slate-700/50 bg-slate-800/50 p-2.5 space-y-1.5">
-                      <div className="flex items-center gap-2">
-                        <span className={`h-5 w-5 flex items-center justify-center rounded text-[10px] font-bold ${
-                          action.type === 'create_service' ? 'bg-blue-500/20 text-blue-300' :
-                          action.type === 'update_env' ? 'bg-amber-500/20 text-amber-300' :
-                          action.type === 'update_command' ? 'bg-purple-500/20 text-purple-300' :
-                          action.type === 'fix_config' ? 'bg-cyan-500/20 text-cyan-300' :
-                          'bg-slate-600/30 text-slate-400'
-                        }`}>{action.priority || i + 1}</span>
-                        <span className="text-xs font-medium text-slate-200">{action.title}</span>
-                        <span className="rounded bg-slate-700 px-1.5 py-0.5 text-[10px] text-slate-400">{action.type.replace('_', ' ')}</span>
-                        {action.autoApply && <span className="text-[10px] text-green-400">⚡ auto</span>}
-                      </div>
-                      <p className="text-[11px] text-slate-400 pl-7">{action.description}</p>
-                      {action.config?.image && (
-                        <p className="text-[10px] text-slate-500 pl-7">Imagem: <code className="text-blue-300">{action.config.image}</code>{action.config.containerPort ? ` · Porta: ${action.config.containerPort}` : ''}</p>
-                      )}
-                      {action.config?.key && (
-                        <p className="text-[10px] text-slate-500 pl-7"><code className="text-amber-200">{action.config.key}</code> = <code className="text-green-300">{action.config.value}</code></p>
-                      )}
-                      {action.config?.command && (
-                        <p className="text-[10px] text-slate-500 pl-7 font-mono">{action.config.command}</p>
-                      )}
-                    </div>
-                  ))}
-                  <button
-                    className="w-full rounded-lg border border-indigo-500/30 bg-indigo-500/10 px-3 py-2 text-xs font-medium text-indigo-200 transition hover:bg-indigo-500/20"
-                    onClick={async () => {
-                      setLoadingAction('apply-actions')
-                      try {
-                        const autoActions = projectAnalysis.actions.filter(a => a.autoApply)
-                        const workflowActions = autoActions.filter(a => a.type === 'update_workflow' || a.type === 'fix_workflow')
-                        const otherActions = autoActions.filter(a => a.type !== 'update_workflow' && a.type !== 'fix_workflow')
-                        for (const action of otherActions) {
-                          if (action.type === 'update_env' && action.config?.key) {
-                            await githubDeliveryApi.aiApplyFixes(service.id, [{ type: 'env', field: action.config.key, newValue: action.config.value, reason: action.title }])
-                          } else if (action.type === 'update_command' && action.config?.command) {
-                            await githubDeliveryApi.aiApplyFixes(service.id, [{ type: 'command', newValue: action.config.command, reason: action.title }])
-                          } else if (action.type === 'update_healthcheck' && action.config) {
-                            await githubDeliveryApi.aiApplyFixes(service.id, [{ type: 'healthcheck', newValue: JSON.stringify({ enabled: true, target: action.config.target || '/', intervalSeconds: action.config.intervalSeconds || 10, timeoutSeconds: 5, retries: 6, startPeriodSeconds: 5 }), reason: action.title }])
-                          }
-                        }
-                        if (otherActions.length) await onReload()
-                        if (workflowActions.length) {
-                          const wfAction = workflowActions[0]
-                          if (wfAction.type === 'fix_workflow' && wfAction.config?.workflowContent) {
-                            setWorkflow({ content: wfAction.config.workflowContent })
-                            setMessage(`✅ ${otherActions.length} ação(ões) aplicada(s). Workflow gerado abaixo — revise e salve no GitHub.`)
-                          } else if (wfAction.type === 'update_workflow' && wfAction.config) {
-                            await githubDeliveryApi.aiApplyFixes(service.id, [{ type: 'update_workflow', config: wfAction.config, reason: wfAction.title }])
-                            await onReload()
-                            const result = await githubDeliveryApi.generateWorkflow(service.id, { connectionId, repository: selectedRepo || service.delivery?.repository, branch: selectedBranch || service.delivery?.branch })
-                            setWorkflow(result.workflow)
-                            setMessage(`✅ ${otherActions.length} ação(ões) aplicada(s). Workflow gerado abaixo — revise e salve no GitHub.`)
-                          }
-                        } else {
-                          setMessage(`✅ ${otherActions.length} ação(ões) aplicada(s).`)
-                        }
-                      } catch (err) {
-                        setMessage(err.message || 'Erro ao aplicar ações')
-                      } finally {
-                        setLoadingAction('')
-                      }
-                    }}
-                    disabled={loadingAction === 'apply-actions' || !projectAnalysis.actions.some(a => a.autoApply)}
-                  >
-                    {loadingAction === 'apply-actions' ? 'Aplicando...' : `⚡ Aplicar ${projectAnalysis.actions.filter(a => a.autoApply).length} ação(ões) automática(s)`}
-                  </button>
-                </div>
-              ) : null}
-
-              <form className="flex gap-2" onSubmit={async (e) => {
-                e.preventDefault()
-                const input = e.target.elements.aiInstruction
-                const text = input.value.trim()
-                if (!text) return
-                setLoadingAction('project-analysis')
-                setProjectAnalysis(null)
-                try {
-                  const { analysis } = await githubDeliveryApi.aiProjectAnalysis(service.id, text)
-                  setProjectAnalysis(analysis)
-                } catch (err) {
-                  setMessage(err.response?.data?.message || err.message || 'Falha na análise')
-                } finally {
-                  setLoadingAction('')
-                }
-              }}>
-                <input name="aiInstruction" className="flex-1 rounded-lg border border-slate-700 bg-slate-900 px-3 py-1.5 text-xs text-slate-200 placeholder-slate-500" placeholder="Pedir modificação à AI..." />
-                <button type="submit" disabled={loadingAction === 'project-analysis'} className="rounded-lg border border-indigo-500/30 bg-indigo-500/10 px-3 py-1.5 text-xs text-indigo-200 hover:bg-indigo-500/20 disabled:opacity-50">
-                  {loadingAction === 'project-analysis' ? <Loader2 className="h-3 w-3 animate-spin" /> : <Send className="h-3 w-3" />}
-                </button>
-              </form>
-
-              {workflow?.content && (
-                <div className="space-y-1.5">
-                  <p className="text-[11px] font-semibold text-green-300">Workflow:</p>
-                  <textarea
-                    className="w-full rounded-lg bg-slate-950 border border-slate-700 p-3 text-[11px] text-slate-300 font-mono resize-y min-h-[200px] max-h-[500px]"
-                    rows={16}
-                    value={workflow.content}
-                    onChange={(e) => setWorkflow({ ...workflow, content: e.target.value })}
-                  />
-                  <button
-                    className="rounded-lg border border-green-500/30 bg-green-500/10 px-3 py-1.5 text-xs text-green-200 hover:bg-green-500/20 disabled:opacity-50"
-                    disabled={loadingAction === 'save-workflow-edit'}
-                    onClick={async () => {
-                      setLoadingAction('save-workflow-edit')
-                      try {
-                        const delivery = service.delivery || {}
-                        const [owner, repo] = (selectedRepo || delivery.repository || '').split('/')
-                        if (!owner || !repo) { setMessage('Repositório não configurado'); return }
-                        const GitHubDeliveryManager = githubDeliveryApi
-                        await GitHubDeliveryManager.saveWorkflowContent(service.id, {
-                          content: workflow.content,
-                          connectionId: connectionId || delivery.connectionId,
-                          repository: selectedRepo || delivery.repository,
-                          branch: selectedBranch || delivery.branch || 'main'
-                        })
-                        setMessage('✅ Workflow salvo no GitHub.')
-                      } catch (err) {
-                        setMessage(err.response?.data?.message || err.message || 'Falha ao salvar')
-                      } finally {
-                        setLoadingAction('')
-                      }
-                    }}
-                  >
-                    {loadingAction === 'save-workflow-edit' ? 'Salvando...' : '💾 Salvar no GitHub'}
-                  </button>
-                </div>
-              )}
-            </div>
-          ) : null}
-        </div>
-      </Panel>
-
+      {/* Bloco 6: Deploy History */}
       {(service.deployments || []).length > 0 ? (
-        <Panel title="Histórico de publicações" icon={History} className="xl:col-span-2">
+        <div className="rounded-xl border border-slate-800 bg-slate-900/60 p-4">
+          <h3 className="flex items-center gap-2 text-sm font-semibold text-slate-200 mb-3">
+            <History className="h-4 w-4 text-slate-400" /> Histórico de Publicações
+          </h3>
           <DeliveryDeployHistory service={service} onReload={onReload} />
-        </Panel>
+        </div>
+      ) : null}
+
+      {/* Message toast */}
+      {message ? (
+        <div className={`rounded-xl border p-3 text-sm whitespace-pre-wrap font-sans ${
+          message.includes('✅') ? 'border-emerald-500/20 bg-emerald-500/5 text-emerald-100' :
+          message.includes('❌') ? 'border-rose-500/20 bg-rose-500/5 text-rose-100' :
+          message.includes('🤖') || message.includes('🔍') ? 'border-amber-500/20 bg-amber-500/5 text-amber-100' :
+          message.includes('⚠️') ? 'border-amber-500/20 bg-amber-500/5 text-amber-100' :
+          'border-slate-800 bg-slate-900 text-slate-300'
+        }`}>{message}</div>
       ) : null}
     </div>
   )

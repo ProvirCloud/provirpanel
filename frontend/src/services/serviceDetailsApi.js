@@ -432,7 +432,8 @@ export const githubDeliveryApi = {
   },
 
   async saveServiceDelivery(serviceId, payload) {
-    const response = await api.put(`/ci-cd/github/services/${serviceId}/delivery`, payload)
+    const encoded = btoa(unescape(encodeURIComponent(JSON.stringify(payload))))
+    const response = await api.post(`/ci-cd/github/services/${serviceId}/save-delivery`, { _encoded: encoded })
     return response.data
   },
 
