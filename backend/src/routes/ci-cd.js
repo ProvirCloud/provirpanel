@@ -408,7 +408,6 @@ router.post('/github/services/:serviceId/workflow', async (req, res, next) => {
     const content = githubDelivery.generateWorkflow({
       serviceId: service.id,
       serviceName: service.name,
-      service,
       blueprint: mergedBlueprint,
       provirPanelUrl: req.body?.provirPanelUrl,
       deployMode: req.body?.deployMode || delivery.deployMode || 'manual'
@@ -589,7 +588,6 @@ router.post('/github/services/:serviceId/smart-blueprint', async (req, res, next
         const content = githubDelivery.generateWorkflow({
           serviceId: service.id,
           serviceName: service.name,
-          service,
           blueprint: { ...merged, branch: delivery.branch || merged.branch || 'main' },
           deployMode: delivery.deployMode || 'push'
         });
