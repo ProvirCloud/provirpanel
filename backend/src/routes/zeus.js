@@ -494,4 +494,25 @@ router.post('/hierarchy/context-push', async (req, res, next) => {
   } catch (err) { next(err); }
 });
 
+// POST /zeus/openapi/index — indexar spec OpenAPI/Swagger
+router.post('/openapi/index', async (req, res, next) => {
+  try {
+    const { specUrl, specObject, collection, name } = req.body;
+    if (!specUrl && !specObject) return res.status(400).json({ error: 'specUrl or specObject required' });
+    if (!collection) return res.status(400).json({ error: 'collection required' });
+    const data = await zeusRequest('/api/openapi/index', {
+      specUrl, specObject, collection, name,
+      panelId: ZEUS_PANEL_ID || undefined
+    });
+    res.status(202).json(data);
+  } catch (err) { next(err); }
+});
+
+// GET /zeus/openapi/status/:jobId
+router.get('/openapi/status/:jobId', async (req, res, next) => {
+  try {
+    res.json(await zeusGet(`/api/openapi/status/${req.params.jobId}`));
+  } catch (err) { next(err); }
+});
+
 module.exports = router;
