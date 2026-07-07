@@ -2106,7 +2106,31 @@ const DeliveryDeployHistory = ({ service, onReload }) => {
   const [openLogId, setOpenLogId] = useState('')
   const [page, setPage] = useState(0)
   const [cleaning, setCleaning] = useState(false)
+  const [retrying, setRetrying] = useState('')
   const confirm = useConfirm()
+
+  const handleRetry = async (deployment) => {
+    setRetrying(deployment.id)
+    try {
+      const result = await servicesApi.rollback(service.id, deployment.id)
+      if (result?.jobId) {
+        // Poll until done
+        const poll = async () => {
+          for (let i = 0; i < 120; i++) {
+            await new Promise(r => setTimeout(r, 3000))
+            const job = await servicesApi.getDeployJob(service.id, result.jobId)
+            if (job.status === 'completed' || job.status === 'failed') break
+          }
+        }
+        await poll()
+      }
+      if (onReload) await onReload()
+    } catch (err) {
+      console.error('Retry failed:', err)
+    } finally {
+      setRetrying('')
+    }
+  }
   const perPage = 5
   const totalPages = Math.ceil(deployments.length / perPage)
   const visible = deployments.slice(page * perPage, (page + 1) * perPage)
@@ -2198,13 +2222,26 @@ const DeliveryDeployHistory = ({ service, onReload }) => {
               <Terminal className={`h-3.5 w-3.5 transition ${logOpen ? 'text-blue-400' : 'text-slate-600'}`} />
             </button>
             {!active && (
-              <button
-                type="button"
-                className="absolute top-2.5 right-2.5 rounded-md p-1 text-slate-600 hover:text-rose-400 hover:bg-rose-500/10"
-                onClick={(e) => { e.stopPropagation(); handleRemoveSingle(deployment) }}
-              >
-                <Trash2 className="h-3 w-3" />
-              </button>
+              <div className="absolute top-2.5 right-2.5 flex gap-1">
+                {failed && (
+                  <button
+                    type="button"
+                    className="inline-flex items-center gap-1 rounded-md border border-amber-500/30 bg-amber-500/10 px-2 py-1 text-[11px] font-medium text-amber-200 hover:bg-amber-500/20 disabled:opacity-50"
+                    onClick={(e) => { e.stopPropagation(); handleRetry(deployment) }}
+                    disabled={!!retrying}
+                  >
+                    <RefreshCcw className={`h-3 w-3 ${retrying === deployment.id ? 'animate-spin' : ''}`} />
+                    Retentar
+                  </button>
+                )}
+                <button
+                  type="button"
+                  className="rounded-md p-1 text-slate-600 hover:text-rose-400 hover:bg-rose-500/10"
+                  onClick={(e) => { e.stopPropagation(); handleRemoveSingle(deployment) }}
+                >
+                  <Trash2 className="h-3 w-3" />
+                </button>
+              </div>
             )}
 
             {logOpen && (
