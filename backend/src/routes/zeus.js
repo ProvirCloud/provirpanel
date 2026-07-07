@@ -372,6 +372,27 @@ router.get('/index-git/repos', async (req, res, next) => {
   }
 });
 
+// GET /zeus/index-git/status/:jobId — poll job status
+router.get('/index-git/status/:jobId(*)', async (req, res, next) => {
+  try {
+    const data = await zeusGet(`/api/index/git/status/${encodeURIComponent(req.params.jobId)}`);
+    res.json(data);
+  } catch (err) {
+    next(err);
+  }
+});
+
+// GET /zeus/hierarchy/contexts/:wsId/:projId/:type — list context files
+router.get('/hierarchy/contexts/:wsId/:projId/:type', async (req, res, next) => {
+  try {
+    const { wsId, projId, type } = req.params;
+    const data = await zeusGet(`/api/hierarchy/workspaces/${wsId}/projects/${projId}/contexts/${type}`);
+    res.json(data);
+  } catch (err) {
+    next(err);
+  }
+});
+
 // --- Hierarchy Management (proxy to Gateway) ---
 
 router.get('/hierarchy/workspaces', async (_req, res, next) => {

@@ -2659,36 +2659,42 @@ const ServiceDeliveryTab = ({ service, onReload }) => {
         org, repo, branch: branch || 'main', collection: col,
         metadata: { service_name: service.name }
       })
-      // Listen for socket events
-      const { io } = await import('socket.io-client')
-      const socket = io('https://zeusai.zeusengine.com.br', { transports: ['websocket'] })
+      // Poll job status
       const jobId = data.jobId
-      socket.on('git:index:progress', (ev) => {
-        if (ev.jobId === jobId) setGitIndexResult({ progress: ev.message || ev.progress })
-      })
-      socket.on('git:index:done', (ev) => {
-        if (ev.jobId === jobId) {
+      if (!jobId) {
+        setGitIndexStatus('done')
+        setGitIndexResult({ files: data.files || '?', chunks: data.chunks || '?' })
+        return
+      }
+      const poll = setInterval(async () => {
+        try {
+          const status = await zeusAiApi.indexGitStatus(jobId)
+          if (status.status === 'running') {
+            setGitIndexResult({ progress: status.message || `${status.phase || 'indexing'}...` })
+          } else if (status.status === 'completed') {
+            clearInterval(poll)
+            setGitIndexStatus('done')
+            setGitIndexResult({ files: status.files, chunks: status.chunks })
+            setAiIndexed({ fileCount: status.files, chunks: status.chunks })
+          } else if (status.status === 'failed') {
+            clearInterval(poll)
+            setGitIndexStatus('error')
+            setGitIndexResult({ error: status.error })
+          }
+        } catch {
+          clearInterval(poll)
           setGitIndexStatus('done')
-          setGitIndexResult({ files: ev.files, chunks: ev.chunks })
-          setAiIndexed({ fileCount: ev.files, chunks: ev.chunks })
-          socket.disconnect()
+          setGitIndexResult({ note: 'Indexação iniciada (status indisponível)' })
         }
-      })
-      socket.on('git:index:error', (ev) => {
-        if (ev.jobId === jobId) {
-          setGitIndexStatus('error')
-          setGitIndexResult({ error: ev.error || ev.message })
-          socket.disconnect()
-        }
-      })
+      }, 3000)
       // Timeout fallback
       setTimeout(() => {
+        clearInterval(poll)
         if (gitIndexStatus === 'indexing') {
-          socket.disconnect()
           setGitIndexStatus('done')
           setGitIndexResult({ files: '?', chunks: '?', note: 'Indexação iniciada (timeout no acompanhamento)' })
         }
-      }, 120000)
+      }, 180000)
     } catch (err) {
       setGitIndexStatus('error')
       setGitIndexResult({ error: err.response?.data?.error || err.message })

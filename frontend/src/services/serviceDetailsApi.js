@@ -525,6 +525,10 @@ export const zeusAiApi = {
     const response = await api.post('/zeus/index-git', { org, repo, branch, collection, metadata })
     return response.data
   },
+  async indexGitStatus(jobId) {
+    const response = await api.get(`/zeus/index-git/status/${encodeURIComponent(jobId)}`)
+    return response.data
+  },
   async listRepos(org) {
     const response = await api.get(`/zeus/index-git/repos?org=${encodeURIComponent(org)}`)
     return response.data
