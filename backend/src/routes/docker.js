@@ -5788,21 +5788,76 @@ router.post('/services/:id/rollback', async (req, res, next) => {
 
     const healthcheck = normalizeHealthcheckConfig(req.body?.healthcheck || service.healthcheck);
     const autoRollback = parseBooleanOption(req.body?.autoRollback, service.autoRollback ?? true);
-    const updatedService = await promoteProjectDeployment({
-      service,
-      deployment: {
-        ...deployment,
-        status: 'pending',
-        rollbackFrom: service.activeDeploymentId,
-        rollbackAt: new Date().toISOString()
-      },
-      envVars: deployment.envVars || service.envVars || [],
-      nodeServiceMode: deployment.nodeServiceMode || service.nodeServiceMode || DEFAULT_NODE_SITE_MODE,
-      nodeSiteConfig: deployment.nodeSiteConfig || service.nodeSiteConfig || null,
-      healthcheck,
-      autoRollback
+    const progress = [];
+    const progressSessionId = String(req.body?.progressSessionId || '').trim();
+    const jobId = crypto.randomUUID();
+    const job = {
+      id: jobId,
+      serviceId: req.params.id,
+      status: 'queued',
+      phase: 'prepare',
+      progressPercent: 10,
+      message: `Republicando versão ${deployment.versionLabel || deployment.id}...`,
+      progress,
+      progressSessionId,
+      createdAt: new Date().toISOString()
+    };
+    projectDeployJobs.set(jobId, job);
+
+    const updateJob = (patch = {}) => {
+      const current = projectDeployJobs.get(jobId) || job;
+      const next = { ...current, ...patch, progress };
+      projectDeployJobs.set(jobId, next);
+    };
+
+    setImmediate(async () => {
+      updateJob({ status: 'processing', phase: 'candidate', progressPercent: 30, startedAt: new Date().toISOString() });
+      try {
+        const updatedService = await promoteProjectDeployment({
+          service,
+          deployment: {
+            ...deployment,
+            status: 'pending',
+            rollbackFrom: service.activeDeploymentId,
+            rollbackAt: new Date().toISOString()
+          },
+          envVars: deployment.envVars || service.envVars || [],
+          nodeServiceMode: deployment.nodeServiceMode || service.nodeServiceMode || DEFAULT_NODE_SITE_MODE,
+          nodeSiteConfig: deployment.nodeSiteConfig || service.nodeSiteConfig || null,
+          healthcheck,
+          autoRollback,
+          pushProgress: (message, phase) => {
+            updateJob({ phase: phase || 'process', message, updatedAt: new Date().toISOString() });
+            pushDeploymentProgress(progress, progressSessionId, message, phase, { jobId });
+          }
+        });
+        updateJob({
+          status: 'success',
+          phase: 'done',
+          progressPercent: 100,
+          message: `Versão ${deployment.versionLabel || deployment.id} publicada com sucesso.`,
+          service: sanitizeServiceForClient(updatedService),
+          finishedAt: new Date().toISOString()
+        });
+      } catch (err) {
+        updateJob({
+          status: 'error',
+          phase: 'error',
+          message: err.message || 'Falha ao republicar versão',
+          error: err.message,
+          finishedAt: new Date().toISOString()
+        });
+        appendServiceLog('error', `Erro ao executar rollback ${req.params.id}: ${err.message}`);
+      }
     });
-    res.json({ service: sanitizeServiceForClient(updatedService) });
+
+    res.status(202).json({
+      accepted: true,
+      message: job.message,
+      jobId,
+      job: { id: jobId, status: 'queued', phase: 'prepare', message: job.message },
+      progress
+    });
   } catch (err) {
     appendServiceLog('error', `Erro ao executar rollback ${req.params.id}: ${err.message}`);
     next(err);

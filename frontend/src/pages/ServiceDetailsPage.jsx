@@ -955,9 +955,16 @@ const DeployHistory = ({ service, busyVersionId, onRollback, onDownload, onRemov
                 <button className={smallButtonClass} type="button" onClick={() => onDownload(deployment)} disabled={busy}>
                   <Download className="h-3.5 w-3.5" />
                 </button>
-                <button className={smallButtonClass} type="button" onClick={() => onRollback(deployment)} disabled={active || busy}>
-                  <RotateCcw className="h-3.5 w-3.5" />
-                </button>
+                {failed ? (
+                  <button className="inline-flex items-center gap-1 rounded-md border border-amber-500/30 bg-amber-500/10 px-2 py-1 text-[11px] font-medium text-amber-200 hover:bg-amber-500/20 disabled:opacity-50" type="button" onClick={() => onRollback(deployment)} disabled={busy}>
+                    <RefreshCcw className="h-3.5 w-3.5" />
+                    Retentar
+                  </button>
+                ) : (
+                  <button className={smallButtonClass} type="button" onClick={() => onRollback(deployment)} disabled={active || busy} title="Republicar esta versão">
+                    <RotateCcw className="h-3.5 w-3.5" />
+                  </button>
+                )}
                 <button className="inline-flex items-center rounded-md border border-rose-500/30 bg-rose-500/10 px-2 py-1 text-[11px] text-rose-200 hover:bg-rose-500/20 disabled:opacity-50" type="button" onClick={() => onRemove(deployment)} disabled={active || busy}>
                   <Trash2 className="h-3.5 w-3.5" />
                 </button>
@@ -1240,8 +1247,15 @@ const ServiceDeploysTab = ({
   const handleRollback = async (deployment) => {
     setBusyVersionId(deployment.id)
     try {
-      await servicesApi.rollback(service.id, deployment.id)
-      await onReload()
+      const result = await servicesApi.rollback(service.id, deployment.id)
+      const jobId = result?.jobId
+      if (jobId) {
+        await monitorJob(jobId, result?.progress?.[0]?.progressSessionId || '')
+      } else {
+        await onReload()
+      }
+    } catch (err) {
+      setDeployError(err.response?.data?.message || err.message || 'Falha ao republicar versão')
     } finally {
       setBusyVersionId('')
     }
