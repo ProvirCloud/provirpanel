@@ -105,6 +105,19 @@ const collectContext = async () => {
     }
   } catch {}
 
+  // Collect database connections (names only, no passwords)
+  try {
+    const port = process.env.PORT || 3000;
+    const res = await fetch(`http://localhost:${port}/api/database-connections`, {
+      signal: AbortSignal.timeout(5000)
+    });
+    if (res.ok) {
+      const data = await res.json();
+      const conns = Array.isArray(data) ? data : (data.connections || []);
+      context.databases = conns.map(c => ({ id: c.id, name: c.name, type: c.type, host: c.host, database: c.database }));
+    }
+  } catch {}
+
   // Collect system metrics
   try {
     const os = require('os');

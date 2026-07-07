@@ -454,4 +454,23 @@ router.post('/hierarchy/join', async (req, res, next) => {
   } catch (err) { next(err); }
 });
 
+// POST /zeus/hierarchy/context-push — painel envia contexto estruturado para as pastas da hierarquia
+router.post('/hierarchy/context-push', async (req, res, next) => {
+  try {
+    const { type, filename, content } = req.body;
+    if (!type || !filename || content === undefined) {
+      return res.status(400).json({ error: 'type, filename, content required' });
+    }
+    const PANEL_API_KEY = process.env.ZEUS_PANEL_API_KEY || '';
+    const data = await zeusRequest('/api/hierarchy/context-push', {
+      panelId: ZEUS_PANEL_ID,
+      apiKey: PANEL_API_KEY,
+      type,
+      filename,
+      content
+    });
+    res.json(data);
+  } catch (err) { next(err); }
+});
+
 module.exports = router;
