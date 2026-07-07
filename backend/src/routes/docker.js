@@ -3967,10 +3967,12 @@ router.put('/services/:id', async (req, res, next) => {
       String(service.image || '').startsWith('node');
     const resolvedHealthcheck = normalizeHealthcheckConfig(requestedHealthcheck || service.healthcheck);
     const resolvedAutoRollback = parseBooleanOption(requestedAutoRollback, service.autoRollback ?? true);
-    const savedEnvVars = mergeEnvVars(
-      Array.isArray(envVars) ? envVars : [],
-      pendingConfig?.envVars || service.envVars || []
-    );
+    const savedEnvVars = Object.prototype.hasOwnProperty.call(configSource || {}, 'envVars')
+      ? mergeEnvVars(
+          Array.isArray(envVars) ? envVars : [],
+          pendingConfig?.envVars || service.envVars || []
+        )
+      : pendingConfig?.envVars || service.envVars || [];
     const savedPort = Number(hostPort) || service.hostPort;
     const savedContainerPort = Number(requestedContainerPort) || service.containerPort;
     const savedVolumes = Array.isArray(requestedVolumes) && requestedVolumes.length
