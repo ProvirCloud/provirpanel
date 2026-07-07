@@ -55,6 +55,7 @@ import remarkGfm from 'remark-gfm'
 import { createDockerTerminalSocket } from '../services/socket.js'
 import AiFixPanel, { DeployAiDiagnosis } from '../components/AiFixPanel.jsx'
 import { DeliveryCodeOrigin, DeliveryStack, DeliveryPipeline, DeliveryAI } from '../components/delivery'
+import { SettingsServiceInfo, SettingsApplication, SettingsNetwork, SettingsStorage, SettingsDeploy, SettingsHealthcheck, SettingsAdvanced, SettingsDangerZone } from '../components/settings'
 
 const TABS = [
   { id: 'overview', label: 'Overview', icon: Layers },
@@ -2823,9 +2824,7 @@ const ServiceDeliveryTab = ({ service, onReload }) => {
 
 const ServiceSettingsTab = ({ service, settingsState, setSettingsState, onReload }) => {
   const [saving, setSaving] = useState('')
-  const [deleteText, setDeleteText] = useState('')
   const [message, setMessage] = useState('')
-  const navigate = useNavigate()
 
   const saveSettings = async (apply) => {
     setSaving(apply ? 'apply' : 'save')
@@ -2844,145 +2843,59 @@ const ServiceSettingsTab = ({ service, settingsState, setSettingsState, onReload
         nodeSiteConfig: settingsState.nodeSiteConfig,
         apply
       })
-      setMessage(apply ? 'Configuração aplicada.' : 'Configuração salva como pendente.')
-      if (apply) {
-        await onReload()
-      }
+      setMessage(apply ? '✅ Configuração aplicada com sucesso.' : '✅ Configuração salva. Será aplicada no próximo deploy.')
+      if (apply) await onReload()
     } catch (err) {
-      setMessage(err.response?.data?.message || err.message || 'Falha ao salvar configuração')
+      setMessage(`❌ ${err.response?.data?.message || err.message || 'Falha ao salvar configuração'}`)
     } finally {
       setSaving('')
     }
   }
 
-  const removeService = async () => {
-    if (deleteText !== service.name) return
-    await servicesApi.remove(service.id, { removeFolder: false })
-    navigate('/docker')
-  }
-
-  const setHealthcheck = (patch) => {
-    setSettingsState((current) => ({
-      ...current,
-      healthcheck: {
-        ...(current.healthcheck || {}),
-        ...patch
-      }
-    }))
-  }
-
   return (
-    <div className="grid gap-4 xl:grid-cols-[1fr_0.8fr]">
-      <Panel
-        title="Configuração"
-        icon={Settings}
-        actions={
-          <div className="flex flex-wrap gap-2">
-            <button className={smallButtonClass} type="button" onClick={() => saveSettings(false)} disabled={Boolean(saving)}>
-              <Save className="h-4 w-4" />
-              Salvar
-            </button>
-            <button className={primaryButtonClass} type="button" onClick={() => saveSettings(true)} disabled={Boolean(saving)}>
-              {saving === 'apply' ? <Loader2 className="h-4 w-4 animate-spin" /> : <Zap className="h-4 w-4" />}
-              Aplicar
-            </button>
-          </div>
-        }
-      >
-        <div className="grid gap-3 md:grid-cols-2">
-          <label className="block">
-            <span className="mb-2 block text-xs text-slate-500">Nome</span>
-            <input className={`${fieldClass} opacity-70`} value={service.name || ''} readOnly />
-          </label>
-          <label className="block">
-            <span className="mb-2 block text-xs text-slate-500">Imagem</span>
-            <input className={`${fieldClass} opacity-70`} value={service.image || ''} readOnly />
-          </label>
-          <label className="block">
-            <span className="mb-2 block text-xs text-slate-500">Porta host</span>
-            <input className={fieldClass} value={settingsState.hostPort} onChange={(event) => setSettingsState((current) => ({ ...current, hostPort: event.target.value }))} />
-          </label>
-          <label className="block">
-            <span className="mb-2 block text-xs text-slate-500">Porta do container (expose)</span>
-            <input className={fieldClass} value={settingsState.containerPort} onChange={(event) => setSettingsState((current) => ({ ...current, containerPort: event.target.value }))} placeholder="ex: 8080" />
-          </label>
-          <label className="block">
-            <span className="mb-2 block text-xs text-slate-500">Network</span>
-            <input className={fieldClass} value={settingsState.networkName} onChange={(event) => setSettingsState((current) => ({ ...current, networkName: event.target.value }))} />
-          </label>
-          <label className="block md:col-span-2">
-            <span className="mb-2 block text-xs text-slate-500">Command</span>
-            <input className={fieldClass} value={settingsState.command} onChange={(event) => setSettingsState((current) => ({ ...current, command: event.target.value }))} placeholder="opcional" />
-          </label>
-          <label className="inline-flex items-center gap-2 rounded-lg border border-slate-800 bg-slate-900/40 px-3 py-2 text-sm text-slate-300">
-            <input type="checkbox" checked={settingsState.bindLocalOnly} onChange={(event) => setSettingsState((current) => ({ ...current, bindLocalOnly: event.target.checked }))} />
-            Bind local only
-          </label>
-          <label className="inline-flex items-center gap-2 rounded-lg border border-slate-800 bg-slate-900/40 px-3 py-2 text-sm text-slate-300">
-            <input type="checkbox" checked={settingsState.autoRollback} onChange={(event) => setSettingsState((current) => ({ ...current, autoRollback: event.target.checked }))} />
-            Rollback automático
-          </label>
+    <div className="space-y-4">
+      {/* Action bar */}
+      <div className="flex flex-wrap items-center justify-between gap-3 rounded-xl border border-slate-800 bg-slate-950/70 px-4 py-3">
+        <div className="text-xs text-slate-500">
+          Alterações são salvas como pendentes até serem aplicadas.
         </div>
-        <div className="mt-5 rounded-xl border border-slate-800 bg-slate-900/40 p-3">
-          <h3 className="mb-3 text-sm font-semibold text-white">Volumes</h3>
-          <div className="space-y-2">
-            {(settingsState.volumes || []).map((vol, idx) => (
-              <div key={idx} className="grid gap-2 rounded-lg border border-slate-800 bg-slate-950 p-2 md:grid-cols-[1fr_1fr_auto]">
-                <input className={fieldClass} value={vol.hostPath} onChange={(e) => setSettingsState((prev) => ({ ...prev, volumes: prev.volumes.map((v, i) => i === idx ? { ...v, hostPath: e.target.value } : v) }))} placeholder="/host/path" />
-                <input className={fieldClass} value={vol.containerPath} onChange={(e) => setSettingsState((prev) => ({ ...prev, volumes: prev.volumes.map((v, i) => i === idx ? { ...v, containerPath: e.target.value } : v) }))} placeholder="/container/path" />
-                <button className="inline-flex items-center justify-center rounded-lg border border-rose-500/30 bg-rose-500/10 px-3 py-2 text-rose-200 hover:bg-rose-500/20" type="button" onClick={() => setSettingsState((prev) => ({ ...prev, volumes: prev.volumes.filter((_, i) => i !== idx) }))}>
-                  <Trash2 className="h-4 w-4" />
-                </button>
-              </div>
-            ))}
-            <button className={smallButtonClass} type="button" onClick={() => setSettingsState((prev) => ({ ...prev, volumes: [...(prev.volumes || []), { hostPath: '', containerPath: '' }] }))}>
-              <Plus className="h-4 w-4" />
-              Adicionar volume
-            </button>
-          </div>
-        </div>
-        <div className="mt-5 rounded-xl border border-slate-800 bg-slate-900/40 p-3">
-          <h3 className="mb-1 text-sm font-semibold text-white">Healthcheck</h3>
-          <p className="mb-3 text-xs text-slate-500">Verifica se a aplicação está respondendo após o deploy. Quando desativado, o deploy finaliza assim que o container iniciar.</p>
-          <div className="grid gap-3 md:grid-cols-2 xl:grid-cols-3">
-            <label className="inline-flex items-center gap-2 rounded-lg border border-slate-800 bg-slate-950 px-3 py-2 text-sm text-slate-300" title="Após o deploy, o painel faz requisições HTTP no path abaixo para confirmar que a aplicação está online.">
-              <input type="checkbox" checked={settingsState.healthcheck?.enabled || false} onChange={(event) => setHealthcheck({ enabled: event.target.checked })} />
-              Verificar saúde após deploy
-            </label>
-            <label className="inline-flex items-center gap-2 rounded-lg border border-slate-800 bg-slate-950 px-3 py-2 text-sm text-slate-300" title="Adiciona um HEALTHCHECK no próprio container Docker. O Docker marca o container como unhealthy se o path não responder.">
-              <input type="checkbox" checked={settingsState.healthcheck?.containerEnabled || false} onChange={(event) => setHealthcheck({ containerEnabled: event.target.checked })} disabled={!settingsState.healthcheck?.enabled} />
-              Monitoramento contínuo (Docker)
-            </label>
-            <div className="flex flex-col gap-1">
-              <label className="text-xs text-slate-500">Path da verificação (ex: /health, /api/status)</label>
-              <input className={fieldClass} value={settingsState.healthcheck?.target || '/'} onChange={(event) => setHealthcheck({ target: event.target.value })} placeholder="/health" disabled={!settingsState.healthcheck?.enabled} />
-            </div>
-            <div className="flex flex-col gap-1">
-              <label className="text-xs text-slate-500">Intervalo entre tentativas (segundos)</label>
-              <input className={fieldClass} type="number" value={settingsState.healthcheck?.intervalSeconds || 10} onChange={(event) => setHealthcheck({ intervalSeconds: Number(event.target.value) })} placeholder="10" disabled={!settingsState.healthcheck?.enabled} />
-            </div>
-            <div className="flex flex-col gap-1">
-              <label className="text-xs text-slate-500">Tempo limite por tentativa (segundos)</label>
-              <input className={fieldClass} type="number" value={settingsState.healthcheck?.timeoutSeconds || 5} onChange={(event) => setHealthcheck({ timeoutSeconds: Number(event.target.value) })} placeholder="5" disabled={!settingsState.healthcheck?.enabled} />
-            </div>
-            <div className="flex flex-col gap-1">
-              <label className="text-xs text-slate-500">Número máximo de tentativas</label>
-              <input className={fieldClass} type="number" value={settingsState.healthcheck?.retries || 6} onChange={(event) => setHealthcheck({ retries: Number(event.target.value) })} placeholder="6" disabled={!settingsState.healthcheck?.enabled} />
-            </div>
-          </div>
-        </div>
-        {message ? <p className="mt-3 rounded-lg border border-slate-800 bg-slate-900 px-3 py-2 text-sm text-slate-300">{message}</p> : null}
-      </Panel>
-      <Panel title="Danger zone" icon={AlertTriangle}>
-        <div className="space-y-3">
-          <p className="text-sm text-slate-400">Digite o nome do serviço para remover o registro e o container associado.</p>
-          <input className={fieldClass} value={deleteText} onChange={(event) => setDeleteText(event.target.value)} placeholder={service.name} />
-          <button className="inline-flex items-center gap-2 rounded-lg border border-rose-500/30 bg-rose-500/10 px-3 py-2 text-xs font-medium text-rose-200 hover:bg-rose-500/20 disabled:cursor-not-allowed disabled:opacity-50" type="button" onClick={removeService} disabled={deleteText !== service.name}>
-            <Trash2 className="h-4 w-4" />
-            Remover serviço
+        <div className="flex gap-2">
+          <button className="inline-flex items-center justify-center gap-2 rounded-lg border border-slate-700 bg-slate-950 px-3 py-2 text-xs font-medium text-slate-200 transition hover:border-blue-500/40 hover:text-white disabled:cursor-not-allowed disabled:opacity-50" type="button" onClick={() => saveSettings(false)} disabled={Boolean(saving)}>
+            <Save className="h-3.5 w-3.5" />
+            Salvar alterações
+          </button>
+          <button className="inline-flex items-center justify-center gap-2 rounded-lg border border-blue-500/40 bg-blue-600 px-3 py-2 text-xs font-semibold text-white transition hover:bg-blue-500 disabled:cursor-not-allowed disabled:opacity-50" type="button" onClick={() => saveSettings(true)} disabled={Boolean(saving)}>
+            {saving === 'apply' ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Zap className="h-3.5 w-3.5" />}
+            Aplicar imediatamente
           </button>
         </div>
-      </Panel>
+      </div>
+
+      {/* Message */}
+      {message ? (
+        <div className={`rounded-xl border p-3 text-sm ${message.includes('✅') ? 'border-emerald-500/20 bg-emerald-500/5 text-emerald-200' : 'border-rose-500/20 bg-rose-500/5 text-rose-200'}`}>
+          {message}
+        </div>
+      ) : null}
+
+      {/* Two column layout */}
+      <div className="grid gap-4 xl:grid-cols-[1fr_0.7fr]">
+        {/* Left column - main settings */}
+        <div className="space-y-4">
+          <SettingsApplication settingsState={settingsState} setSettingsState={setSettingsState} />
+          <SettingsNetwork service={service} settingsState={settingsState} setSettingsState={setSettingsState} />
+          <SettingsStorage settingsState={settingsState} setSettingsState={setSettingsState} />
+          <SettingsHealthcheck service={service} settingsState={settingsState} setSettingsState={setSettingsState} />
+          <SettingsAdvanced service={service} settingsState={settingsState} setSettingsState={setSettingsState} />
+        </div>
+
+        {/* Right column - info + deploy + danger */}
+        <div className="space-y-4">
+          <SettingsServiceInfo service={service} />
+          <SettingsDeploy settingsState={settingsState} setSettingsState={setSettingsState} />
+          <SettingsDangerZone service={service} />
+        </div>
+      </div>
     </div>
   )
 }
