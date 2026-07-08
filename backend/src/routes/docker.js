@@ -5176,7 +5176,7 @@ const publishProjectArchive = async (serviceId, file, options = {}) => {
       'prepare'
     );
   }
-  const healthcheck = normalizeHealthcheckConfig(options.healthcheck || service.healthcheck);
+  const healthcheck = normalizeHealthcheckConfig(service.healthcheck);
   const autoRollback = parseBooleanOption(options.autoRollback, service.autoRollback ?? true);
   const deploymentId = crypto.randomUUID();
   const projectDir = createDeploymentProjectDir(service, deploymentId);
