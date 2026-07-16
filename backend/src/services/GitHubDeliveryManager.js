@@ -363,7 +363,10 @@ class GitHubDeliveryManager {
         : null,
       healthcheck: {
         enabled: true,
-        target: buildType === 'node-site' ? '/' : '/health',
+        // A rota raiz é o único default seguro sem analisar as rotas da
+        // aplicação. APIs que não publicam uma página ainda provam readiness
+        // ao responder HTTP (inclusive 401/404) na raiz.
+        target: '/',
         intervalSeconds: 10,
         timeoutSeconds: 5,
         retries: 6,
@@ -400,7 +403,7 @@ class GitHubDeliveryManager {
       nodeSiteConfig: null,
       healthcheck: {
         enabled: true,
-        target: '/api/authenticate',
+        target: '/',
         intervalSeconds: 10,
         timeoutSeconds: 5,
         retries: 8,
@@ -434,7 +437,7 @@ class GitHubDeliveryManager {
       nodeSiteConfig: null,
       healthcheck: {
         enabled: true,
-        target: '/health',
+        target: '/',
         intervalSeconds: 10,
         timeoutSeconds: 5,
         retries: 6,

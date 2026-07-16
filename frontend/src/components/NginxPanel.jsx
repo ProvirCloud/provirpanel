@@ -280,7 +280,7 @@ ${buildProxyLocation(proxyTarget)}
   const saveConfig = async () => {
     if (!selectedConfig || !selectedConfig.editable || !selectedConfig.readable) return
     try {
-      await api.put(`/nginx/configs/${selectedConfig.name}`, { content: editContent })
+      await api.post('/nginx/configs/save', { filename: selectedConfig.name, content: editContent })
       alert('✅ Configuração salva.')
       setOriginalContent(editContent)
       loadAll()
@@ -297,7 +297,7 @@ ${buildProxyLocation(proxyTarget)}
         contentToSave = generateVisualConfig()
         setEditContent(contentToSave)
       }
-      await api.put(`/nginx/configs/${selectedConfig.name}`, { content: contentToSave })
+      await api.post('/nginx/configs/save', { filename: selectedConfig.name, content: contentToSave })
       const testRes = await api.post('/nginx/test')
       setNginxTest(testRes.data)
       if (!testRes.data?.valid) {
@@ -627,11 +627,7 @@ server {
 
   const toggleConfig = async (config) => {
     try {
-      if (config.enabled) {
-        await api.post(`/nginx/configs/${config.name}/disable`)
-      } else {
-        await api.post(`/nginx/configs/${config.name}/enable`)
-      }
+      await api.post('/nginx/configs/toggle', { filename: config.name, enabled: !config.enabled })
       loadAll()
     } catch (err) {
       alert('❌ Erro ao alterar status')
@@ -641,7 +637,7 @@ server {
   const deleteConfig = async (config) => {
     if (!confirm(`Deletar ${config.name}?`)) return
     try {
-      await api.delete(`/nginx/configs/${config.name}`)
+      await api.post('/nginx/configs/delete', { filename: config.name })
       loadAll()
       setSelectedConfig(null)
     } catch (err) {

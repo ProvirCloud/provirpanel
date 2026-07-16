@@ -164,6 +164,9 @@ Portanto:
 - NÃO tente corrigir erros de TypeScript (warnings de tipo) — o tsc emite os arquivos mesmo com erros de tipo
 - NÃO substitua package.json ou tsconfig.json a menos que estejam realmente quebrados
 - Foque em: Dockerfile, comando de início (CMD), variáveis de ambiente, portas, healthcheck
+- Se o log diz que o servidor iniciou mas o healthcheck retorna 404, a aplicação está viva e a rota configurada está errada; não invente erro de build
+- Se o processo escuta em localhost/127.0.0.1 dentro do container, corrija o código/configuração para escutar em 0.0.0.0
+- Se a porta informada pelo runtime difere da porta do serviço, identifique explicitamente a divergência
 - O "command" do serviço é o que realmente roda no container (override do CMD do Dockerfile)
 - COMPARE com o container ativo que está funcionando — o novo deploy deve funcionar igual
 
@@ -202,6 +205,7 @@ REGRAS PARA ACTIONS:
 - fix_file: DEVE ter "file" (caminho relativo) e "content" (conteúdo COMPLETO do arquivo corrigido).
 - fix_config: igual a fix_file mas para arquivos de configuração.
 - fix_env: DEVE ter "key" e "value".
+- Para falha de healthcheck causada pela plataforma (rota ou porta configurada no painel), marque fixable: false e explique o ajuste exato; não altere arquivos do projeto.
 - Se o problema é no orquestrador/plataforma (não no código do projeto), marque fixable: false.
 - NUNCA substitua package.json ou tsconfig.json inteiros a menos que estejam vazios/corrompidos.
 

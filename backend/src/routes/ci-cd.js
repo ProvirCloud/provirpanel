@@ -157,7 +157,7 @@ const createDraftServiceFromBlueprint = async ({
     externalUrl: bindLocalOnly ? null : `http://${getLocalIP()}:${resolvedPort}`,
     healthcheck: blueprint.healthcheck || {
       enabled: true,
-      target: '/health',
+      target: '/',
       intervalSeconds: 10,
       timeoutSeconds: 5,
       retries: 6,

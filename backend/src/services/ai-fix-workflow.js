@@ -45,8 +45,61 @@ function finishJob(job, status, result = null) {
 // ─── Layer 1: Command Fix ────────────────────────────────────────────────────
 // Detects build errors and adjusts the container command to work around them
 
-function detectBuildErrorType(error, logs) {
+function detectHealthcheckFailure(error, logs, service = {}) {
+  const combined = `${error || ''}\n${logs || ''}`;
+  const lower = combined.toLowerCase();
+  if (!lower.includes('healthcheck')) return null;
+
+  const configuredTarget = String(service.healthcheck?.target || '/').trim() || '/';
+  const listeningPortMatch = combined.match(/(?:listening|listen|server\s+(?:running|started))[^\n]{0,100}?(?:port\s*[:=]?\s*|:)(\d{2,5})/i);
+  const listeningPort = listeningPortMatch ? Number(listeningPortMatch[1]) : null;
+
+  if (/HTTP\s+404/i.test(combined)) {
+    return {
+      type: 'healthcheck-path-not-found',
+      message: `A aplicação respondeu, mas a rota de healthcheck '${configuredTarget}' não existe.`,
+      fix: configuredTarget !== '/'
+        ? { type: 'healthcheck', target: '/', reason: `A rota ${configuredTarget} retornou HTTP 404; usar a raiz confirma que o processo HTTP está acessível.` }
+        : null
+    };
+  }
+  if (/HTTP\s+(401|403)/i.test(combined)) {
+    return {
+      type: 'healthcheck-auth-required',
+      message: `A rota de healthcheck '${configuredTarget}' exige autenticação.`,
+      fix: configuredTarget !== '/'
+        ? { type: 'healthcheck', target: '/', reason: `A rota ${configuredTarget} exige autenticação e não é adequada para readiness.` }
+        : null
+    };
+  }
+  if (listeningPort && Number(service.containerPort) !== listeningPort && /(econnrefused|connect(?:ion)? refused|socket hang up)/i.test(combined)) {
+    return {
+      type: 'healthcheck-port-mismatch',
+      message: `A aplicação informou que escuta na porta ${listeningPort}, mas o container está configurado para a porta ${service.containerPort}.`,
+      fix: { type: 'containerPort', port: listeningPort, reason: 'Alinhar a porta interna do container com a porta informada pelo runtime.' }
+    };
+  }
+  if (/(127\.0\.0\.1|localhost)[^\n]{0,80}(?:listening|listen)|(?:listening|listen)[^\n]{0,80}(127\.0\.0\.1|localhost)/i.test(combined)
+      && /(econnrefused|connect(?:ion)? refused)/i.test(combined)) {
+    return {
+      type: 'healthcheck-localhost-bind',
+      message: 'A aplicação parece escutar apenas em localhost dentro do container; ela precisa usar 0.0.0.0.',
+      fix: null
+    };
+  }
+  if (/(econnrefused|connect(?:ion)? refused)/i.test(combined)) {
+    return { type: 'healthcheck-connection-refused', message: 'O processo existe, mas não aceitou conexão HTTP na porta configurada.', fix: null };
+  }
+  if (/timeout|timed out/i.test(combined)) {
+    return { type: 'healthcheck-timeout', message: 'A aplicação não respondeu antes do timeout do healthcheck.', fix: null };
+  }
+  return null;
+}
+
+function detectBuildErrorType(error, logs, service = {}) {
   const combined = `${error || ''}\n${logs || ''}`.toLowerCase();
+  const healthFailure = detectHealthcheckFailure(error, logs, service);
+  if (healthFailure) return healthFailure.type;
 
   // Runtime errors from broken compiled code
   if (combined.includes('referenceerror:') || combined.includes('is not defined') && combined.includes('dist/')) {
@@ -81,6 +134,34 @@ function detectBuildErrorType(error, logs) {
     return 'app-not-starting';
   }
   return 'unknown';
+}
+
+function applyHealthcheckPlatformFix(service, failure) {
+  if (!failure?.fix) return null;
+  const DockerManager = require('./DockerManager');
+  const dockerManager = new DockerManager();
+  let updated = { ...service, updatedAt: new Date().toISOString() };
+  if (failure.fix.type === 'healthcheck') {
+    updated.healthcheck = { ...(service.healthcheck || {}), enabled: true, target: failure.fix.target };
+    if (updated.delivery?.blueprint) {
+      updated.delivery = {
+        ...updated.delivery,
+        blueprint: { ...updated.delivery.blueprint, healthcheck: updated.healthcheck }
+      };
+    }
+  } else if (failure.fix.type === 'containerPort') {
+    updated.containerPort = failure.fix.port;
+    if (updated.delivery?.blueprint) {
+      updated.delivery = {
+        ...updated.delivery,
+        blueprint: { ...updated.delivery.blueprint, containerPort: failure.fix.port }
+      };
+    }
+  } else {
+    return null;
+  }
+  dockerManager.saveService(updated);
+  return updated;
 }
 
 function generateCommandFix(errorType, currentCommand) {
@@ -202,7 +283,10 @@ async function generateRepoFixes(errorType, error, logs, projectDir, service) {
   }
 
   if (!fixes.length) {
-    const aiResult = await askAiForRepoFixes(error, logs, projectDir, service);
+    const diagnosis = await diagnoseDeploy({ service, logs, error, projectDir });
+    const aiResult = Array.isArray(diagnosis?.actions)
+      ? diagnosis.actions.filter(action => ['fix_file', 'fix_config'].includes(action.type) && action.file && action.content)
+      : [];
     if (aiResult?.length) return aiResult;
   }
 
@@ -447,8 +531,33 @@ async function runAiFixWorkflow({ service, deployment, logs, error, projectDir }
       // ═══ STEP 1: Diagnose ═══
       pushStep(job, { phase: 'diagnose', status: 'running', message: 'Zeus AI analisando erro...' });
 
-      const errorType = detectBuildErrorType(error, logs);
+      const healthFailure = detectHealthcheckFailure(error, logs, service);
+      const errorType = detectBuildErrorType(error, logs, service);
       pushStep(job, { phase: 'diagnose', status: 'done', message: `Tipo de erro detectado: ${errorType}`, data: { errorType } });
+
+      // Healthcheck route/port mismatches are panel configuration problems, not
+      // source-code failures. Fix them before asking AI to rewrite the project.
+      if (healthFailure) {
+        pushStep(job, {
+          phase: 'healthcheck-diagnose',
+          status: 'done',
+          message: healthFailure.message,
+          data: { errorType: healthFailure.type, suggestedFix: healthFailure.fix }
+        });
+        const updatedService = applyHealthcheckPlatformFix(service, healthFailure);
+        if (updatedService && deployment?.id) {
+          pushStep(job, { phase: 'healthcheck-fix', status: 'done', message: `Configuração corrigida: ${healthFailure.fix.reason}` });
+          pushStep(job, { phase: 'redeploy', status: 'running', message: 'Reexecutando a mesma versão com o healthcheck corrigido...' });
+          try {
+            await triggerRedeploy(service.id, deployment.id);
+            pushStep(job, { phase: 'redeploy', status: 'done', message: '✓ Redeploy disparado com a configuração corrigida' });
+            finishJob(job, 'success', { layer: 1, fixType: healthFailure.fix.type, healthFailure, redeployed: true });
+            return;
+          } catch (redeployErr) {
+            pushStep(job, { phase: 'redeploy', status: 'failed', message: `Redeploy falhou: ${redeployErr.message.slice(0, 200)}` });
+          }
+        }
+      }
 
       // ═══ STEP 2: Layer 1 - Try command fix ═══
       const currentCommand = service.command;
@@ -585,11 +694,18 @@ function getAiFixJob(jobId) {
 }
 
 // Cleanup jobs older than 1 hour
-setInterval(() => {
+const cleanupTimer = setInterval(() => {
   const cutoff = Date.now() - 60 * 60 * 1000;
   for (const [id, job] of aiFixJobs) {
     if (new Date(job.createdAt).getTime() < cutoff) aiFixJobs.delete(id);
   }
 }, 15 * 60 * 1000);
+cleanupTimer.unref?.();
 
-module.exports = { runAiFixWorkflow, getAiFixJob, aiFixJobs };
+module.exports = {
+  runAiFixWorkflow,
+  getAiFixJob,
+  aiFixJobs,
+  detectBuildErrorType,
+  detectHealthcheckFailure
+};

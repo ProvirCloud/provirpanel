@@ -29,8 +29,24 @@ router.get('/configs', (req, res, next) => {
 // Salvar configuração editada
 router.put('/configs/:filename', (req, res, next) => {
   try {
+    const filename = req.body.filename || req.params.filename;
     const skipValidation = req.body.skipValidation === true;
-    const result = nginxManager.saveConfig(req.params.filename, req.body.content, { skipValidation });
+    const result = nginxManager.saveConfig(filename, req.body.content, { skipValidation });
+    if (!skipValidation && result.valid === false) {
+      return res.status(400).json({ error: result.error || 'Configuracao Nginx invalida (nginx -t falhou)', ...result });
+    }
+    res.json(result);
+  } catch (err) {
+    next(err);
+  }
+});
+
+// Salvar configuração (POST alternativo - evita bloqueio de proxy)
+router.post('/configs/save', (req, res, next) => {
+  try {
+    const { filename, content, skipValidation } = req.body;
+    if (!filename) return res.status(400).json({ error: 'filename obrigatorio' });
+    const result = nginxManager.saveConfig(filename, content, { skipValidation: skipValidation === true });
     if (!skipValidation && result.valid === false) {
       return res.status(400).json({ error: result.error || 'Configuracao Nginx invalida (nginx -t falhou)', ...result });
     }
@@ -60,6 +76,18 @@ router.delete('/configs/:filename', (req, res, next) => {
   }
 });
 
+// Deletar (POST alternativo)
+router.post('/configs/delete', (req, res, next) => {
+  try {
+    const { filename } = req.body;
+    if (!filename) return res.status(400).json({ error: 'filename obrigatorio' });
+    nginxManager.deleteConfig(filename);
+    res.json({ success: true });
+  } catch (err) {
+    next(err);
+  }
+});
+
 // Enable/Disable
 router.post('/configs/:filename/enable', (req, res, next) => {
   try {
@@ -73,6 +101,22 @@ router.post('/configs/:filename/enable', (req, res, next) => {
 router.post('/configs/:filename/disable', (req, res, next) => {
   try {
     nginxManager.disableConfig(req.params.filename);
+    res.json({ success: true });
+  } catch (err) {
+    next(err);
+  }
+});
+
+// Toggle (POST alternativo sem filename na URL)
+router.post('/configs/toggle', (req, res, next) => {
+  try {
+    const { filename, enabled } = req.body;
+    if (!filename) return res.status(400).json({ error: 'filename obrigatorio' });
+    if (enabled) {
+      nginxManager.enableConfig(filename);
+    } else {
+      nginxManager.disableConfig(filename);
+    }
     res.json({ success: true });
   } catch (err) {
     next(err);

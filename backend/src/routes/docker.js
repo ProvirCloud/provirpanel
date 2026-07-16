@@ -36,6 +36,12 @@ const CONTAINER_VOLUME_PERMISSIONS = {
     mode: '700',
     label: 'PostgreSQL'
   },
+  'redis-cache': {
+    uid: 999,
+    gid: 999,
+    mode: '755',
+    label: 'Redis'
+  },
   pgadmin: {
     uid: 5050,
     gid: 5050,
@@ -60,12 +66,20 @@ const isPostgresImage = (imageName = '') => {
 const isDatabaseServiceTemplate = (templateId, imageName = '') =>
   DATABASE_TEMPLATE_IDS.has(templateId) || isPostgresImage(imageName);
 
+const isRedisImage = (imageName = '') => {
+  const image = String(imageName || '').toLowerCase();
+  return image === 'redis' || image.startsWith('redis:') || image.includes('/redis:');
+};
+
 const resolveContainerVolumePermission = (templateId, imageName = '') => {
   if (CONTAINER_VOLUME_PERMISSIONS[templateId]) {
     return CONTAINER_VOLUME_PERMISSIONS[templateId];
   }
   if (isPostgresImage(imageName)) {
     return CONTAINER_VOLUME_PERMISSIONS['postgres-db'];
+  }
+  if (isRedisImage(imageName)) {
+    return CONTAINER_VOLUME_PERMISSIONS['redis-cache'];
   }
   return null;
 };
@@ -338,14 +352,36 @@ const deploymentVersionLimit = Math.max(
 );
 let progressNamespace = null;
 const portCheckHost = '0.0.0.0';
-const registriesPath = path.join(__dirname, '..', 'data', 'docker-registries.json');
+const registriesPath = process.env.DOCKER_REGISTRIES_PATH || path.join(__dirname, '..', '..', 'data', 'docker-registries.json');
 fs.mkdirSync(path.dirname(registriesPath), { recursive: true });
 if (!fs.existsSync(registriesPath)) {
-  fs.writeFileSync(registriesPath, '[]');
+  const legacyRegistriesPath = path.join(__dirname, '..', 'data', 'docker-registries.json');
+  if (fs.existsSync(legacyRegistriesPath)) {
+    try { fs.copyFileSync(legacyRegistriesPath, registriesPath); } catch (err) { fs.writeFileSync(registriesPath, '[]'); }
+  } else {
+    fs.writeFileSync(registriesPath, '[]');
+  }
 }
-const serviceGroupsPath = path.join(__dirname, '..', 'data', 'docker-service-groups.json');
+const serviceGroupsPath = process.env.DOCKER_SERVICE_GROUPS_PATH || path.join(__dirname, '..', '..', 'data', 'docker-service-groups.json');
+fs.mkdirSync(path.dirname(serviceGroupsPath), { recursive: true });
 if (!fs.existsSync(serviceGroupsPath)) {
-  fs.writeFileSync(serviceGroupsPath, '[]');
+  // Migrar do caminho antigo se existir
+  const legacyGroupsPath = path.join(__dirname, '..', 'data', 'docker-service-groups.json');
+  if (fs.existsSync(legacyGroupsPath)) {
+    try {
+      const legacyData = fs.readFileSync(legacyGroupsPath, 'utf8');
+      const parsed = JSON.parse(legacyData);
+      if (Array.isArray(parsed) && parsed.length > 0) {
+        fs.writeFileSync(serviceGroupsPath, legacyData);
+      } else {
+        fs.writeFileSync(serviceGroupsPath, '[]');
+      }
+    } catch (err) {
+      fs.writeFileSync(serviceGroupsPath, '[]');
+    }
+  } else {
+    fs.writeFileSync(serviceGroupsPath, '[]');
+  }
 }
 
 const readRegistries = () => {
@@ -1866,7 +1902,18 @@ const buildHealthcheckEndpoints = async ({
       }];
 };
 
-const requestHealthcheckUrl = (targetUrl, timeoutSeconds) =>
+const isRootHealthcheckTarget = (target = '') => {
+  const value = String(target || '/').trim() || '/';
+  if (!/^https?:\/\//i.test(value)) return value === '/';
+  try {
+    const parsed = new URL(value);
+    return (parsed.pathname || '/') === '/' && !parsed.search;
+  } catch (err) {
+    return false;
+  }
+};
+
+const requestHealthcheckUrl = (targetUrl, timeoutSeconds, options = {}) =>
   new Promise((resolve, reject) => {
     let parsed;
     try {
@@ -1890,7 +1937,7 @@ const requestHealthcheckUrl = (targetUrl, timeoutSeconds) =>
         res.resume();
         res.on('end', () => {
           const status = Number(res.statusCode || 0);
-          if (status >= 200 && status < 400) {
+          if (status >= 200 && (status < 400 || (options.acceptClientErrors && status < 500))) {
             resolve({ statusCode: status });
             return;
           }
@@ -1956,6 +2003,7 @@ const waitForRuntimeReadinessBeforeHealth = async ({
   startupGraceSeconds = 0,
   intervalSeconds = 10,
   timeoutSeconds = 5,
+  acceptClientErrors = false,
   onProgress = null,
   onAttemptFailure = null
 }) => {
@@ -1986,7 +2034,9 @@ const waitForRuntimeReadinessBeforeHealth = async ({
     const attemptErrors = [];
     for (const endpoint of endpoints) {
       try {
-        const result = await requestHealthcheckUrl(endpoint.targetUrl, timeoutSeconds);
+        const result = await requestHealthcheckUrl(endpoint.targetUrl, timeoutSeconds, {
+          acceptClientErrors
+        });
         if (onProgress) {
           onProgress(`Runtime de ${serviceName} respondeu em ${endpoint.label}; healthcheck liberado.`);
         }
@@ -2070,6 +2120,7 @@ const waitForServiceHealth = async ({
     startupGraceSeconds,
     intervalSeconds: config.intervalSeconds,
     timeoutSeconds: config.timeoutSeconds,
+    acceptClientErrors: isRootHealthcheckTarget(config.target),
     onProgress,
     onAttemptFailure
   });
@@ -2099,7 +2150,9 @@ const waitForServiceHealth = async ({
         `Healthcheck ${serviceName} tentativa ${attempt}/${config.retries} (${endpoint.label}): ${endpoint.targetUrl}`
       );
       try {
-        const result = await requestHealthcheckUrl(endpoint.targetUrl, config.timeoutSeconds);
+        const result = await requestHealthcheckUrl(endpoint.targetUrl, config.timeoutSeconds, {
+          acceptClientErrors: isRootHealthcheckTarget(config.target)
+        });
         appendServiceLog(
           'info',
           `Healthcheck ${serviceName} OK com status ${result.statusCode} em ${endpoint.label}`
@@ -2129,12 +2182,18 @@ const waitForServiceHealth = async ({
   }
 
   const errorMsg = lastError?.message || 'sem resposta';
-  const all404 = errorMsg.includes('HTTP 404') && !errorMsg.includes('HTTP 5') && !errorMsg.includes('HTTP 4') || /HTTP 404.*HTTP 404/.test(errorMsg) || (errorMsg.match(/HTTP 404/g) || []).length >= 1 && !/HTTP [^4]/.test(errorMsg.replace(/HTTP 404/g, ''));
+  const httpStatuses = [...errorMsg.matchAll(/HTTP\s+(\d{3})/g)].map((match) => Number(match[1]));
+  const all404 = httpStatuses.length > 0 && httpStatuses.every((status) => status === 404);
+  const authRequired = httpStatuses.length > 0 && httpStatuses.every((status) => status === 401 || status === 403);
   const hint = all404
-    ? ` — O endpoint de healthcheck retorna 404 (não encontrado). Verifique se o path '${config.target}' existe na aplicação ou desative o healthcheck em Settings.`
-    : '';
+    ? ` — A aplicação respondeu HTTP, mas a rota '${config.target}' não existe. O problema é a rota do healthcheck, não o processo do container.`
+    : authRequired
+      ? ` — A aplicação respondeu HTTP, mas a rota '${config.target}' exige autenticação. Configure uma rota pública de readiness.`
+      : /ECONNREFUSED|connect(?:ion)? refused/i.test(errorMsg)
+        ? ` — O container está em execução, porém não aceita conexão na porta ${containerPort || 'configurada'}. Confirme a porta e se o servidor escuta em 0.0.0.0 (não apenas localhost).`
+        : '';
   throw createHttpError(
-    `Healthcheck falhou para ${serviceName}: ${errorMsg}${hint}`,
+    `Healthcheck falhou para ${serviceName} (target=${config.target}, porta interna=${containerPort || 'n/d'}, porta publicada=${hostPort || 'n/d'}): ${errorMsg}${hint}`,
     502
   );
 };
