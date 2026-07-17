@@ -5923,6 +5923,29 @@ router.post('/services/:id/rollback', async (req, res, next) => {
   }
 });
 
+router.put('/services/groups/:id', async (req, res, next) => {
+  try {
+    const groups = readServiceGroups();
+    const index = groups.findIndex((entry) => entry.id === req.params.id);
+    if (index === -1) {
+      return res.status(404).json({ message: 'Grupo não encontrado' });
+    }
+    const name = normalizeServiceGroupName(req.body?.name);
+    if (!name || name.length < 2) {
+      return res.status(400).json({ message: 'Nome do grupo deve ter pelo menos 2 caracteres' });
+    }
+    const nextGroups = [...groups];
+    nextGroups[index] = { ...nextGroups[index], name, updatedAt: new Date().toISOString() };
+    writeServiceGroups(nextGroups);
+    res.json({
+      group: sanitizeServiceGroupForClient(nextGroups[index]),
+      groups: nextGroups.map(sanitizeServiceGroupForClient)
+    });
+  } catch (err) {
+    next(err);
+  }
+});
+
 router.delete('/services/groups/:id', async (req, res, next) => {
   try {
     const groups = readServiceGroups();

@@ -1357,6 +1357,8 @@ const DockerPanel = ({ showPageIntro = true }) => {
   const [newServiceGroupParentId, setNewServiceGroupParentId] = useState('')
   const [draggedServiceId, setDraggedServiceId] = useState(null)
   const [layoutWorking, setLayoutWorking] = useState(false)
+  const [editingGroupId, setEditingGroupId] = useState(null)
+  const [editingGroupName, setEditingGroupName] = useState('')
   const socket = useMemo(() => createDockerLogsSocket(), [])
   const progressSocket = useMemo(() => createDockerProgressSocket(), [])
   const buildSessionRef = useRef(null)
@@ -2123,6 +2125,25 @@ const DockerPanel = ({ showPageIntro = true }) => {
       addToast(err.response?.data?.message || 'Erro ao criar grupo', 'error')
     } finally {
       setLayoutWorking(false)
+    }
+  }
+
+  const renameServiceGroup = async (groupId, name) => {
+    const trimmed = name.trim()
+    if (trimmed.length < 2) {
+      addToast('Nome deve ter pelo menos 2 caracteres', 'error')
+      return
+    }
+    setLayoutWorking(true)
+    try {
+      const response = await api.put(`/docker/services/groups/${groupId}`, { name: trimmed })
+      if (Array.isArray(response.data?.groups)) setServiceGroups(response.data.groups)
+    } catch (err) {
+      addToast(err.response?.data?.message || 'Erro ao renomear grupo', 'error')
+    } finally {
+      setLayoutWorking(false)
+      setEditingGroupId(null)
+      setEditingGroupName('')
     }
   }
 
@@ -3621,7 +3642,29 @@ const DockerPanel = ({ showPageIntro = true }) => {
                   <GroupChevron className="h-3.5 w-3.5" />
                 </button>
                 <Folder className="h-4 w-4 text-blue-300" />
-                <span className="font-semibold text-white">{row.group.name}</span>
+                {editingGroupId === row.group.id ? (
+                  <form
+                    className="flex items-center gap-2"
+                    onSubmit={(e) => { e.preventDefault(); renameServiceGroup(row.group.id, editingGroupName) }}
+                  >
+                    <input
+                      autoFocus
+                      className="rounded-lg border border-blue-500/60 bg-slate-900 px-2 py-1 text-sm text-white outline-none"
+                      value={editingGroupName}
+                      onChange={(e) => setEditingGroupName(e.target.value)}
+                      onBlur={() => renameServiceGroup(row.group.id, editingGroupName)}
+                      onKeyDown={(e) => e.key === 'Escape' && (setEditingGroupId(null), setEditingGroupName(''))}
+                    />
+                  </form>
+                ) : (
+                  <span
+                    className="cursor-text font-semibold text-white hover:text-blue-300"
+                    onDoubleClick={() => { setEditingGroupId(row.group.id); setEditingGroupName(row.group.name) }}
+                    title="Clique duplo para renomear"
+                  >
+                    {row.group.name}
+                  </span>
+                )}
                 <span className="rounded-full border border-slate-700 bg-slate-900 px-2 py-0.5 text-[10px] text-slate-400">
                   {row.serviceCount} serviço(s)
                 </span>
