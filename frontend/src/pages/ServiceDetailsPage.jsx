@@ -1717,8 +1717,8 @@ const MetricsPanel = ({ metrics }) => {
     <div className="grid gap-3 md:grid-cols-2 xl:grid-cols-4">
       <SummaryCard icon={Cpu} label="CPU" value={`${current.cpuPercent ?? 0}%`} detail="Docker stats" tone="blue" />
       <SummaryCard icon={Database} label="Memória" value={formatBytes(current.memoryUsage)} detail={`${current.memoryPercent ?? 0}% usado`} />
-      <SummaryCard icon={Network} label="Rede in/out" value="-" detail="preparado para coletor" />
-      <SummaryCard icon={HardDrive} label="Disco r/w" value="-" detail="preparado para coletor" />
+      <SummaryCard icon={Network} label="Rede in/out" value={current.networkRxBytes != null ? `${formatBytes(current.networkRxBytes)} / ${formatBytes(current.networkTxBytes)}` : '-'} detail={current.networkRxBytes != null ? 'rx / tx acumulado' : 'container parado'} />
+      <SummaryCard icon={HardDrive} label="Disco r/w" value={current.diskReadBytes != null ? `${formatBytes(current.diskReadBytes)} / ${formatBytes(current.diskWriteBytes)}` : '-'} detail={current.diskReadBytes != null ? 'read / write acumulado' : 'container parado'} />
       <SummaryCard icon={RefreshCcw} label="Restarts" value={current.restartCount ?? 0} detail="desde criação do container" />
       <SummaryCard icon={Clock3} label="Uptime" value={formatUptime(current.uptimeSeconds)} detail="container atual" tone="green" />
       <SummaryCard icon={Activity} label="Requests" value={current.requestsPerMinute ?? '-'} detail="Loki/Otel futuro" />

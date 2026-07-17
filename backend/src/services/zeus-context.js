@@ -35,13 +35,36 @@ const collectLocalContext = async (api, token, hostHeader) => {
   const dockerData = await safeFetch(`${api}/docker/services`);
   if (dockerData) {
     const services = Array.isArray(dockerData) ? dockerData : (dockerData.services || []);
-    context.services = services.map(s => ({
-      id: s.id,
-      name: s.name,
-      image: s.image,
-      status: s.status,
-      ports: s.ports,
-      group: s.group
+    const runningServices = services.filter(s => s.status === 'running' || s.runtimeState === 'running');
+
+    context.services = await Promise.all(services.map(async s => {
+      const base = {
+        id: s.id,
+        name: s.name,
+        image: s.image,
+        status: s.status,
+        ports: s.ports,
+        group: s.group
+      };
+      if (!s.id || !runningServices.find(r => r.id === s.id)) return base;
+      const metricsData = await safeFetch(`${api}/docker/services/${s.id}/metrics`);
+      const current = metricsData?.metrics?.current;
+      if (!current) return base;
+      return {
+        ...base,
+        metrics: {
+          cpuPercent: current.cpuPercent,
+          memoryUsage: current.memoryUsage,
+          memoryLimit: current.memoryLimit,
+          memoryPercent: current.memoryPercent,
+          networkRxBytes: current.networkRxBytes,
+          networkTxBytes: current.networkTxBytes,
+          diskReadBytes: current.diskReadBytes,
+          diskWriteBytes: current.diskWriteBytes,
+          restartCount: current.restartCount,
+          uptimeSeconds: current.uptimeSeconds
+        }
+      };
     }));
 
     // Collect changelogs for services with recent deploys
@@ -95,7 +118,22 @@ const formatContextForPrompt = (context, panelName) => {
   if (context.services && context.services.length) {
     parts.push(`### Containers/Serviços Docker (${context.services.length}):`);
     context.services.forEach(s => {
-      parts.push(`- ${s.name} | imagem: ${s.image || '?'} | status: ${s.status || '?'}`);
+      let line = `- ${s.name} | imagem: ${s.image || '?'} | status: ${s.status || '?'}`;
+      if (s.metrics) {
+        const m = s.metrics;
+        const fmt = (bytes) => bytes == null ? '?' : bytes >= 1073741824 ? `${(bytes/1073741824).toFixed(1)}GB` : bytes >= 1048576 ? `${(bytes/1048576).toFixed(1)}MB` : bytes >= 1024 ? `${(bytes/1024).toFixed(1)}KB` : `${bytes}B`;
+        line += ` | CPU: ${m.cpuPercent ?? 0}%`;
+        line += ` | RAM: ${fmt(m.memoryUsage)} (${m.memoryPercent ?? 0}%)`;
+        if (m.networkRxBytes != null) line += ` | Rede in/out: ${fmt(m.networkRxBytes)}/${fmt(m.networkTxBytes)}`;
+        if (m.diskReadBytes != null) line += ` | Disco r/w: ${fmt(m.diskReadBytes)}/${fmt(m.diskWriteBytes)}`;
+        if (m.restartCount != null) line += ` | restarts: ${m.restartCount}`;
+        if (m.uptimeSeconds != null) {
+          const u = m.uptimeSeconds;
+          const upStr = u >= 86400 ? `${Math.floor(u/86400)}d ${Math.floor((u%86400)/3600)}h` : u >= 3600 ? `${Math.floor(u/3600)}h ${Math.floor((u%3600)/60)}m` : `${Math.floor(u/60)}m`;
+          line += ` | uptime: ${upStr}`;
+        }
+      }
+      parts.push(line);
     });
     parts.push('');
   }

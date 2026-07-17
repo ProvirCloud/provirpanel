@@ -509,10 +509,22 @@ class DockerManager {
     const memoryUsage = stats.memory_stats.usage || 0;
     const memoryLimit = stats.memory_stats.limit || 0;
 
+    const networks = stats.networks || {};
+    const networkRxBytes = Object.values(networks).reduce((sum, n) => sum + (n.rx_bytes || 0), 0);
+    const networkTxBytes = Object.values(networks).reduce((sum, n) => sum + (n.tx_bytes || 0), 0);
+
+    const blkio = stats.blkio_stats?.io_service_bytes_recursive || [];
+    const diskReadBytes = blkio.filter(e => e.op === 'Read').reduce((sum, e) => sum + (e.value || 0), 0);
+    const diskWriteBytes = blkio.filter(e => e.op === 'Write').reduce((sum, e) => sum + (e.value || 0), 0);
+
     return {
       cpuPercent: Number(cpuPercent.toFixed(2)),
       memoryUsage,
-      memoryLimit
+      memoryLimit,
+      networkRxBytes,
+      networkTxBytes,
+      diskReadBytes,
+      diskWriteBytes
     };
   }
 

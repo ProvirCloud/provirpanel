@@ -1147,10 +1147,10 @@ const buildServiceMetrics = async (service) => {
       errorRate: null,
       uptimeSeconds: calculateUptimeSeconds(inspect),
       restartCount: inspect?.RestartCount ?? 0,
-      networkRxBytes: null,
-      networkTxBytes: null,
-      diskReadBytes: null,
-      diskWriteBytes: null
+      networkRxBytes: stats?.networkRxBytes ?? null,
+      networkTxBytes: stats?.networkTxBytes ?? null,
+      diskReadBytes: stats?.diskReadBytes ?? null,
+      diskWriteBytes: stats?.diskWriteBytes ?? null
     },
     samples: [
       {
