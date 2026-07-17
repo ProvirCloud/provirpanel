@@ -3777,6 +3777,7 @@ const DockerPanel = ({ showPageIntro = true }) => {
         {[
           { id: 'dashboard', label: 'Dashboard', icon: Activity },
           { id: 'apps', label: 'Apps', icon: AppWindow },
+          { id: 'stacks', label: 'Stacks', icon: Boxes },
           { id: 'containers', label: 'Containers', icon: TerminalSquare },
           { id: 'images', label: 'Images', icon: Layers }
         ].map((tab) => (
@@ -3924,38 +3925,45 @@ const DockerPanel = ({ showPageIntro = true }) => {
         </div>
       )}
 
+      {activeTab === 'stacks' && (
+        <div className="grid gap-4">
+          <div className="rounded-2xl border border-slate-800 bg-slate-900/60 p-4">
+            <div className="mb-4 flex items-center justify-between gap-3">
+              <div>
+                <p className="text-xs uppercase tracking-[0.3em] text-slate-400">Stack clusters</p>
+                <h3 className="mt-1 text-xl font-semibold text-white">Cluster-style compose view</h3>
+              </div>
+              <button
+                className="rounded-lg border border-blue-800 bg-blue-950 px-3 py-1.5 text-xs text-blue-200 hover:bg-blue-900"
+                onClick={() => navigate('/stacks')}
+              >
+                Abrir Infra Canvas
+              </button>
+            </div>
+            <div className="grid gap-3 lg:grid-cols-2">
+              {visibleStackClusters.map((stack) => (
+                <StackClusterCard
+                  key={stack.id}
+                  stack={stack}
+                  expanded={expandedClusterId === stack.id}
+                  telemetry={buildClusterTelemetry(stack, stats)}
+                  onToggle={() => toggleClusterExpand(stack)}
+                  onInspectService={inspectClusterService}
+                  onOpen={() => navigate('/stacks')}
+                />
+              ))}
+              {visibleStackClusters.length === 0 && (
+                <div className="rounded-2xl border border-dashed border-slate-700 bg-slate-950/40 px-4 py-10 text-center text-sm text-slate-400">
+                  Nenhuma stack publicada ainda.
+                </div>
+              )}
+            </div>
+          </div>
+        </div>
+      )}
+
       {activeTab === 'containers' && (
         <div className="grid gap-4">
-          {visibleStackClusters.length > 0 && (
-            <div className="rounded-2xl border border-slate-800 bg-slate-900/60 p-4">
-              <div className="mb-4 flex items-center justify-between gap-3">
-                <div>
-                  <p className="text-xs uppercase tracking-[0.3em] text-slate-400">Running stack groups</p>
-                  <h3 className="mt-1 text-xl font-semibold text-white">Cluster-style compose view</h3>
-                </div>
-                <button
-                  className="rounded-lg border border-blue-800 bg-blue-950 px-3 py-1.5 text-xs text-blue-200 hover:bg-blue-900"
-                  onClick={() => navigate('/stacks')}
-                >
-                  Abrir Infra Canvas
-                </button>
-              </div>
-              <div className="grid gap-3 lg:grid-cols-2">
-                {visibleStackClusters.map((stack) => (
-                  <StackClusterCard
-                    key={stack.id}
-                    stack={stack}
-                    expanded={expandedClusterId === stack.id}
-                    telemetry={buildClusterTelemetry(stack, stats)}
-                    onToggle={() => toggleClusterExpand(stack)}
-                    onInspectService={inspectClusterService}
-                    onOpen={() => navigate('/stacks')}
-                  />
-                ))}
-              </div>
-            </div>
-          )}
-
           <div className="rounded-2xl border border-slate-800 bg-slate-900/60">
             <div className="space-y-4 border-b border-slate-800 px-4 py-4">
               <div className="flex flex-wrap items-center justify-between gap-3">
