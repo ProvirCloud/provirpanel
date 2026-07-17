@@ -1344,13 +1344,15 @@ const DockerPanel = ({ showPageIntro = true }) => {
   const [buildWorking, setBuildWorking] = useState(false)
   const [buildStatus, setBuildStatus] = useState(null)
   const [appSearch, setAppSearch] = useState('')
-  const [opsSearch, setOpsSearch] = useState('')
+  const [opsSearch, setOpsSearch] = useState(() => sessionStorage.getItem('docker_ops_search') || '')
   const [appCategory, setAppCategory] = useState('all')
   const [expandedClusterId, setExpandedClusterId] = useState(null)
   const [serviceGroups, setServiceGroups] = useState([])
-  const [expandedServiceGroups, setExpandedServiceGroups] = useState({})
-  const [opsPage, setOpsPage] = useState(1)
-  const [opsPageSize, setOpsPageSize] = useState(10)
+  const [expandedServiceGroups, setExpandedServiceGroups] = useState(() => {
+    try { return JSON.parse(localStorage.getItem('docker_expanded_groups') || '{}') } catch { return {} }
+  })
+  const [opsPage, setOpsPage] = useState(() => Number(sessionStorage.getItem('docker_ops_page')) || 1)
+  const [opsPageSize, setOpsPageSize] = useState(() => Number(localStorage.getItem('docker_ops_page_size')) || 10)
   const [newServiceGroupName, setNewServiceGroupName] = useState('')
   const [newServiceGroupParentId, setNewServiceGroupParentId] = useState('')
   const [draggedServiceId, setDraggedServiceId] = useState(null)
@@ -1760,6 +1762,22 @@ const DockerPanel = ({ showPageIntro = true }) => {
 
       return () => clearInterval(intervalId)
     }, [])
+
+    useEffect(() => {
+      sessionStorage.setItem('docker_ops_search', opsSearch)
+    }, [opsSearch])
+
+    useEffect(() => {
+      sessionStorage.setItem('docker_ops_page', String(opsPage))
+    }, [opsPage])
+
+    useEffect(() => {
+      localStorage.setItem('docker_ops_page_size', String(opsPageSize))
+    }, [opsPageSize])
+
+    useEffect(() => {
+      localStorage.setItem('docker_expanded_groups', JSON.stringify(expandedServiceGroups))
+    }, [expandedServiceGroups])
 
     useEffect(() => {
       setOpsPage(1)
