@@ -1301,7 +1301,7 @@ const DockerCatalogCard = ({ tpl, installedCount, onInstall }) => {
 
 const DockerPanel = ({ showPageIntro = true }) => {
   const navigate = useNavigate()
-  const [activeTab, setActiveTab] = useState('dashboard')
+  const [activeTab, setActiveTab] = useState(() => sessionStorage.getItem('docker_active_tab') || 'dashboard')
   const [containers, setContainers] = useState([])
   const [images, setImages] = useState([])
   const [stats, setStats] = useState({})
@@ -1762,6 +1762,10 @@ const DockerPanel = ({ showPageIntro = true }) => {
 
       return () => clearInterval(intervalId)
     }, [])
+
+    useEffect(() => {
+      sessionStorage.setItem('docker_active_tab', activeTab)
+    }, [activeTab])
 
     useEffect(() => {
       sessionStorage.setItem('docker_ops_search', opsSearch)
