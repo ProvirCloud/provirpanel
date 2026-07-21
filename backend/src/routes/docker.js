@@ -2906,6 +2906,7 @@ router.post('/services/:id/start', async (req, res, next) => {
     if (!service.containerId) {
       return res.status(400).json({ message: 'Serviço sem container associado' });
     }
+    await repairManagedContainerVolumePermissions(service.containerId);
     await dockerManager.docker.getContainer(service.containerId).start();
     appendServiceLog('info', `Servico ${service.name} iniciado`);
     const payload = await resolveServiceDetailsPayload(req.params.id);
@@ -6599,5 +6600,6 @@ const initDockerSocket = (io) => {
 
 module.exports = {
   router,
-  initDockerSocket
+  initDockerSocket,
+  repairManagedContainerVolumePermissions
 };

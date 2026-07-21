@@ -138,6 +138,26 @@ nginxLogWatcher.init().catch(err => {
 
 const metricsCollector = new MetricsCollector();
 const dockerManager = new DockerManager();
+
+// Repair volume permissions on container start (covers Docker auto-restart)
+(async () => {
+  try {
+    const eventStream = await dockerManager.docker.getEvents({ filters: { event: ['start'] } });
+    eventStream.on('data', async (chunk) => {
+      try {
+        const event = JSON.parse(chunk.toString());
+        if (event?.Type === 'container' && event?.Action === 'start') {
+          const { repairManagedContainerVolumePermissions } = require('./routes/docker');
+          if (typeof repairManagedContainerVolumePermissions === 'function') {
+            await repairManagedContainerVolumePermissions(event.Actor?.ID || event.id);
+          }
+        }
+      } catch (_) { /* ignore */ }
+    });
+    eventStream.on('error', () => { /* ignore */ });
+  } catch (_) { /* ignore */ }
+})();
+
 setInterval(async () => {
   try {
     const metrics = await metricsCollector.collect();
