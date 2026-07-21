@@ -66,6 +66,9 @@ const isPostgresImage = (imageName = '') => {
 const isDatabaseServiceTemplate = (templateId, imageName = '') =>
   DATABASE_TEMPLATE_IDS.has(templateId) || isPostgresImage(imageName);
 
+const isNodeAppTemplate = (templateId = '') =>
+  templateId === 'node-app' || templateId === 'nextjs-app' || templateId === 'node';
+
 const isRedisImage = (imageName = '') => {
   const image = String(imageName || '').toLowerCase();
   return image === 'redis' || image.startsWith('redis:') || image.includes('/redis:');
@@ -3557,7 +3560,7 @@ router.post('/services', async (req, res, next) => {
     }
 
     const normalizedEnvVars = normalizeEnvVars(envVars);
-    const isNodeSitesMode = templateId === 'node-app' && nodeServiceMode === 'sites';
+    const isNodeSitesMode = isNodeAppTemplate(templateId) && nodeServiceMode === 'sites';
 
     if (isNodeSitesMode) {
       const projectRoot = resolvePrimaryVolumeProjectPath(finalizedVolumes);
@@ -3610,7 +3613,7 @@ router.post('/services', async (req, res, next) => {
         });
         
         // Para Node.js, usar imagem base e instalar dependências
-        if (templateId === 'node-app' && !normalizedCommand) {
+        if (isNodeAppTemplate(templateId) && !normalizedCommand) {
           containerCmd = resolveNodeCommand(finalizedVolumes) || ['sh', '-c', 'npm install && npm start'];
         }
       } catch (err) {
@@ -3618,7 +3621,7 @@ router.post('/services', async (req, res, next) => {
       }
     } else if (isNodeSitesMode) {
       containerCmd = ['sh', '-c', 'npm install && npm start'];
-    } else if (!createProject && templateId === 'node-app' && !normalizedCommand) {
+    } else if (!createProject && isNodeAppTemplate(templateId) && !normalizedCommand) {
       containerCmd = resolveNodeCommand(finalizedVolumes) || ['npm', 'start'];
     }
     if (!hasUserCommand) {
@@ -4025,10 +4028,9 @@ router.put('/services/:id', async (req, res, next) => {
       },
       service
     );
-    const isNodeSitesMode = service.templateId === 'node-app' && nodeServiceMode === 'sites';
+    const isNodeSitesMode = isNodeAppTemplate(service.templateId) && nodeServiceMode === 'sites';
     const isNodeServiceForConfig =
-      service.templateId === 'node-app' ||
-      service.templateId === 'node' ||
+      isNodeAppTemplate(service.templateId) ||
       String(service.image || '').startsWith('node');
     const resolvedHealthcheck = normalizeHealthcheckConfig(requestedHealthcheck || service.healthcheck);
     const resolvedAutoRollback = parseBooleanOption(requestedAutoRollback, service.autoRollback ?? true);
@@ -4217,7 +4219,7 @@ router.put('/services/:id', async (req, res, next) => {
     let containerCmd = normalizedCommand || persistedCommand || template.command;
     if (isNodeSitesMode) {
       containerCmd = ['sh', '-c', 'npm install && npm start'];
-    } else if (service.templateId === 'node-app' && !normalizedCommand && !persistedCommand) {
+    } else if (isNodeAppTemplate(service.templateId) && !normalizedCommand && !persistedCommand) {
       containerCmd = resolveNodeCommand(service.volumes) || containerCmd;
     } else if (!normalizedCommand && !persistedCommand && canAutoProjectLaunch) {
       autoProjectLaunch = projectLaunch;
@@ -4320,7 +4322,7 @@ router.put('/services/:id', async (req, res, next) => {
     }
 
     // For Node.js with project, use npm install and start
-    if ((service.hasProject || isNodeSitesMode) && service.templateId === 'node-app' && !containerCmd) {
+    if ((service.hasProject || isNodeSitesMode) && isNodeAppTemplate(service.templateId) && !containerCmd) {
       containerConfig.Cmd = ['sh', '-c', 'npm install && npm start'];
     }
 
@@ -4673,10 +4675,9 @@ const prepareProjectRuntimeForDeploy = ({
   const template =
     SERVICE_TEMPLATES.find((t) => t.id === service.templateId) ||
     { env: [], workdir: null, command: null };
-  const isNodeSitesMode = service.templateId === 'node-app' && nodeServiceMode === 'sites';
+  const isNodeSitesMode = isNodeAppTemplate(service.templateId) && nodeServiceMode === 'sites';
   const isNodeService =
-    service.templateId === 'node-app' ||
-    service.templateId === 'node' ||
+    isNodeAppTemplate(service.templateId) ||
     String(service.image || '').startsWith('node');
   const isNginxStaticService =
     service.templateId === 'nginx-static' ||
@@ -4847,8 +4848,7 @@ const startServiceContainerForDeployment = async ({
 const describeRuntimeStartStep = (service = {}, runtime = {}, stageLabel = 'versão') => {
   const commandText = stringifyCommand(runtime.containerCmd).toLowerCase();
   const isNodeService =
-    service.templateId === 'node-app' ||
-    service.templateId === 'node' ||
+    isNodeAppTemplate(service.templateId) ||
     String(service.image || '').startsWith('node');
   if (isNodeService && /npm\s+(install|ci)|npm run build|yarn install|pnpm install|pnpm run build/.test(commandText)) {
     return {
@@ -5227,8 +5227,8 @@ const publishProjectArchive = async (serviceId, file, options = {}) => {
     },
     service
   );
-  const isNodeSitesMode = service.templateId === 'node-app' && nodeServiceMode === 'sites';
-  if (service.templateId === 'node-app') {
+  const isNodeSitesMode = isNodeAppTemplate(service.templateId) && nodeServiceMode === 'sites';
+  if (isNodeAppTemplate(service.templateId)) {
     pushProgress(
       isNodeSitesMode
         ? `Modo Node Sites: publicando arquivos buildados em ${nodeSiteConfig.siteFolder}.`
@@ -6310,6 +6310,27 @@ const SERVICE_TEMPLATES = [
     workdir: '/usr/src/app',
     description: 'Node.js com modos Serviço/Sites, build automático e versões publicadas',
     features: ['Serviço ou Sites', 'Build automático', 'Versões e rollback']
+  },
+  {
+    id: 'nextjs-app',
+    label: 'Next.js (app)',
+    image: 'node',
+    tag: '20-slim',
+    defaultPort: 8000,
+    containerPort: 3000,
+    volumes: [
+      { hostPath: '', containerPath: '/usr/src/app' }
+    ],
+    env: [
+      { key: 'NODE_ENV', value: 'production' },
+      { key: 'NODE_OPTIONS', value: '--max-old-space-size=2048' },
+      { key: 'NEXT_TELEMETRY_DISABLED', value: '1' },
+      { key: 'HOSTNAME', value: '0.0.0.0' }
+    ],
+    command: ['npm', 'start'],
+    workdir: '/usr/src/app',
+    description: 'Next.js com build automático, node:20-slim (glibc) e memória ampliada para build',
+    features: ['Next.js', 'Build automático', 'Versões e rollback', 'node:20-slim']
   },
   {
     id: 'postgres-db',
