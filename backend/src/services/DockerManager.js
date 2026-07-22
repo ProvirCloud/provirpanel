@@ -386,19 +386,19 @@ class DockerManager {
             : extractContainerHealthStatus(matchedContainer)
         });
       } else if (service.containerId) {
-        // Container gone — mark for removal from registry
-        deadIds.push(service.id);
+        // Container gone — keep service in registry, just mark as offline
+        aliveServices.push({ ...service, containerStatus: 'missing', healthStatus: null });
       } else {
         // No containerId yet (never started) — keep it
         aliveServices.push(service);
       }
     }
 
-    // Auto-cleanup dead services from registry
-    if (deadIds.length > 0) {
-      const cleaned = registryServices.filter((s) => !deadIds.includes(s.id));
-      this.writeRegistry(cleaned);
-    }
+    // Auto-cleanup dead services from registry — DISABLED: never auto-remove, only user can delete
+    // if (deadIds.length > 0) {
+    //   const cleaned = registryServices.filter((s) => !deadIds.includes(s.id));
+    //   this.writeRegistry(cleaned);
+    // }
 
     const knownContainerIds = new Set(aliveServices.map((service) => service.containerId).filter(Boolean));
 
