@@ -37,8 +37,16 @@ export default function NginxVisualFullPage() {
   const [availableConfigs, setAvailableConfigs] = useState<AvailableConfig[]>([])
   const [loadingConfigs, setLoadingConfigs] = useState(false)
   const [currentConfigName, setCurrentConfigName] = useState<string>('')
+  const [rawContent, setRawContent] = useState<string>('')
+  const [overwriteManual, setOverwriteManual] = useState(false)
 
   const generatedConfig = useMemo(() => generateNginxConfig(state), [state])
+
+  const hasManualEdits = useMemo(() => {
+    if (!rawContent) return false
+    const normalize = (s: string) => s.replace(/\s+/g, ' ').trim()
+    return normalize(rawContent) !== normalize(generatedConfig)
+  }, [rawContent, generatedConfig])
 
   // Load available configs on mount
   useEffect(() => {
@@ -79,16 +87,17 @@ export default function NginxVisualFullPage() {
     }
   }, [currentConfigName])
 
-  const initialLoadDone = useRef(false)
+  const initialLoadDone = useRef<string>('')
 
   useEffect(() => {
     if (!currentConfigName || availableConfigs.length === 0) return
-    // Only parse on initial load or when user explicitly selects a config
-    if (initialLoadDone.current) return
+    if (initialLoadDone.current === currentConfigName) return
     const found = availableConfigs.find((c) => c.name === currentConfigName)
     if (found) {
       setState(parseNginxConfigToState(found.content, found.name))
-      initialLoadDone.current = true
+      setRawContent(found.content)
+      setOverwriteManual(false)
+      initialLoadDone.current = currentConfigName
     }
   }, [currentConfigName, availableConfigs])
 
@@ -98,6 +107,8 @@ export default function NginxVisualFullPage() {
     if (!found) return
     setCurrentConfigName(name)
     setState(parseNginxConfigToState(found.content, found.name))
+    setRawContent(found.content)
+    setOverwriteManual(false)
     setSelected({ kind: 'domain', id: 'domain' })
   }
 
@@ -127,6 +138,8 @@ export default function NginxVisualFullPage() {
   const saveToBackend = async (filename: string, content: string, validate = false) => {
     await api.put(`/nginx/configs/${filename}`, { content, skipValidation: !validate })
     if (!currentConfigName) setCurrentConfigName(filename)
+    setRawContent(content)
+    setOverwriteManual(false)
     // Update available configs list so reload works
     setAvailableConfigs((prev) => {
       const exists = prev.some((c) => c.name === filename)
@@ -145,10 +158,17 @@ export default function NginxVisualFullPage() {
       setTimeout(() => setSaveStatus('idle'), 4000)
       return
     }
+    if (hasManualEdits && !overwriteManual) {
+      setSaveError('Este arquivo tem edições manuais. Clique em "Sobrescrever edições manuais" para confirmar.')
+      setSaveStatus('error')
+      setTimeout(() => setSaveStatus('idle'), 6000)
+      return
+    }
+    const contentToSave = hasManualEdits && overwriteManual ? generatedConfig : (rawContent && hasManualEdits ? rawContent : generatedConfig)
     setSaving(true)
     setSaveError('')
     try {
-      await saveToBackend(filename, generatedConfig, false)
+      await saveToBackend(filename, contentToSave, false)
       setSaveStatus('saved')
       setTimeout(() => setSaveStatus('idle'), 3000)
     } catch (err: any) {
@@ -169,10 +189,17 @@ export default function NginxVisualFullPage() {
       setTimeout(() => setSaveStatus('idle'), 4000)
       return
     }
+    if (hasManualEdits && !overwriteManual) {
+      setSaveError('Este arquivo tem edições manuais. Clique em "Sobrescrever edições manuais" para confirmar.')
+      setSaveStatus('error')
+      setTimeout(() => setSaveStatus('idle'), 6000)
+      return
+    }
+    const contentToSave = overwriteManual ? generatedConfig : (rawContent || generatedConfig)
     setSaving(true)
     setSaveError('')
     try {
-      await saveToBackend(filename, generatedConfig, true)
+      await saveToBackend(filename, contentToSave, true)
     } catch (err: any) {
       const msg = err?.response?.data?.error || err?.response?.data?.message || err?.message || 'Erro desconhecido'
       setSaveError(`Erro ao salvar arquivo: ${msg}`)
@@ -294,6 +321,21 @@ export default function NginxVisualFullPage() {
       </div>
 
       {/* Status bar */}
+      {hasManualEdits && (
+        <div className="flex flex-wrap items-center justify-between gap-3 rounded-[14px] border border-amber-500/30 bg-amber-500/10 px-4 py-2.5 text-[13px] text-amber-200">
+          <span>⚠️ Este arquivo contém edições manuais que não são representadas pelo editor visual. Salvar irá sobrescrevê-las.</span>
+          {!overwriteManual ? (
+            <button
+              className="rounded-lg border border-amber-400/50 bg-amber-500/20 px-3 py-1 text-xs font-semibold text-amber-100 hover:bg-amber-500/30"
+              onClick={() => setOverwriteManual(true)}
+            >
+              Sobrescrever edições manuais
+            </button>
+          ) : (
+            <span className="text-xs text-amber-300">✓ Confirmado — próximo save irá sobrescrever</span>
+          )}
+        </div>
+      )}
       {saveStatus === 'error' && (
         <div className="rounded-[14px] border border-rose-500/30 bg-rose-500/10 px-4 py-2.5 text-[13px] text-rose-200">
           {saveError || 'Erro desconhecido.'}
