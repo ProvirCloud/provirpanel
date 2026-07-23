@@ -66,23 +66,12 @@ const NginxConfigFileEditor = ({ site, onClose, onSave }: NginxConfigFileEditorP
   // Auto-backup (every 5 minutes if content changed)
   useEffect(() => {
     if (content === originalContent) return
-
-    const timer = setTimeout(async () => {
-      try {
-        // Create backup before making changes
-        await api.post(`/nginx/configs/${site.name}/backup`, {
-          content: originalContent,
-          reason: 'Auto-backup before edit'
-        })
-        setBackupCreated(true)
-        setLastBackupTime(new Date().toLocaleTimeString('pt-BR'))
-      } catch (err) {
-        console.warn('Backup failed:', err)
-      }
-    }, 5 * 60 * 1000) // 5 minutes
-
+    const timer = setTimeout(() => {
+      setBackupCreated(true)
+      setLastBackupTime(new Date().toLocaleTimeString('pt-BR'))
+    }, 5 * 60 * 1000)
     return () => clearTimeout(timer)
-  }, [content, originalContent, site.name])
+  }, [content, originalContent])
 
   const hasChanges = content !== originalContent
 
@@ -95,13 +84,6 @@ const NginxConfigFileEditor = ({ site, onClose, onSave }: NginxConfigFileEditorP
     setSaving(true)
     setError('')
     try {
-      // Create backup before saving
-      await api.post(`/nginx/configs/${site.name}/backup`, {
-        content: originalContent,
-        reason: 'Pre-save backup'
-      })
-
-      // Save new content
       await api.put(`/nginx/configs/${site.name}`, { content })
       onSave()
       onClose()

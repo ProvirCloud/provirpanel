@@ -74,6 +74,15 @@ const isRedisImage = (imageName = '') => {
   return image === 'redis' || image.startsWith('redis:') || image.includes('/redis:');
 };
 
+const applyRedisPermissionEntrypoint = (containerConfig, templateId, imageName) => {
+  if (templateId !== 'redis-cache' && !isRedisImage(imageName)) return;
+  // Roda como root, corrige permissão do /data e delega ao entrypoint oficial do Redis
+  // Isso garante que o chown ocorre em QUALQUER restart, inclusive pelo Docker daemon
+  containerConfig.User = 'root';
+  containerConfig.Entrypoint = ['sh', '-c'];
+  containerConfig.Cmd = ['chown -R 999:999 /data && chmod 755 /data && exec docker-entrypoint.sh redis-server'];
+};
+
 const resolveContainerVolumePermission = (templateId, imageName = '') => {
   if (CONTAINER_VOLUME_PERMISSIONS[templateId]) {
     return CONTAINER_VOLUME_PERMISSIONS[templateId];
@@ -3682,6 +3691,7 @@ router.post('/services', async (req, res, next) => {
     if (containerUser) {
       containerConfig.User = containerUser;
     }
+    applyRedisPermissionEntrypoint(containerConfig, templateId, imageName);
 
     progress.push(`🚀 Iniciando container...`);
     
@@ -4332,6 +4342,7 @@ router.put('/services/:id', async (req, res, next) => {
       volumes: service.volumes,
       onWarning: (message) => appendServiceLog('warn', `${service.name}: ${message}`)
     });
+    applyRedisPermissionEntrypoint(containerConfig, service.templateId, service.image);
 
     appendServiceLog('info', `Garantindo nome livre para ${service.name}`);
     await removeContainerByName(service.name);
