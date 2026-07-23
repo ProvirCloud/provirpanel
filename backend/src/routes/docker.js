@@ -5837,6 +5837,109 @@ router.delete('/services/:id/versions/:versionId', async (req, res, next) => {
   }
 });
 
+router.post('/services/:id/index-knowledge', async (req, res, next) => {
+  try {
+    const services = dockerManager.listServices();
+    const service = services.find((s) => s.id === req.params.id);
+    if (!service) return res.status(404).json({ message: 'Service not found' });
+
+    const volumes = Array.isArray(service.volumes) ? service.volumes : [];
+    const hostPath = volumes[0]?.hostPath;
+    if (!hostPath || !fs.existsSync(hostPath)) {
+      return res.status(400).json({ message: 'Volume do serviço não encontrado' });
+    }
+
+    // Coleta arquivos .md e informações do serviço
+    const documents = [];
+    const serviceMeta = {
+      source: `service:${service.name}`,
+      service: service.name,
+      serviceId: service.id,
+      panel: req.headers['x-panel-name'] || 'ProvirPanel',
+      type: 'service'
+    };
+
+    // Indexa resumo do serviço
+    const summaryLines = [
+      `Serviço: ${service.name}`,
+      `Imagem: ${service.image || '?'}`,
+      `Template: ${service.templateId || 'custom'}`,
+      `Porta: ${service.hostPort || 'auto'} -> ${service.containerPort || '?'}`,
+      `Rede: ${service.networkName || 'bridge'}`,
+      `Volume: ${hostPath}`
+    ];
+    if (Array.isArray(service.envVars)) {
+      const publicEnvs = service.envVars.filter((e) => !e.secret).map((e) => `${e.key}=${e.value}`);
+      if (publicEnvs.length) summaryLines.push(`Variáveis: ${publicEnvs.join(', ')}`);
+    }
+    documents.push({ text: summaryLines.join('\n'), metadata: { ...serviceMeta, subtype: 'summary' } });
+
+    // Busca arquivos .md recursivamente no volume
+    const findMdFiles = (dir, depth = 0) => {
+      if (depth > 4) return [];
+      const results = [];
+      try {
+        for (const entry of fs.readdirSync(dir, { withFileTypes: true })) {
+          const fullPath = path.join(dir, entry.name);
+          if (entry.isDirectory() && !['node_modules', '.git', 'vendor', 'dist', 'build', '.next'].includes(entry.name)) {
+            results.push(...findMdFiles(fullPath, depth + 1));
+          } else if (entry.isFile() && /\.mdx?$/i.test(entry.name)) {
+            results.push(fullPath);
+          }
+        }
+      } catch { /* ignore permission errors */ }
+      return results;
+    };
+
+    const mdFiles = findMdFiles(hostPath);
+    for (const filePath of mdFiles.slice(0, 20)) {
+      try {
+        const content = fs.readFileSync(filePath, 'utf8').slice(0, 8000);
+        if (content.trim().length < 30) continue;
+        const relPath = path.relative(hostPath, filePath);
+        documents.push({
+          text: `# ${relPath}\n\n${content}`,
+          metadata: { ...serviceMeta, subtype: 'documentation', file: relPath }
+        });
+      } catch { /* ignore */ }
+    }
+
+    // Envia para o gateway
+    const ZEUS_GATEWAY_URL = process.env.ZEUS_GATEWAY_URL || 'http://177.104.174.71:3002';
+    const ZEUS_API_KEY = process.env.ZEUS_API_KEY || 'zeus_master_key_change_me';
+
+    // Remove indexação anterior deste serviço
+    await fetch(`${ZEUS_GATEWAY_URL}/api/index`, {
+      method: 'DELETE',
+      headers: { 'Content-Type': 'application/json', 'x-api-key': ZEUS_API_KEY },
+      body: JSON.stringify({ filter: { must: [{ key: 'serviceId', match: { value: service.id } }] } })
+    }).catch(() => {});
+
+    const indexRes = await fetch(`${ZEUS_GATEWAY_URL}/api/index/batch`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', 'x-api-key': ZEUS_API_KEY },
+      body: JSON.stringify({ documents, chunkSize: 600, overlap: 60 }),
+      signal: AbortSignal.timeout(60000)
+    });
+
+    if (!indexRes.ok) {
+      const err = await indexRes.text();
+      return res.status(502).json({ message: `Erro ao indexar no gateway: ${err}` });
+    }
+
+    const result = await indexRes.json();
+    res.json({
+      success: true,
+      service: service.name,
+      documents: documents.length,
+      mdFiles: mdFiles.length,
+      chunks: result.chunks || 0
+    });
+  } catch (err) {
+    next(err);
+  }
+});
+
 router.post('/services/:id/rollback', async (req, res, next) => {
   try {
     const services = dockerManager.listServices();

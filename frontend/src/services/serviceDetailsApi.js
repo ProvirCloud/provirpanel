@@ -533,5 +533,9 @@ export const zeusAiApi = {
   async listRepos(org) {
     const response = await api.get(`/zeus/index-git/repos?org=${encodeURIComponent(org)}`)
     return response.data
+  },
+  async indexServiceKnowledge(serviceId) {
+    const response = await api.post(`/docker/services/${serviceId}/index-knowledge`)
+    return response.data
   }
 }

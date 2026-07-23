@@ -7,6 +7,7 @@ import {
   ArrowLeft,
   BarChart3,
   Brain,
+  Brain,
   CheckCircle2,
   Clock3,
   Copy,
@@ -1036,6 +1037,8 @@ const ServiceDeploysTab = ({
   const [error, setError] = useState('')
   const [busyVersionId, setBusyVersionId] = useState('')
   const [versionsVisible, setVersionsVisible] = useState(false)
+  const [indexingKnowledge, setIndexingKnowledge] = useState(false)
+  const [indexResult, setIndexResult] = useState(null)
   const mountedRef = useRef(true)
   const confirm = useConfirm()
   const progress = deployProgress
@@ -1046,6 +1049,19 @@ const ServiceDeploysTab = ({
   useEffect(() => () => {
     mountedRef.current = false
   }, [])
+
+  const indexKnowledge = useCallback(async () => {
+    setIndexingKnowledge(true)
+    setIndexResult(null)
+    try {
+      const result = await servicesApi.indexServiceKnowledge(service.id)
+      setIndexResult({ success: true, message: `Indexado: ${result.documents} documentos, ${result.mdFiles} arquivos .md, ${result.chunks} chunks` })
+    } catch (err) {
+      setIndexResult({ success: false, message: err.response?.data?.message || err.message || 'Erro ao indexar' })
+    } finally {
+      setIndexingKnowledge(false)
+    }
+  }, [service.id])
 
   const setDeployError = useCallback((message) => {
     if (mountedRef.current) setError(message)
@@ -1111,9 +1127,8 @@ const ServiceDeploysTab = ({
           })
           clearSelectedFile()
           await onReload()
+          void indexKnowledge()
           break
-        }
-        if (job.status === 'error' || job.status === 'failed') {
           const message = job.error || job.message || 'Falha na publicação'
           setDeployError(message)
           publishProgress({
@@ -1225,6 +1240,7 @@ const ServiceDeploysTab = ({
       })
       clearSelectedFile()
       await onReload()
+      void indexKnowledge()
     } catch (err) {
       const message = err.response?.data?.message || err.message || 'Falha na publicação'
       setDeployError(message)
@@ -1353,6 +1369,21 @@ const ServiceDeploysTab = ({
             {deployRunning ? <Loader2 className="h-4 w-4 animate-spin" /> : <UploadCloud className="h-4 w-4" />}
             {deployRunning ? 'Publicando...' : 'Publicar versão'}
           </button>
+          <button
+            className="inline-flex items-center gap-2 rounded-xl border border-violet-500/30 bg-violet-500/10 px-4 py-2 text-sm font-medium text-violet-200 transition hover:bg-violet-500/20 disabled:cursor-not-allowed disabled:opacity-50"
+            type="button"
+            onClick={indexKnowledge}
+            disabled={indexingKnowledge || deployRunning}
+            title="Indexa os arquivos .md do volume para a IA aprender sobre este sistema"
+          >
+            {indexingKnowledge ? <Loader2 className="h-4 w-4 animate-spin" /> : <Brain className="h-4 w-4" />}
+            {indexingKnowledge ? 'Indexando...' : 'Indexar na IA'}
+          </button>
+          {indexResult && (
+            <p className={`text-xs ${indexResult.success ? 'text-violet-300' : 'text-rose-300'}`}>
+              {indexResult.success ? '✓' : '✗'} {indexResult.message}
+            </p>
+          )}
           <DeployProgressPanel progress={progress} error={error || progress?.error} />
           <AiFixPanel service={service} onReload={onReload} />
         </div>
