@@ -7,7 +7,6 @@ import {
   ArrowLeft,
   BarChart3,
   Brain,
-  Brain,
   CheckCircle2,
   Clock3,
   Copy,
