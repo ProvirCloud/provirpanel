@@ -354,7 +354,11 @@ export default function NginxVisualFullPage() {
 
       {/* Bottom row: generated config · upstreams · security */}
       <div className="grid gap-4 xl:grid-cols-[minmax(0,1.6fr)_minmax(260px,0.65fr)_minmax(300px,0.72fr)]">
-        <GeneratedNginxConfig config={generatedConfig} />
+        <GeneratedNginxConfig
+          config={generatedConfig}
+          editedContent={rawContent || generatedConfig}
+          onContentChange={(val) => { setRawContent(val); setOverwriteManual(false) }}
+        />
         <UpstreamList
           state={state}
           selected={selected}
