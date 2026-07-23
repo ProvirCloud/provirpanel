@@ -288,6 +288,26 @@ export default function NginxVisualFullPage() {
             </button>
             <button
               type="button"
+              onClick={async () => {
+                try {
+                  await api.post('/nginx/reload')
+                  setSaveStatus('applied')
+                  setTimeout(() => setSaveStatus('idle'), 3000)
+                } catch (err: any) {
+                  setSaveError(err?.response?.data?.error || err?.message || 'Erro ao recarregar Nginx')
+                  setSaveStatus('error')
+                  setTimeout(() => setSaveStatus('idle'), 5000)
+                }
+              }}
+              disabled={saving}
+              className="flex items-center gap-2 rounded-[14px] border border-sky-500/40 bg-sky-500/10 px-4 py-2 text-[13px] font-medium text-sky-200 transition hover:bg-sky-500/20 disabled:opacity-40"
+              title="Recarrega o Nginx sem alterar nenhum arquivo"
+            >
+              <Play className="h-4 w-4" />
+              Recarregar Nginx
+            </button>
+            <button
+              type="button"
               onClick={handleSaveConfig}
               disabled={saving || !state.domain.primary.trim()}
               className="flex items-center gap-2 rounded-[14px] border border-white/10 bg-[rgba(10,18,34,0.7)] px-4 py-2 text-[13px] font-medium text-white/70 transition hover:bg-white/6 hover:text-white/90 disabled:opacity-40"
