@@ -204,6 +204,17 @@ router.get('/blueprints', (req, res) => {
 
 // ─── Import Docker Compose ─────────────────────────────────────────────────────
 
+router.post("/import-compose/preview", (req, res) => {
+  try {
+    const { content } = req.body;
+    if (!content) return res.status(400).json({ error: "content is required" });
+    const parsed = composeParser.parse(content, {});
+    res.json({ services: parsed.services, network: parsed.network || null });
+  } catch (err) {
+    res.status(400).json({ error: err.message });
+  }
+});
+
 router.post("/import-compose", (req, res) => {
   try {
     const { content, name, client, environment } = req.body;
