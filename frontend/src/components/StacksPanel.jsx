@@ -4494,6 +4494,7 @@ const BuildDeployButton = ({ stack, service, onDone, addToast }) => {
         const token = localStorage.getItem('provirpanel-token')
         const res = await fetch(`/api/stacks/${stack.id}/services/${service.id}/build`, {
           method: 'POST', body: fd,
+          credentials: 'include',
           headers: token ? { Authorization: `Bearer ${token}` } : {}
         })
         if (!res.ok) { push(`❌ Erro ${res.status}: ${await res.text()}`); return }
@@ -4533,6 +4534,7 @@ const BuildDeployButton = ({ stack, service, onDone, addToast }) => {
         const token = localStorage.getItem('provirpanel-token')
         const res = await fetch(`/api/stacks/${stack.id}/services/${service.id}/build/complete`, {
           method: 'POST',
+          credentials: 'include',
           headers: { 'Content-Type': 'application/json', ...(token ? { Authorization: `Bearer ${token}` } : {}) },
           body: JSON.stringify({ uploadId })
         })
