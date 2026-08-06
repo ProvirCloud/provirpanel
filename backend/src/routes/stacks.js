@@ -1052,7 +1052,9 @@ router.post('/:id/services/:svcId/build/complete', async (req, res) => {
     if (uploadId) cleanStackBuildChunks(uploadId);
     res.status(500).json({ error: err.message });
   }
-});────────────
+});
+
+// ─── Canvas Positions ──────────────────────────────────────────────────────────
 
 router.post('/:id/positions', (req, res) => {
   try {
