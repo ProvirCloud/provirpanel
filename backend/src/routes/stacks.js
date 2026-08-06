@@ -968,6 +968,27 @@ const runBuildFromArchive = async (archivePath, filename, stackId, svcId, res, r
       fs.rmdirSync(rootDir);
     }
 
+    // Localiza todos os Dockerfiles no buildDir
+    let actualBuildDir = buildDir;
+    const chosenDockerfile = req_dockerfile || svc.build?.dockerfile;
+    let resolvedDockerfile = chosenDockerfile;
+
+    if (!resolvedDockerfile) {
+      const allFound = execSync(`find "${buildDir}" -name "Dockerfile*" -not -path "*/__MACOSX/*" -not -name "*.swp"`, { encoding: 'utf8' })
+        .split('\n').map(s => s.trim()).filter(Boolean);
+      if (allFound.length === 0) throw new Error('Nenhum Dockerfile encontrado no arquivo enviado');
+      if (allFound.length > 1) {
+        res.write(`data: ${JSON.stringify({ pickDockerfile: true, options: allFound.map(f => path.relative(buildDir, f)) })}\n\n`);
+        res.end();
+        return;
+      }
+      resolvedDockerfile = path.basename(allFound[0]);
+      actualBuildDir = path.dirname(allFound[0]);
+    } else {
+      const found = execSync(`find "${buildDir}" -name "${resolvedDockerfile}" -not -path "*/__MACOSX/*" | head -1`, { encoding: 'utf8' }).trim();
+      if (found) actualBuildDir = path.dirname(found);
+    }
+
     // Salva build config no serviço
     const stacks = stackManager.readStacks();
     const si = stacks.findIndex(s => s.id === stackId);
@@ -975,35 +996,6 @@ const runBuildFromArchive = async (archivePath, filename, stackId, svcId, res, r
     if (si >= 0 && vi >= 0) {
       stacks[si].services[vi].build = { ...(stacks[si].services[vi].build || {}), context: actualBuildDir, dockerfile: resolvedDockerfile };
       stackManager.writeStacks(stacks);
-    }
-
-    // Localiza todos os Dockerfiles no buildDir
-    const { execSync: execSync2 } = require('child_process');
-    let actualBuildDir = buildDir;
-    const chosenDockerfile = req_dockerfile || svc.build?.dockerfile;
-
-    let resolvedDockerfile = chosenDockerfile;
-    if (!resolvedDockerfile) {
-      // Nenhum escolhido ainda — lista e pede escolha
-      const allFound = execSync2(`find "${buildDir}" -name "Dockerfile*" -not -path "*/__MACOSX/*" -not -name "*.swp"`, { encoding: 'utf8' })
-        .split('\n').map(s => s.trim()).filter(Boolean);
-
-      if (allFound.length === 0) throw new Error('Nenhum Dockerfile encontrado no arquivo enviado');
-
-      if (allFound.length > 1) {
-        // Retorna lista para o frontend escolher
-        send(JSON.stringify({ pickDockerfile: true, options: allFound.map(f => path.relative(buildDir, f)), buildDir }));
-        res.write(`data: ${JSON.stringify({ pickDockerfile: true, options: allFound.map(f => path.relative(buildDir, f)) })}\n\n`);
-        res.end();
-        return;
-      }
-
-      resolvedDockerfile = path.basename(allFound[0]);
-      actualBuildDir = path.dirname(allFound[0]);
-    } else {
-      // Dockerfile já escolhido — localiza no buildDir
-      const found = execSync2(`find "${buildDir}" -name "${resolvedDockerfile}" -not -path "*/__MACOSX/*" | head -1`, { encoding: 'utf8' }).trim();
-      if (found) actualBuildDir = path.dirname(found);
     }
 
     // Builda a imagem
