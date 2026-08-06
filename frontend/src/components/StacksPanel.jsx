@@ -3086,26 +3086,26 @@ const ServiceConfigPanel = memo(({ service, stack, onSave, onDelete, onClose }) 
   const addProjectFile = async (e) => {
     const file = e.target.files?.[0]; if (!file) return
     e.target.value = ""
-    upd("projectFiles", [...form.projectFiles, { name: file.name, size: file.size, type: file.type, uploading: true, progress: 0 }])
 
     const CHUNK_SIZE = 5 * 1024 * 1024 // 5 MB
     const totalChunks = Math.ceil(file.size / CHUNK_SIZE)
-    const updateFile = (patch) => upd("projectFiles", prev =>
-      prev.map(f => f.name === file.name ? { ...f, ...patch } : f)
-    )
+    const fileEntry = { name: file.name, size: file.size, type: file.type, uploading: true, progress: 0 }
+
+    setForm(f => ({ ...f, projectFiles: [...(f.projectFiles || []), fileEntry] }))
+
+    const updateFile = (patch) =>
+      setForm(f => ({ ...f, projectFiles: (f.projectFiles || []).map(x => x.name === file.name ? { ...x, ...patch } : x) }))
 
     try {
       if (totalChunks <= 1) {
-        // Arquivo pequeno — upload direto
         const formData = new FormData()
         formData.append("file", file)
         await uploadApi.post(`/stacks/${stack.id}/services/${service.id}/upload`, formData, {
           headers: { "Content-Type": "multipart/form-data" },
           timeout: 300000,
-          onUploadProgress: (e) => updateFile({ progress: Math.round((e.loaded / e.total) * 100) })
+          onUploadProgress: (ev) => updateFile({ progress: Math.round((ev.loaded / ev.total) * 100) })
         })
       } else {
-        // Arquivo grande — chunked upload
         const initRes = await api.post(`/stacks/${stack.id}/services/${service.id}/upload/init`, {
           filename: file.name, size: file.size, totalChunks
         })
@@ -3129,7 +3129,7 @@ const ServiceConfigPanel = memo(({ service, stack, onSave, onDelete, onClose }) 
 
       updateFile({ uploading: false, uploaded: true, progress: 100 })
     } catch (err) {
-      upd("projectFiles", prev => prev.filter(f => f.name !== file.name))
+      setForm(f => ({ ...f, projectFiles: (f.projectFiles || []).filter(x => x.name !== file.name) }))
     }
   }
   const removeProjectFile = (i) => upd("projectFiles", form.projectFiles.filter((_, j) => j !== i))
