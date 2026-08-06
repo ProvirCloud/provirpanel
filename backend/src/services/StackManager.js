@@ -582,6 +582,40 @@ class StackManager {
     });
   }
 
+  async _buildImage(imageFull, buildConfig, onProgress) {
+    const buildContext = path.resolve(buildConfig.context || '.');
+    const dockerfile = buildConfig.dockerfile || 'Dockerfile';
+    const buildArgs = buildConfig.args || {};
+
+    return new Promise((resolve, reject) => {
+      const tar = require('tar-fs');
+      const pack = tar.pack(buildContext);
+
+      const buildOptions = {
+        t: imageFull,
+        dockerfile,
+        buildargs: buildArgs,
+        rm: true,
+      };
+
+      this.docker.buildImage(pack, buildOptions, (err, stream) => {
+        if (err) return reject(err);
+        this.docker.modem.followProgress(stream, (fErr, output) => {
+          if (fErr) return reject(fErr);
+          const lastMsg = output && output[output.length - 1];
+          if (lastMsg && lastMsg.error) return reject(new Error(lastMsg.error));
+          if (onProgress) onProgress(`✅ Imagem ${imageFull} buildada`);
+          resolve(output);
+        }, (event) => {
+          if (onProgress && (event.stream || event.status)) {
+            const msg = (event.stream || event.status || '').replace(/\n$/, '').trim();
+            if (msg) onProgress(msg);
+          }
+        });
+      });
+    });
+  }
+
   async startService(stackId, serviceId, onProgress) {
     const stack = this.getStack(stackId);
     const svc = stack.services.find((s) => s.id === serviceId);
@@ -613,7 +647,14 @@ class StackManager {
 
     // ── Create new container (same logic as DockerPanel) ─────────────────────
     const imageFull = `${svc.image}:${svc.tag || 'latest'}`;
-    if (onProgress) onProgress(`📦 Verificando imagem ${imageFull}...`);
+
+    // ── Build local se o serviço tem build: context ───────────────────────────
+    if (svc.build && svc.build.context) {
+      if (onProgress) onProgress(`🔨 Buildando imagem ${imageFull}...`);
+      await this._buildImage(imageFull, svc.build, onProgress);
+    } else {
+      if (onProgress) onProgress(`📦 Verificando imagem ${imageFull}...`);
+    }
 
     // Resolve volume paths — create real directories like DockerPanel does
     const dockerBaseDir = process.env.DOCKER_VOLUME_BASE ||

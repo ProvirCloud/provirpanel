@@ -254,7 +254,21 @@ class ComposeParser {
       const id = generateId();
       serviceNameToId[name] = id;
 
-      const image = (config.image || '').split(':');
+      // Suporte a build: — usa nome do serviço como tag da imagem local
+      const hasBuild = !!(config.build);
+      const buildContext = hasBuild
+        ? (typeof config.build === 'string' ? config.build : (config.build.context || '.'))
+        : null;
+      const buildDockerfile = hasBuild && typeof config.build === 'object' && config.build.dockerfile
+        ? config.build.dockerfile
+        : null;
+      const buildArgs = hasBuild && typeof config.build === 'object' && config.build.args
+        ? (Array.isArray(config.build.args)
+            ? Object.fromEntries(config.build.args.map((a) => { const [k, ...v] = a.split('='); return [k, v.join('=')]; }))
+            : config.build.args)
+        : null;
+
+      const image = (config.image || (hasBuild ? name : '')).split(':');
       const imageName = image[0] || name;
       const imageTag = image[1] || 'latest';
 
@@ -264,6 +278,13 @@ class ComposeParser {
         role: inferRole(name, imageName),
         image: imageName,
         tag: imageTag,
+        ...(hasBuild && {
+          build: {
+            context: buildContext,
+            ...(buildDockerfile && { dockerfile: buildDockerfile }),
+            ...(buildArgs && { args: buildArgs }),
+          }
+        }),
         ports: parsePorts(config.ports),
         volumes: parseVolumes(config.volumes),
         env: parseEnvList(config.environment),
