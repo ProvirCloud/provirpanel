@@ -4471,14 +4471,147 @@ const ROLE_COLORS = {
   monitor: '#ec4899', storage: '#06b6d4'
 }
 
+const BuildDeployButton = ({ stack, service, onDone, addToast }) => {
+  const [open, setOpen] = useState(false)
+  const [log, setLog] = useState([])
+  const [running, setRunning] = useState(false)
+  const [done, setDone] = useState(false)
+  const fileRef = useRef(null)
+  const CHUNK_SIZE = 5 * 1024 * 1024
+
+  const runBuild = async (file) => {
+    setLog([]); setRunning(true); setDone(false)
+    const push = (msg) => setLog(prev => [...prev, msg])
+    const totalChunks = Math.ceil(file.size / CHUNK_SIZE)
+
+    try {
+      push(`📦 Enviando ${file.name} (${(file.size/1024/1024).toFixed(1)} MB) em ${totalChunks} parte(s)...`)
+
+      if (totalChunks <= 1) {
+        // Upload direto + SSE
+        const fd = new FormData()
+        fd.append('archive', file)
+        const res = await fetch(`/api/stacks/${stack.id}/services/${service.id}/build`, {
+          method: 'POST', body: fd,
+          headers: { Authorization: `Bearer ${localStorage.getItem('token')}` }
+        })
+        const reader = res.body.getReader()
+        const dec = new TextDecoder()
+        while (true) {
+          const { done: d, value } = await reader.read()
+          if (d) break
+          dec.decode(value).split('\n').forEach(line => {
+            if (line.startsWith('data:')) {
+              try {
+                const ev = JSON.parse(line.slice(5))
+                if (ev.message) push(ev.message)
+                if (ev.done) { setDone(true); if (!ev.error) { onDone(); addToast(`Build de ${service.name} concluído!`) } }
+              } catch { /* ignore */ }
+            }
+          })
+        }
+      } else {
+        // Chunked upload
+        const initRes = await api.post(`/stacks/${stack.id}/services/${service.id}/build/init`, {
+          filename: file.name, size: file.size, totalChunks
+        })
+        const { uploadId } = initRes.data
+        for (let i = 0; i < totalChunks; i++) {
+          const chunk = file.slice(i * CHUNK_SIZE, (i + 1) * CHUNK_SIZE)
+          const fd = new FormData()
+          fd.append('chunk', chunk, file.name)
+          fd.append('uploadId', uploadId)
+          fd.append('chunkIndex', String(i))
+          await uploadApi.post(`/stacks/${stack.id}/services/${service.id}/build/chunk`, fd, {
+            headers: { 'Content-Type': 'multipart/form-data' }, timeout: 120000
+          })
+          push(`↑ Parte ${i + 1}/${totalChunks} enviada`)
+        }
+        push('🔨 Iniciando build no servidor...')
+        // complete retorna SSE
+        const token = localStorage.getItem('token')
+        const res = await fetch(`/api/stacks/${stack.id}/services/${service.id}/build/complete`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
+          body: JSON.stringify({ uploadId })
+        })
+        const reader = res.body.getReader()
+        const dec = new TextDecoder()
+        while (true) {
+          const { done: d, value } = await reader.read()
+          if (d) break
+          dec.decode(value).split('\n').forEach(line => {
+            if (line.startsWith('data:')) {
+              try {
+                const ev = JSON.parse(line.slice(5))
+                if (ev.message) push(ev.message)
+                if (ev.done) { setDone(true); if (!ev.error) { onDone(); addToast(`Build de ${service.name} concluído!`) } }
+              } catch { /* ignore */ }
+            }
+          })
+        }
+      }
+    } catch (err) {
+      push(`❌ ${err.message}`)
+    } finally {
+      setRunning(false)
+    }
+  }
+
+  return (<>
+    <button onClick={() => setOpen(true)}
+      className="flex w-full items-center justify-center gap-1.5 rounded-xl border border-orange-500/30 bg-orange-500/10 py-2 text-xs text-orange-300 hover:bg-orange-500/20 mb-2">
+      🔨 Build & Deploy
+    </button>
+    {open && (
+      <div style={{ position: 'fixed', inset: 0, zIndex: 60, display: 'flex', alignItems: 'center', justifyContent: 'center', background: 'rgba(0,0,0,0.7)', backdropFilter: 'blur(6px)' }}
+        onMouseDown={e => { if (e.target === e.currentTarget && !running) setOpen(false) }}>
+        <div style={{ width: '100%', maxWidth: 520, margin: '0 16px', borderRadius: 20, border: '1px solid rgba(255,255,255,0.1)', background: 'linear-gradient(160deg,#080f1e,#060c18)', boxShadow: '0 40px 100px rgba(0,0,0,0.8)', display: 'flex', flexDirection: 'column', maxHeight: '85vh' }}>
+          <div style={{ padding: '20px 24px 16px', borderBottom: '1px solid rgba(255,255,255,0.06)' }}>
+            <div style={{ fontSize: 15, fontWeight: 700, color: '#f1f5f9' }}>🔨 Build & Deploy — {service.name}</div>
+            <div style={{ fontSize: 11, color: '#475569', marginTop: 4 }}>Envie o código-fonte (.zip ou .tar.gz) para buildar a imagem no servidor</div>
+          </div>
+          <div style={{ padding: '16px 24px', display: 'flex', flexDirection: 'column', gap: 12, flex: 1, overflow: 'hidden' }}>
+            {!running && !done && (
+              <label style={{ display: 'block', borderRadius: 14, border: '2px dashed rgba(251,146,60,0.3)', background: 'rgba(251,146,60,0.04)', padding: '28px 16px', textAlign: 'center', cursor: 'pointer' }}
+                onMouseEnter={e => e.currentTarget.style.borderColor='rgba(251,146,60,0.6)'}
+                onMouseLeave={e => e.currentTarget.style.borderColor='rgba(251,146,60,0.3)'}>
+                <input ref={fileRef} type="file" accept=".zip,.tar,.tar.gz,.tgz" style={{ display: 'none' }}
+                  onChange={e => { const f = e.target.files?.[0]; if (f) runBuild(f) }} />
+                <div style={{ fontSize: 13, fontWeight: 600, color: '#fed7aa', marginBottom: 4 }}>Clique para selecionar o arquivo</div>
+                <div style={{ fontSize: 11, color: '#78350f' }}>.zip ou .tar.gz com o código-fonte completo do projeto</div>
+                <div style={{ fontSize: 10, color: '#475569', marginTop: 6 }}>Dockerfile esperado: <code style={{ color: '#fb923c' }}>{service.build?.dockerfile || 'Dockerfile'}</code></div>
+              </label>
+            )}
+            {log.length > 0 && (
+              <div style={{ flex: 1, overflowY: 'auto', background: 'rgba(0,0,0,0.4)', borderRadius: 10, border: '1px solid rgba(255,255,255,0.06)', padding: '10px 12px', fontFamily: 'ui-monospace,monospace', fontSize: 11, color: '#94a3b8', display: 'flex', flexDirection: 'column', gap: 2, maxHeight: 300 }}>
+                {log.map((l, i) => <div key={i} style={{ color: l.startsWith('❌') ? '#f87171' : l.startsWith('✅') ? '#34d399' : '#94a3b8' }}>{l}</div>)}
+              </div>
+            )}
+          </div>
+          <div style={{ padding: '12px 24px', borderTop: '1px solid rgba(255,255,255,0.06)', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+            <button onClick={() => { if (!running) setOpen(false) }} style={{ fontSize: 11, color: '#475569', background: 'none', border: 'none', cursor: running ? 'default' : 'pointer', opacity: running ? 0.4 : 1 }}>Fechar</button>
+            {done && (
+              <button onClick={() => { setOpen(false); setLog([]); setDone(false) }}
+                style={{ fontSize: 12, fontWeight: 600, color: '#fff', background: 'linear-gradient(135deg,#10b981,#059669)', border: 'none', borderRadius: 10, padding: '8px 20px', cursor: 'pointer' }}>
+                ✅ Concluído
+              </button>
+            )}
+          </div>
+        </div>
+      </div>
+    )}
+  </>)
+}
+
 const ImportComposeModal = ({ onImported, onClose }) => {
-  const [step, setStep] = useState('edit') // 'edit' | 'preview'
+  const [step, setStep] = useState('edit')
   const [content, setContent] = useState('')
   const [name, setName] = useState('')
   const [environment, setEnvironment] = useState('production')
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState('')
-  const [preview, setPreview] = useState(null) // { services, network }
+  const [preview, setPreview] = useState(null)
 
   const inp = { width: '100%', borderRadius: 10, border: '1px solid rgba(255,255,255,0.09)', background: 'rgba(255,255,255,0.04)', padding: '8px 12px', fontSize: 12, color: '#f1f5f9', outline: 'none', boxSizing: 'border-box' }
 
@@ -4493,35 +4626,27 @@ const ImportComposeModal = ({ onImported, onClose }) => {
 
   const handlePreview = async () => {
     if (!content.trim()) { setError('Cole ou carregue um docker-compose.yml'); return }
-    setLoading(true)
-    setError('')
+    setLoading(true); setError('')
     try {
       const res = await api.post('/stacks/import-compose/preview', { content })
       setPreview(res.data)
       setStep('preview')
     } catch (err) {
-      setError(err.response?.data?.error || err.message || 'Erro ao analisar o compose')
-    } finally {
-      setLoading(false)
-    }
+      setError(err.response?.data?.error || err.message)
+    } finally { setLoading(false) }
   }
 
+  const hasBuildServices = preview?.services?.some(s => s.build)
+
   const handleImport = async () => {
-    setLoading(true)
-    setError('')
+    setLoading(true); setError('')
     try {
-      const res = await api.post('/stacks/import-compose', {
-        content,
-        name: name.trim() || undefined,
-        environment
-      })
+      const res = await api.post('/stacks/import-compose', { content, name: name.trim() || undefined, environment })
       onImported(res.data)
     } catch (err) {
-      setError(err.response?.data?.error || err.message || 'Erro ao importar')
+      setError(err.response?.data?.error || err.message)
       setStep('edit')
-    } finally {
-      setLoading(false)
-    }
+    } finally { setLoading(false) }
   }
 
   return (
@@ -4645,6 +4770,16 @@ const ImportComposeModal = ({ onImported, onClose }) => {
                 )
               })}
             </div>
+            {/* Aviso de build local */}
+            {hasBuildServices && (
+              <div style={{ display: 'flex', alignItems: 'flex-start', gap: 10, borderRadius: 10, border: '1px solid rgba(251,146,60,0.3)', background: 'rgba(251,146,60,0.06)', padding: '10px 14px' }}>
+                <span style={{ fontSize: 16, flexShrink: 0 }}>🔨</span>
+                <div style={{ fontSize: 11, color: '#fed7aa', lineHeight: 1.5 }}>
+                  <strong>Serviços com build local detectados.</strong> A stack será criada normalmente.
+                  Após importar, clique em <strong>"Build & Deploy"</strong> em cada serviço para enviar o código-fonte e buildar a imagem no servidor.
+                </div>
+              </div>
+            )}
             {/* Stack name confirmation */}
             <div style={{ borderRadius: 10, border: '1px solid rgba(16,185,129,0.2)', background: 'rgba(16,185,129,0.05)', padding: '10px 14px', display: 'flex', alignItems: 'center', gap: 10 }}>
               <CheckCircle2 size={14} style={{ color: '#10b981', flexShrink: 0 }} />
@@ -5797,6 +5932,9 @@ export default function StacksPanel() {
                   onClose={() => setSelectedService(null)}
                 />
                 <div className="mt-3 flex gap-2">
+                  {selectedService.build && (
+                    <BuildDeployButton stack={selectedStack} service={selectedService} onDone={() => syncStack(selectedStack)} addToast={addToast} />
+                  )}
                   <button onClick={() => startService(selectedService)}
                     className="flex flex-1 items-center justify-center gap-1.5 rounded-xl border border-emerald-500/30 bg-emerald-500/10 py-2 text-xs text-emerald-300 hover:bg-emerald-500/20">
                     <Play size={12} /> Iniciar

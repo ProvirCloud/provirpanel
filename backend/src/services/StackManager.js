@@ -323,6 +323,7 @@ class StackManager {
       role: svc.role || 'runtime',
       image: svc.image,
       tag: svc.tag || 'latest',
+      ...(svc.build ? { build: svc.build } : {}),
       ports: svc.ports || [],
       volumes: svc.volumes || [],
       env: svc.env || [],
@@ -451,6 +452,7 @@ class StackManager {
       role: serviceData.role || 'runtime',
       image: serviceData.image,
       tag: serviceData.tag || 'latest',
+      ...(serviceData.build ? { build: serviceData.build } : {}),
       ports: serviceData.ports || [],
       volumes: serviceData.volumes || [],
       env: serviceData.env || [],
@@ -649,7 +651,13 @@ class StackManager {
     const imageFull = `${svc.image}:${svc.tag || 'latest'}`;
 
     // ── Build local se o serviço tem build: context ───────────────────────────
-    if (svc.build && svc.build.context) {
+    if (svc.build) {
+      if (!svc.build.context || !require('fs').existsSync(svc.build.context)) {
+        throw new Error(
+          `Serviço "${svc.name}" requer build local mas o contexto não está disponível no servidor. ` +
+          `Use a opção "Build & Deploy" para enviar o código-fonte.`
+        );
+      }
       if (onProgress) onProgress(`🔨 Buildando imagem ${imageFull}...`);
       await this._buildImage(imageFull, svc.build, onProgress);
     } else {
@@ -721,7 +729,18 @@ class StackManager {
     // Use DockerManager.runContainer — same as DockerPanel
     const DockerManager = require('./DockerManager');
     const dockerManager = new DockerManager();
-    const container = await dockerManager.runContainer(imageFull, containerConfig, onProgress);
+
+    // Se a imagem foi buildada localmente, cria o container direto sem pull
+    let container;
+    if (svc.build && svc.build.context) {
+      if (onProgress) onProgress(`🔨 Criando container...`);
+      container = await this.docker.createContainer({ Image: imageFull, ...containerConfig });
+      await container.start();
+      const info = await container.inspect();
+      container = { Id: info.Id, id: info.Id };
+    } else {
+      container = await dockerManager.runContainer(imageFull, containerConfig, onProgress);
+    }
 
     const containerId = container.Id || container.id;
     try {

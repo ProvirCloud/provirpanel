@@ -217,11 +217,21 @@ router.post("/import-compose/preview", (req, res) => {
 
 router.post("/import-compose", (req, res) => {
   try {
-    const { content, name, client, environment } = req.body;
+    const { content, name, client, environment, buildContextPath } = req.body;
     if (!content) {
       return res.status(400).json({ error: "content (docker-compose.yml) is required" });
     }
     const parsed = composeParser.parse(content, { name, client, environment });
+
+    // Se informado, sobrescreve o context de todos os serviços com build:
+    if (buildContextPath) {
+      for (const svc of parsed.services) {
+        if (svc.build) {
+          svc.build.context = buildContextPath;
+        }
+      }
+    }
+
     const stack = stackManager.createStack(parsed);
 
     logAction("stack.create", {
@@ -882,7 +892,167 @@ router.post('/:id/services/:svcId/upload/complete', async (req, res) => {
   }
 });
 
-// ─── Canvas Positions ──────────────────────────────────────────────────────────
+// ─── Build de serviço a partir de upload de código-fonte ────────────────────────
+// POST /:id/services/:svcId/build  — upload do zip + docker build (SSE)
+// POST /:id/services/:svcId/build/init
+// POST /:id/services/:svcId/build/chunk
+// POST /:id/services/:svcId/build/complete
+
+const STACK_BUILD_ROOT = path.join(os.tmpdir(), 'provirpanel-stack-builds');
+fs.mkdirSync(STACK_BUILD_ROOT, { recursive: true });
+
+const stackBuildChunkDir = (uploadId) => path.join(STACK_BUILD_ROOT, sanitizeStackUploadId(uploadId));
+
+const writeStackBuildMeta = (uploadId, meta) => {
+  const dir = stackBuildChunkDir(uploadId);
+  fs.mkdirSync(dir, { recursive: true });
+  fs.writeFileSync(path.join(dir, 'meta.json'), JSON.stringify(meta));
+};
+
+const readStackBuildMeta = (uploadId) => {
+  const dir = stackBuildChunkDir(uploadId);
+  const p = path.join(dir, 'meta.json');
+  if (!fs.existsSync(p)) throw new Error('Upload não encontrado');
+  return { dir, meta: JSON.parse(fs.readFileSync(p, 'utf8')) };
+};
+
+const assembleStackBuildChunks = (uploadId) => {
+  const { dir, meta } = readStackBuildMeta(uploadId);
+  const out = path.join(dir, meta.filename);
+  fs.writeFileSync(out, '');
+  for (let i = 0; i < meta.totalChunks; i++) {
+    const chunk = path.join(dir, `chunk-${i}`);
+    if (!fs.existsSync(chunk)) throw new Error(`Chunk ${i + 1}/${meta.totalChunks} não recebido`);
+    fs.appendFileSync(out, fs.readFileSync(chunk));
+  }
+  return { archivePath: out, filename: meta.filename, meta };
+};
+
+const cleanStackBuildChunks = (uploadId) => {
+  try { fs.rmSync(stackBuildChunkDir(uploadId), { recursive: true, force: true }); } catch { /* ignore */ }
+};
+
+const runBuildFromArchive = async (archivePath, filename, stackId, svcId, res) => {
+  res.setHeader('Content-Type', 'text/event-stream');
+  res.setHeader('Cache-Control', 'no-cache');
+  res.setHeader('Connection', 'keep-alive');
+  res.flushHeaders();
+
+  const send = (msg) => res.write(`data: ${JSON.stringify({ message: msg })}\n\n`);
+
+  try {
+    const stack = stackManager.getStack(stackId);
+    const svc = stack.services.find((s) => s.id === svcId);
+    if (!svc) throw new Error('Serviço não encontrado');
+    if (!svc.build) throw new Error('Serviço não tem configuração de build');
+
+    // Extrai o zip em diretório permanente do serviço
+    const buildDir = path.join(STACK_BUILD_ROOT, `${stackId.slice(0, 8)}-${svcId.slice(0, 8)}`);
+    fs.mkdirSync(buildDir, { recursive: true });
+
+    send(`📦 Extraindo ${filename}...`);
+    const lower = filename.toLowerCase();
+    const { execSync } = require('child_process');
+    if (lower.endsWith('.zip')) execSync(`unzip -o "${archivePath}" -d "${buildDir}"`, { stdio: 'pipe' });
+    else if (lower.endsWith('.tar.gz') || lower.endsWith('.tgz')) execSync(`tar -xzf "${archivePath}" -C "${buildDir}"`, { stdio: 'pipe' });
+    else if (lower.endsWith('.tar')) execSync(`tar -xf "${archivePath}" -C "${buildDir}"`, { stdio: 'pipe' });
+    else throw new Error('Formato não suportado. Use .zip, .tar ou .tar.gz');
+
+    // Flatten single root dir
+    const entries = fs.readdirSync(buildDir, { withFileTypes: true });
+    const dirs = entries.filter(e => e.isDirectory() && e.name !== '__MACOSX');
+    const files = entries.filter(e => e.isFile() && e.name !== '.DS_Store');
+    if (dirs.length === 1 && files.length === 0) {
+      const rootDir = path.join(buildDir, dirs[0].name);
+      for (const entry of fs.readdirSync(rootDir))
+        fs.renameSync(path.join(rootDir, entry), path.join(buildDir, entry));
+      fs.rmdirSync(rootDir);
+    }
+
+    // Atualiza o context do serviço no stacks.json
+    const stacks = stackManager.readStacks();
+    const si = stacks.findIndex(s => s.id === stackId);
+    const vi = si >= 0 ? stacks[si].services.findIndex(s => s.id === svcId) : -1;
+    if (si >= 0 && vi >= 0) {
+      stacks[si].services[vi].build.context = buildDir;
+      stackManager.writeStacks(stacks);
+    }
+
+    // Builda a imagem
+    const imageFull = `${svc.image}:${svc.tag || 'latest'}`;
+    const dockerfile = svc.build.dockerfile || 'Dockerfile';
+    const buildArgs = svc.build.args || {};
+    send(`🔨 Buildando ${imageFull}...`);
+
+    const DockerManager = require('../services/DockerManager');
+    const dm = new DockerManager();
+    await dm.buildImage(imageFull, buildDir, send, { dockerfileName: dockerfile, buildArgs });
+
+    send(`✅ Build concluído! Imagem ${imageFull} pronta.`);
+    res.write(`data: ${JSON.stringify({ done: true, imageFull })}\n\n`);
+  } catch (err) {
+    send(`❌ Erro: ${err.message}`);
+    res.write(`data: ${JSON.stringify({ done: true, error: err.message })}\n\n`);
+  } finally {
+    try { fs.unlinkSync(archivePath); } catch { /* ignore */ }
+    res.end();
+  }
+};
+
+// Build direto (arquivo único)
+router.post('/:id/services/:svcId/build', stackUpload.single('archive'), async (req, res) => {
+  if (!req.file) return res.status(400).json({ error: 'Arquivo obrigatório' });
+  await runBuildFromArchive(req.file.path, req.file.originalname || 'archive.zip', req.params.id, req.params.svcId, res);
+});
+
+// Build chunked — init
+router.post('/:id/services/:svcId/build/init', (req, res) => {
+  try {
+    const stack = stackManager.getStack(req.params.id);
+    const svc = stack.services.find(s => s.id === req.params.svcId);
+    if (!svc) return res.status(404).json({ error: 'Serviço não encontrado' });
+    const totalChunks = Number(req.body?.totalChunks || 0);
+    if (!Number.isInteger(totalChunks) || totalChunks < 1)
+      return res.status(400).json({ error: 'totalChunks inválido' });
+    const uploadId = crypto.randomUUID();
+    const filename = String(req.body?.filename || 'archive.zip').replace(/[^a-zA-Z0-9._-]/g, '_');
+    writeStackBuildMeta(uploadId, { stackId: req.params.id, svcId: req.params.svcId, filename, size: Number(req.body?.size || 0), totalChunks });
+    res.json({ uploadId });
+  } catch (err) { res.status(500).json({ error: err.message }); }
+});
+
+// Build chunked — chunk
+router.post('/:id/services/:svcId/build/chunk', stackUpload.single('chunk'), (req, res) => {
+  try {
+    if (!req.file) return res.status(400).json({ error: 'Chunk obrigatório' });
+    const { dir, meta } = readStackBuildMeta(req.body?.uploadId);
+    if (meta.stackId !== req.params.id || meta.svcId !== req.params.svcId)
+      return res.status(400).json({ error: 'Upload inválido' });
+    const idx = Number(req.body?.chunkIndex);
+    if (!Number.isInteger(idx) || idx < 0 || idx >= meta.totalChunks)
+      return res.status(400).json({ error: 'chunkIndex inválido' });
+    fs.renameSync(req.file.path, path.join(dir, `chunk-${idx}`));
+    res.json({ ok: true, chunkIndex: idx });
+  } catch (err) {
+    if (req.file?.path) fs.unlink(req.file.path, () => {});
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// Build chunked — complete (SSE)
+router.post('/:id/services/:svcId/build/complete', async (req, res) => {
+  const uploadId = req.body?.uploadId;
+  try {
+    const { archivePath, filename, meta } = assembleStackBuildChunks(uploadId);
+    if (meta.stackId !== req.params.id || meta.svcId !== req.params.svcId)
+      return res.status(400).json({ error: 'Upload inválido' });
+    cleanStackBuildChunks(uploadId);
+    await runBuildFromArchive(archivePath, filename, req.params.id, req.params.svcId, res);
+  } catch (err) {
+    if (uploadId) cleanStackBuildChunks(uploadId);
+    res.status(500).json({ error: err.message });
+  }
+});────────────
 
 router.post('/:id/positions', (req, res) => {
   try {
