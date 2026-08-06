@@ -944,7 +944,6 @@ const runBuildFromArchive = async (archivePath, filename, stackId, svcId, res) =
     const stack = stackManager.getStack(stackId);
     const svc = stack.services.find((s) => s.id === svcId);
     if (!svc) throw new Error('Serviço não encontrado');
-    if (!svc.build) throw new Error('Serviço não tem configuração de build');
 
     // Extrai o zip em diretório permanente do serviço
     const buildDir = path.join(STACK_BUILD_ROOT, `${stackId.slice(0, 8)}-${svcId.slice(0, 8)}`);
@@ -969,19 +968,19 @@ const runBuildFromArchive = async (archivePath, filename, stackId, svcId, res) =
       fs.rmdirSync(rootDir);
     }
 
-    // Atualiza o context do serviço no stacks.json
+    // Atualiza/cria o build config do serviço no stacks.json
     const stacks = stackManager.readStacks();
     const si = stacks.findIndex(s => s.id === stackId);
     const vi = si >= 0 ? stacks[si].services.findIndex(s => s.id === svcId) : -1;
     if (si >= 0 && vi >= 0) {
-      stacks[si].services[vi].build.context = buildDir;
+      stacks[si].services[vi].build = { ...(stacks[si].services[vi].build || {}), context: buildDir };
       stackManager.writeStacks(stacks);
     }
 
     // Builda a imagem
-    const imageFull = `${svc.image}:${svc.tag || 'latest'}`;
-    const dockerfile = svc.build.dockerfile || 'Dockerfile';
-    const buildArgs = svc.build.args || {};
+    const imageFull = `${svc.image || svc.name}:${svc.tag || 'latest'}`;
+    const dockerfile = svc.build?.dockerfile || 'Dockerfile';
+    const buildArgs = svc.build?.args || {};
     send(`🔨 Buildando ${imageFull}...`);
 
     const DockerManager = require('../services/DockerManager');
