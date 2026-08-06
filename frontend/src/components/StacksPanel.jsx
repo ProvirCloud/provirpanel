@@ -4493,7 +4493,7 @@ const BuildDeployButton = ({ stack, service, onDone, addToast }) => {
         fd.append('archive', file)
         const res = await fetch(`/api/stacks/${stack.id}/services/${service.id}/build`, {
           method: 'POST', body: fd,
-          headers: { Authorization: `Bearer ${localStorage.getItem('token')}` }
+          headers: { Authorization: `Bearer ${localStorage.getItem('provirpanel-token')}` }
         })
         const reader = res.body.getReader()
         const dec = new TextDecoder()
@@ -4529,7 +4529,7 @@ const BuildDeployButton = ({ stack, service, onDone, addToast }) => {
         }
         push('🔨 Iniciando build no servidor...')
         // complete retorna SSE
-        const token = localStorage.getItem('token')
+        const token = localStorage.getItem('provirpanel-token')
         const res = await fetch(`/api/stacks/${stack.id}/services/${service.id}/build/complete`, {
           method: 'POST',
           headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
