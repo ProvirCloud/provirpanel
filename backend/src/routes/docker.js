@@ -6552,6 +6552,28 @@ const SERVICE_TEMPLATES = [
     description: 'Plataforma de automação de workflows com suporte a PostgreSQL e webhooks',
     features: ['Automação', 'Webhooks', 'PostgreSQL', 'Volume persistente'],
     hasProjectOption: false
+  },
+  {
+    id: 'pnpm-monorepo',
+    label: 'pnpm Monorepo',
+    image: 'node',
+    tag: '22',
+    defaultPort: 3000,
+    containerPort: 3000,
+    volumes: [],
+    env: [
+      { key: 'NODE_ENV', value: 'production' },
+      { key: 'PORT', value: '3000' }
+    ],
+    description: 'Projeto pnpm monorepo com Dockerfile customizado. Suporta workspaces, Vite, Next.js e APIs.',
+    features: ['pnpm workspaces', 'Build via Dockerfile', 'Vite / Next.js / API', 'Upload de código-fonte'],
+    hasProjectOption: true,
+    isPnpmMonorepo: true,
+    pnpmDefaults: {
+      workspace: '',
+      dockerfile: 'Dockerfile',
+      buildArgs: {}
+    }
   }
 ];
 

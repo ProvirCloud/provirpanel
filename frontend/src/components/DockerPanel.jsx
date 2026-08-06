@@ -379,6 +379,10 @@ const getInstallWizardHighlights = (tpl = {}, form = {}) => {
     highlights.push('MySQL mantém os dados no volume configurado e usa as variáveis padrão do template.')
   } else if (templateId === 'redis-cache') {
     highlights.push('Redis usa /data como volume quando você quiser persistência do cache.')
+  } else if (templateId === 'pnpm-monorepo') {
+    highlights.push('Projeto pnpm monorepo: envie o código-fonte (.zip) e o painel builda via Dockerfile.')
+    highlights.push('O Dockerfile é detectado automaticamente. Se houver vários, você escolhe qual usar.')
+    highlights.push('Binários nativos (rollup, esbuild) são instalados corretamente para Linux x64.')
   } else {
     highlights.push('A imagem será criada com porta, rede, volumes e variáveis definidos neste formulário.')
   }
@@ -789,6 +793,12 @@ const TEMPLATE_APP_META = {
     icon: Activity,
     accent: 'from-orange-500/20 to-amber-500/5',
     border: 'border-orange-500/30'
+  },
+  'pnpm-monorepo': {
+    category: 'runtime',
+    icon: Cpu,
+    accent: 'from-yellow-500/20 to-orange-500/5',
+    border: 'border-yellow-500/30'
   },
   default: {
     category: 'other',
@@ -2893,6 +2903,7 @@ const DockerPanel = ({ showPageIntro = true }) => {
     const template = templates.find((t) => t.id === wizard.id || t.id === wizard.templateId)
     const tpl = template || wizard
     const isNodeTemplate = tpl?.id === 'node-app'
+    const isPnpmMonorepo = tpl?.id === 'pnpm-monorepo'
     const isNodeSitesMode =
       isNodeTemplate && serviceForm.nodeServiceMode === NODE_SERVICE_MODES.sites
     const supportsProjectUpload = !NON_PROJECT_TEMPLATE_IDS.has(tpl?.id)
@@ -3062,6 +3073,46 @@ const DockerPanel = ({ showPageIntro = true }) => {
               </p>
             )}
           </div>
+
+          {isPnpmMonorepo && (
+            <div className="rounded-xl border border-yellow-500/20 bg-yellow-500/5 p-4 flex flex-col gap-3">
+              <p className="text-sm font-semibold text-yellow-200">Configuração pnpm Monorepo</p>
+              <div className="grid gap-3 md:grid-cols-2">
+                <div className="grid gap-1">
+                  <label className="text-xs text-slate-400">Workspace / filtro pnpm</label>
+                  <input
+                    className="rounded-xl border border-slate-700 bg-slate-950 px-3 py-2 text-sm text-white placeholder-slate-600"
+                    placeholder="@workspace/api-server"
+                    value={serviceForm.pnpmWorkspace || ''}
+                    onChange={(e) => setServiceForm((p) => ({ ...p, pnpmWorkspace: e.target.value }))}
+                  />
+                  <p className="text-[10px] text-slate-500">Usado em: pnpm --filter &lt;workspace&gt; run build</p>
+                </div>
+                <div className="grid gap-1">
+                  <label className="text-xs text-slate-400">Dockerfile</label>
+                  <input
+                    className="rounded-xl border border-slate-700 bg-slate-950 px-3 py-2 text-sm text-white placeholder-slate-600"
+                    placeholder="Dockerfile.api"
+                    value={serviceForm.pnpmDockerfile || ''}
+                    onChange={(e) => setServiceForm((p) => ({ ...p, pnpmDockerfile: e.target.value }))}
+                  />
+                  <p className="text-[10px] text-slate-500">Deixe vazio para detectar automaticamente</p>
+                </div>
+              </div>
+              <div className="grid gap-1">
+                <label className="text-xs text-slate-400">VITE_API_URL (opcional)</label>
+                <input
+                  className="rounded-xl border border-slate-700 bg-slate-950 px-3 py-2 text-sm text-white placeholder-slate-600"
+                  placeholder="https://api.seudominio.com"
+                  value={serviceForm.pnpmViteApiUrl || ''}
+                  onChange={(e) => setServiceForm((p) => ({ ...p, pnpmViteApiUrl: e.target.value }))}
+                />
+              </div>
+              <div className="rounded-lg border border-yellow-500/15 bg-yellow-500/5 px-3 py-2 text-[11px] text-yellow-200/70">
+                📦 Após criar o serviço, use o botão <strong>Build &amp; Deploy</strong> para enviar o código-fonte (.zip) e buildar no servidor.
+              </div>
+            </div>
+          )}
 
           {isNodeTemplate && (
             <div className="rounded-xl border border-cyan-500/20 bg-cyan-500/5 p-4">
