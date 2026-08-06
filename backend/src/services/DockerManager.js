@@ -582,12 +582,10 @@ class DockerManager {
         onProgress(`🔨 Construindo imagem ${imageName} a partir de ${contextPath}...`);
       }
 
-      const { execFile } = require('child_process');
+      const { spawn } = require('child_process');
       return new Promise((resolve, reject) => {
-        const args = ['build', '-t', imageName];
-        if (options.dockerfileName) {
-          args.push('-f', options.dockerfileName);
-        }
+        const args = ['build', '--progress=plain', '-t', imageName];
+        if (options.dockerfileName) args.push('-f', options.dockerfileName);
         if (options.buildArgs && typeof options.buildArgs === 'object') {
           Object.entries(options.buildArgs).forEach(([key, value]) => {
             args.push('--build-arg', `${key}=${value}`);
@@ -595,41 +593,29 @@ class DockerManager {
         }
         args.push('.');
 
-        const child = execFile('docker', args, {
+        const child = spawn('docker', args, {
           cwd: contextPath,
-          env: { ...process.env, DOCKER_BUILDKIT: '1' },
-          maxBuffer: 50 * 1024 * 1024,
-          timeout: 600000
-        }, (err, stdout, stderr) => {
-          if (err) {
-            const errorOutput = stderr || stdout || err.message;
-            if (onProgress) {
-              onProgress(`❌ Build falhou: ${errorOutput.trim().split('\n').pop()}`);
-            }
-            return reject(new Error(errorOutput.trim().split('\n').pop() || err.message));
-          }
-          if (onProgress) {
-            onProgress(`✅ Imagem ${imageName} construída com sucesso`);
-          }
-          return resolve(stdout);
+          env: { ...process.env, DOCKER_BUILDKIT: '1' }
         });
 
-        if (child.stdout && onProgress) {
-          child.stdout.on('data', (data) => {
-            String(data).split('\n').forEach((line) => {
-              const trimmed = line.trim();
-              if (trimmed) onProgress(trimmed);
-            });
+        const emit = (data) => {
+          if (!onProgress) return;
+          String(data).split('\n').forEach((line) => {
+            const trimmed = line.trim();
+            if (trimmed) onProgress(trimmed);
           });
-        }
-        if (child.stderr && onProgress) {
-          child.stderr.on('data', (data) => {
-            String(data).split('\n').forEach((line) => {
-              const trimmed = line.trim();
-              if (trimmed) onProgress(trimmed);
-            });
-          });
-        }
+        };
+
+        child.stdout.on('data', emit);
+        child.stderr.on('data', emit);
+
+        child.on('close', (code) => {
+          if (code !== 0) return reject(new Error(`docker build saiu com código ${code}`));
+          if (onProgress) onProgress(`✅ Imagem ${imageName} construída com sucesso`);
+          resolve();
+        });
+
+        child.on('error', reject);
       });
     } catch (err) {
       if (onProgress) {
