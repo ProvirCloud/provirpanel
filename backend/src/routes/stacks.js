@@ -703,88 +703,181 @@ router.get("/:id/services/:svcId/logs", async (req, res) => {
 
 
 
-// ─── Upload de arquivos para serviço ──────────────────────────────────────────
+// ─── Upload de arquivos para serviço (chunked) ───────────────────────────────
 
 const multer = require("multer");
 const os = require("os");
+const crypto = require("crypto");
 const stackUpload = multer({ dest: os.tmpdir() });
 
-router.post("/:id/services/:svcId/upload", stackUpload.single("file"), async (req, res) => {
+const STACK_CHUNK_ROOT = path.join(os.tmpdir(), 'provirpanel-stack-uploads');
+fs.mkdirSync(STACK_CHUNK_ROOT, { recursive: true });
+
+const sanitizeStackUploadId = (id) => {
+  const v = String(id || '');
+  if (!/^[a-f0-9-]{36}$/i.test(v)) throw new Error('uploadId inválido');
+  return v;
+};
+
+const stackChunkDir = (uploadId) => path.join(STACK_CHUNK_ROOT, sanitizeStackUploadId(uploadId));
+
+const writeStackChunkMeta = (uploadId, meta) => {
+  const dir = stackChunkDir(uploadId);
+  fs.mkdirSync(dir, { recursive: true });
+  fs.writeFileSync(path.join(dir, 'meta.json'), JSON.stringify(meta));
+};
+
+const readStackChunkMeta = (uploadId) => {
+  const dir = stackChunkDir(uploadId);
+  const p = path.join(dir, 'meta.json');
+  if (!fs.existsSync(p)) throw new Error('Upload não encontrado');
+  return { dir, meta: JSON.parse(fs.readFileSync(p, 'utf8')) };
+};
+
+const assembleStackChunks = (uploadId) => {
+  const { dir, meta } = readStackChunkMeta(uploadId);
+  const out = path.join(dir, meta.filename);
+  fs.writeFileSync(out, '');
+  for (let i = 0; i < meta.totalChunks; i++) {
+    const chunk = path.join(dir, `chunk-${i}`);
+    if (!fs.existsSync(chunk)) throw new Error(`Chunk ${i + 1}/${meta.totalChunks} não recebido`);
+    fs.appendFileSync(out, fs.readFileSync(chunk));
+  }
+  return { archivePath: out, filename: meta.filename };
+};
+
+const cleanStackChunks = (uploadId) => {
+  try { fs.rmSync(stackChunkDir(uploadId), { recursive: true, force: true }); } catch { /* ignore */ }
+};
+
+const extractAndSaveUpload = async (archivePath, originalName, stackId, svcId) => {
+  const stack = stackManager.getStack(stackId);
+  const svc = stack.services.find((s) => s.id === svcId);
+  if (!svc) throw new Error('Serviço não encontrado');
+
+  const dockerBaseDir = process.env.DOCKER_VOLUME_BASE ||
+    path.join(process.cwd(), 'backend/data/projects/docker');
+  const containerName = `provir-${stackId.slice(0, 8)}-${svc.name}`.replace(/[^a-zA-Z0-9_.-]/g, '-');
+  const serviceDir = path.join(dockerBaseDir, containerName);
+  fs.mkdirSync(serviceDir, { recursive: true });
+
+  const volume = (svc.volumes || [])[0];
+  let targetDir = serviceDir;
+  if (volume?.host) {
+    if (volume.host.startsWith('/')) targetDir = volume.host;
+    else if (volume.host.startsWith('./') || volume.host.startsWith('../'))
+      targetDir = path.join(serviceDir, volume.host.replace(/^\.\/?/, ''));
+  }
+  fs.mkdirSync(targetDir, { recursive: true });
+
+  const lower = originalName.toLowerCase();
+  const { execSync } = require('child_process');
+  if (lower.endsWith('.zip')) execSync(`unzip -o "${archivePath}" -d "${targetDir}"`, { stdio: 'pipe' });
+  else if (lower.endsWith('.tar.gz') || lower.endsWith('.tgz')) execSync(`tar -xzf "${archivePath}" -C "${targetDir}"`, { stdio: 'pipe' });
+  else if (lower.endsWith('.tar')) execSync(`tar -xf "${archivePath}" -C "${targetDir}"`, { stdio: 'pipe' });
+  else fs.copyFileSync(archivePath, path.join(targetDir, originalName));
+
+  // Flatten single root dir
+  const entries = fs.readdirSync(targetDir, { withFileTypes: true });
+  const dirs = entries.filter((e) => e.isDirectory() && e.name !== '__MACOSX');
+  const files = entries.filter((e) => e.isFile() && e.name !== '.DS_Store');
+  if (dirs.length === 1 && files.length === 0) {
+    const rootDir = path.join(targetDir, dirs[0].name);
+    for (const entry of fs.readdirSync(rootDir))
+      fs.renameSync(path.join(rootDir, entry), path.join(targetDir, entry));
+    fs.rmdirSync(rootDir);
+  }
+
+  // Update volume in stacks.json
+  const stacks = stackManager.readStacks();
+  const si = stacks.findIndex((s) => s.id === stackId);
+  if (si >= 0) {
+    const vi = stacks[si].services.findIndex((s) => s.id === svcId);
+    if (vi >= 0) {
+      if (!stacks[si].services[vi].volumes?.length)
+        stacks[si].services[vi].volumes = [{ host: targetDir, container: '/app' }];
+      else
+        stacks[si].services[vi].volumes[0].host = targetDir;
+      stackManager.writeStacks(stacks);
+    }
+  }
+
+  return { targetDir, file: originalName };
+};
+
+// Upload direto (arquivo único, sem chunks — mantido para compatibilidade)
+router.post('/:id/services/:svcId/upload', stackUpload.single('file'), async (req, res) => {
+  try {
+    if (!req.file) return res.status(400).json({ error: 'Arquivo obrigatório' });
+    const result = await extractAndSaveUpload(
+      req.file.path, req.file.originalname || 'archive',
+      req.params.id, req.params.svcId
+    );
+    fs.unlink(req.file.path, () => {});
+    res.json({ success: true, ...result });
+  } catch (err) {
+    if (req.file?.path) fs.unlink(req.file.path, () => {});
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// Chunked upload — init
+router.post('/:id/services/:svcId/upload/init', (req, res) => {
   try {
     const stack = stackManager.getStack(req.params.id);
     const svc = stack.services.find((s) => s.id === req.params.svcId);
-    if (!svc) return res.status(404).json({ error: "Servico nao encontrado" });
-    if (!req.file) return res.status(400).json({ error: "Arquivo obrigatorio" });
+    if (!svc) return res.status(404).json({ error: 'Serviço não encontrado' });
 
-    // Use same base dir as DockerPanel
-    const dockerBaseDir = process.env.DOCKER_VOLUME_BASE ||
-      path.join(process.cwd(), "backend/data/projects/docker");
-    const containerName = `provir-${req.params.id.slice(0, 8)}-${svc.name}`.replace(/[^a-zA-Z0-9_.-]/g, "-");
-    const serviceDir = path.join(dockerBaseDir, containerName);
-    fs.mkdirSync(serviceDir, { recursive: true });
+    const totalChunks = Number(req.body?.totalChunks || 0);
+    if (!Number.isInteger(totalChunks) || totalChunks < 1)
+      return res.status(400).json({ error: 'totalChunks inválido' });
 
-    // Target is the first volume host path or the service dir
-    const volume = (svc.volumes || [])[0];
-    let targetDir = serviceDir;
-    if (volume && volume.host) {
-      if (volume.host.startsWith("/")) {
-        targetDir = volume.host;
-      } else if (volume.host.startsWith("./") || volume.host.startsWith("../")) {
-        targetDir = path.join(serviceDir, volume.host.replace(/^\.\/?/, ""));
-      } else {
-        // Named volume — extract to service dir, will be mounted
-        targetDir = serviceDir;
-      }
-    }
-    fs.mkdirSync(targetDir, { recursive: true });
-
-    const archivePath = req.file.path;
-    const originalName = req.file.originalname || "";
-    const lower = originalName.toLowerCase();
-    const { execSync } = require("child_process");
-
-    if (lower.endsWith(".zip")) {
-      execSync(`unzip -o "${archivePath}" -d "${targetDir}"`, { stdio: "pipe" });
-    } else if (lower.endsWith(".tar.gz") || lower.endsWith(".tgz")) {
-      execSync(`tar -xzf "${archivePath}" -C "${targetDir}"`, { stdio: "pipe" });
-    } else if (lower.endsWith(".tar")) {
-      execSync(`tar -xf "${archivePath}" -C "${targetDir}"`, { stdio: "pipe" });
-    } else {
-      fs.copyFileSync(archivePath, path.join(targetDir, originalName));
-    }
-
-    fs.unlinkSync(archivePath);
-
-    // Flatten single root directory
-    const entries = fs.readdirSync(targetDir, { withFileTypes: true });
-    const dirs = entries.filter((e) => e.isDirectory() && e.name !== "__MACOSX");
-    const files = entries.filter((e) => e.isFile() && e.name !== ".DS_Store");
-    if (dirs.length === 1 && files.length === 0) {
-      const rootDir = path.join(targetDir, dirs[0].name);
-      const nested = fs.readdirSync(rootDir);
-      for (const entry of nested) {
-        fs.renameSync(path.join(rootDir, entry), path.join(targetDir, entry));
-      }
-      fs.rmdirSync(rootDir);
-    }
-
-    // Update service volume to point to real path
-    const stacks = stackManager.readStacks();
-    const stackIdx = stacks.findIndex((s) => s.id === req.params.id);
-    if (stackIdx >= 0) {
-      const svcIdx = stacks[stackIdx].services.findIndex((s) => s.id === req.params.svcId);
-      if (svcIdx >= 0) {
-        if (!stacks[stackIdx].services[svcIdx].volumes || !stacks[stackIdx].services[svcIdx].volumes.length) {
-          stacks[stackIdx].services[svcIdx].volumes = [{ host: targetDir, container: "/app" }];
-        } else {
-          stacks[stackIdx].services[svcIdx].volumes[0].host = targetDir;
-        }
-        stackManager.writeStacks(stacks);
-      }
-    }
-
-    res.json({ success: true, targetDir, file: originalName });
+    const uploadId = crypto.randomUUID();
+    const filename = String(req.body?.filename || 'archive.zip').replace(/[^a-zA-Z0-9._-]/g, '_');
+    writeStackChunkMeta(uploadId, {
+      stackId: req.params.id,
+      svcId: req.params.svcId,
+      filename,
+      size: Number(req.body?.size || 0),
+      totalChunks,
+    });
+    res.json({ uploadId });
   } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// Chunked upload — chunk
+router.post('/:id/services/:svcId/upload/chunk', stackUpload.single('chunk'), (req, res) => {
+  try {
+    if (!req.file) return res.status(400).json({ error: 'Chunk obrigatório' });
+    const { dir, meta } = readStackChunkMeta(req.body?.uploadId);
+    if (meta.stackId !== req.params.id || meta.svcId !== req.params.svcId)
+      return res.status(400).json({ error: 'Upload inválido para este serviço' });
+    const idx = Number(req.body?.chunkIndex);
+    if (!Number.isInteger(idx) || idx < 0 || idx >= meta.totalChunks)
+      return res.status(400).json({ error: 'chunkIndex inválido' });
+    fs.renameSync(req.file.path, path.join(dir, `chunk-${idx}`));
+    res.json({ ok: true, chunkIndex: idx });
+  } catch (err) {
+    if (req.file?.path) fs.unlink(req.file.path, () => {});
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// Chunked upload — complete
+router.post('/:id/services/:svcId/upload/complete', async (req, res) => {
+  const uploadId = req.body?.uploadId;
+  try {
+    const { meta } = readStackChunkMeta(uploadId);
+    if (meta.stackId !== req.params.id || meta.svcId !== req.params.svcId)
+      return res.status(400).json({ error: 'Upload inválido para este serviço' });
+    const { archivePath, filename } = assembleStackChunks(uploadId);
+    const result = await extractAndSaveUpload(archivePath, filename, req.params.id, req.params.svcId);
+    cleanStackChunks(uploadId);
+    res.json({ success: true, ...result });
+  } catch (err) {
+    if (uploadId) cleanStackChunks(uploadId);
     res.status(500).json({ error: err.message });
   }
 });

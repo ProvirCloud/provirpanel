@@ -3086,14 +3086,50 @@ const ServiceConfigPanel = memo(({ service, stack, onSave, onDelete, onClose }) 
   const addProjectFile = async (e) => {
     const file = e.target.files?.[0]; if (!file) return
     e.target.value = ""
-    upd("projectFiles", [...form.projectFiles, { name: file.name, size: file.size, type: file.type, uploading: true }])
+    upd("projectFiles", [...form.projectFiles, { name: file.name, size: file.size, type: file.type, uploading: true, progress: 0 }])
+
+    const CHUNK_SIZE = 5 * 1024 * 1024 // 5 MB
+    const totalChunks = Math.ceil(file.size / CHUNK_SIZE)
+    const updateFile = (patch) => upd("projectFiles", prev =>
+      prev.map(f => f.name === file.name ? { ...f, ...patch } : f)
+    )
+
     try {
-      const formData = new FormData()
-      formData.append("file", file)
-      await uploadApi.post(`/stacks/${stack.id}/services/${service.id}/upload`, formData, { headers: { "Content-Type": "multipart/form-data" }, timeout: 300000 })
-      upd("projectFiles", [...form.projectFiles, { name: file.name, size: file.size, type: file.type, uploaded: true }])
+      if (totalChunks <= 1) {
+        // Arquivo pequeno — upload direto
+        const formData = new FormData()
+        formData.append("file", file)
+        await uploadApi.post(`/stacks/${stack.id}/services/${service.id}/upload`, formData, {
+          headers: { "Content-Type": "multipart/form-data" },
+          timeout: 300000,
+          onUploadProgress: (e) => updateFile({ progress: Math.round((e.loaded / e.total) * 100) })
+        })
+      } else {
+        // Arquivo grande — chunked upload
+        const initRes = await api.post(`/stacks/${stack.id}/services/${service.id}/upload/init`, {
+          filename: file.name, size: file.size, totalChunks
+        })
+        const { uploadId } = initRes.data
+
+        for (let i = 0; i < totalChunks; i++) {
+          const chunk = file.slice(i * CHUNK_SIZE, (i + 1) * CHUNK_SIZE)
+          const fd = new FormData()
+          fd.append('chunk', chunk, file.name)
+          fd.append('uploadId', uploadId)
+          fd.append('chunkIndex', String(i))
+          await uploadApi.post(`/stacks/${stack.id}/services/${service.id}/upload/chunk`, fd, {
+            headers: { "Content-Type": "multipart/form-data" },
+            timeout: 120000
+          })
+          updateFile({ progress: Math.round(((i + 1) / totalChunks) * 100) })
+        }
+
+        await api.post(`/stacks/${stack.id}/services/${service.id}/upload/complete`, { uploadId })
+      }
+
+      updateFile({ uploading: false, uploaded: true, progress: 100 })
     } catch (err) {
-      upd("projectFiles", form.projectFiles.filter((f) => f.name !== file.name))
+      upd("projectFiles", prev => prev.filter(f => f.name !== file.name))
     }
   }
   const removeProjectFile = (i) => upd("projectFiles", form.projectFiles.filter((_, j) => j !== i))
@@ -3331,6 +3367,14 @@ const ServiceConfigPanel = memo(({ service, stack, onSave, onDelete, onClose }) 
                     <div style={{ flex: 1, overflow: 'hidden' }}>
                       <div style={{ fontSize: 12, color: '#e2e8f0', fontWeight: 500, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{f.name}</div>
                       <div style={{ fontSize: 10, color: '#475569', marginTop: 2 }}>{sizeMb} MB</div>
+                      {f.uploading && (
+                        <div style={{ marginTop: 5 }}>
+                          <div style={{ height: 3, borderRadius: 2, background: 'rgba(99,102,241,0.15)', overflow: 'hidden' }}>
+                            <div style={{ height: '100%', borderRadius: 2, background: 'linear-gradient(90deg,#6366f1,#8b5cf6)', width: `${f.progress || 0}%`, transition: 'width 0.3s' }} />
+                          </div>
+                          <div style={{ fontSize: 9, color: '#818cf8', marginTop: 2 }}>{f.progress || 0}%</div>
+                        </div>
+                      )}
                     </div>
                     <button onClick={() => removeProjectFile(i)} style={{ background: 'none', border: 'none', color: '#475569', cursor: 'pointer', padding: 4, lineHeight: 1, display: 'flex', flexShrink: 0 }}>
                       <X size={12} />
