@@ -4491,10 +4491,12 @@ const BuildDeployButton = ({ stack, service, onDone, addToast }) => {
         // Upload direto + SSE
         const fd = new FormData()
         fd.append('archive', file)
+        const token = localStorage.getItem('provirpanel-token')
         const res = await fetch(`/api/stacks/${stack.id}/services/${service.id}/build`, {
           method: 'POST', body: fd,
-          headers: { Authorization: `Bearer ${localStorage.getItem('provirpanel-token')}` }
+          headers: token ? { Authorization: `Bearer ${token}` } : {}
         })
+        if (!res.ok) { push(`❌ Erro ${res.status}: ${await res.text()}`); return }
         const reader = res.body.getReader()
         const dec = new TextDecoder()
         while (true) {
@@ -4528,13 +4530,13 @@ const BuildDeployButton = ({ stack, service, onDone, addToast }) => {
           push(`↑ Parte ${i + 1}/${totalChunks} enviada`)
         }
         push('🔨 Iniciando build no servidor...')
-        // complete retorna SSE
         const token = localStorage.getItem('provirpanel-token')
         const res = await fetch(`/api/stacks/${stack.id}/services/${service.id}/build/complete`, {
           method: 'POST',
-          headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
+          headers: { 'Content-Type': 'application/json', ...(token ? { Authorization: `Bearer ${token}` } : {}) },
           body: JSON.stringify({ uploadId })
         })
+        if (!res.ok) { push(`❌ Erro ${res.status}: ${await res.text()}`); return }
         const reader = res.body.getReader()
         const dec = new TextDecoder()
         while (true) {
