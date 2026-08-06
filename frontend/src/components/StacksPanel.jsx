@@ -5932,9 +5932,9 @@ export default function StacksPanel() {
                   onClose={() => setSelectedService(null)}
                 />
                 <div className="mt-3 flex gap-2">
-                  {selectedService.build && (
-                    <BuildDeployButton stack={selectedStack} service={selectedService} onDone={() => syncStack(selectedStack)} addToast={addToast} />
-                  )}
+                  <BuildDeployButton stack={selectedStack} service={selectedService} onDone={() => syncStack(selectedStack)} addToast={addToast} />
+                </div>
+                <div className="mt-3 flex gap-2">
                   <button onClick={() => startService(selectedService)}
                     className="flex flex-1 items-center justify-center gap-1.5 rounded-xl border border-emerald-500/30 bg-emerald-500/10 py-2 text-xs text-emerald-300 hover:bg-emerald-500/20">
                     <Play size={12} /> Iniciar
