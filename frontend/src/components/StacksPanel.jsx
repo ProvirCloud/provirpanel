@@ -4476,11 +4476,12 @@ const BuildDeployButton = ({ stack, service, onDone, addToast }) => {
   const [log, setLog] = useState([])
   const [running, setRunning] = useState(false)
   const [done, setDone] = useState(false)
+  const [pickOptions, setPickOptions] = useState(null)  // { file, options }
   const fileRef = useRef(null)
   const CHUNK_SIZE = 5 * 1024 * 1024
 
-  const runBuild = async (file) => {
-    setLog([]); setRunning(true); setDone(false)
+  const runBuild = async (file, dockerfile = null) => {
+    setLog([]); setRunning(true); setDone(false); setPickOptions(null)
     const push = (msg) => setLog(prev => [...prev, msg])
     const totalChunks = Math.ceil(file.size / CHUNK_SIZE)
 
@@ -4491,6 +4492,7 @@ const BuildDeployButton = ({ stack, service, onDone, addToast }) => {
         // Upload direto + SSE
         const fd = new FormData()
         fd.append('archive', file)
+        if (dockerfile) fd.append('dockerfile', dockerfile)
         const token = localStorage.getItem('provirpanel-token')
         const res = await fetch(`/api/stacks/${stack.id}/services/${service.id}/build`, {
           method: 'POST', body: fd,
@@ -4507,6 +4509,7 @@ const BuildDeployButton = ({ stack, service, onDone, addToast }) => {
             if (line.startsWith('data:')) {
               try {
                 const ev = JSON.parse(line.slice(5))
+                if (ev.pickDockerfile) { setPickOptions({ file, options: ev.options }); setRunning(false); return }
                 if (ev.message) push(ev.message)
                 if (ev.done) { setDone(true); if (!ev.error) { onDone(); addToast(`Build de ${service.name} concluído!`) } }
               } catch { /* ignore */ }
@@ -4569,13 +4572,29 @@ const BuildDeployButton = ({ stack, service, onDone, addToast }) => {
     </button>
     {open && (
       <div style={{ position: 'fixed', inset: 0, zIndex: 60, display: 'flex', alignItems: 'center', justifyContent: 'center', background: 'rgba(0,0,0,0.7)', backdropFilter: 'blur(6px)' }}
-        onMouseDown={e => { if (e.target === e.currentTarget && !running) setOpen(false) }}>
+        onMouseDown={e => { if (e.target === e.currentTarget && !running) { setOpen(false); setPickOptions(null) } }}>
         <div style={{ width: '100%', maxWidth: 520, margin: '0 16px', borderRadius: 20, border: '1px solid rgba(255,255,255,0.1)', background: 'linear-gradient(160deg,#080f1e,#060c18)', boxShadow: '0 40px 100px rgba(0,0,0,0.8)', display: 'flex', flexDirection: 'column', maxHeight: '85vh' }}>
           <div style={{ padding: '20px 24px 16px', borderBottom: '1px solid rgba(255,255,255,0.06)' }}>
             <div style={{ fontSize: 15, fontWeight: 700, color: '#f1f5f9' }}>🔨 Build & Deploy — {service.name}</div>
             <div style={{ fontSize: 11, color: '#475569', marginTop: 4 }}>Envie o código-fonte (.zip ou .tar.gz) para buildar a imagem no servidor</div>
           </div>
           <div style={{ padding: '16px 24px', display: 'flex', flexDirection: 'column', gap: 12, flex: 1, overflow: 'hidden' }}>
+
+            {/* Seleção de Dockerfile */}
+            {pickOptions && (
+              <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
+                <div style={{ fontSize: 13, fontWeight: 600, color: '#f1f5f9' }}>📄 Qual Dockerfile usar?</div>
+                <div style={{ fontSize: 11, color: '#64748b' }}>Vários Dockerfiles encontrados. Escolha um — será salvo para próximas vezes.</div>
+                {pickOptions.options.map(opt => (
+                  <button key={opt} onClick={() => runBuild(pickOptions.file, opt)}
+                    style={{ textAlign: 'left', padding: '10px 14px', borderRadius: 12, border: '1px solid rgba(251,146,60,0.3)', background: 'rgba(251,146,60,0.06)', color: '#fb923c', fontSize: 12, fontFamily: 'ui-monospace,monospace', cursor: 'pointer' }}
+                    onMouseEnter={e => e.currentTarget.style.background='rgba(251,146,60,0.14)'}
+                    onMouseLeave={e => e.currentTarget.style.background='rgba(251,146,60,0.06)'}>
+                    {opt}
+                  </button>
+                ))}
+              </div>
+            )}
             {!running && !done && (
               <label style={{ display: 'block', borderRadius: 14, border: '2px dashed rgba(251,146,60,0.3)', background: 'rgba(251,146,60,0.04)', padding: '28px 16px', textAlign: 'center', cursor: 'pointer' }}
                 onMouseEnter={e => e.currentTarget.style.borderColor='rgba(251,146,60,0.6)'}

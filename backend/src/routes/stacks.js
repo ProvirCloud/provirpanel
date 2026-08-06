@@ -932,7 +932,7 @@ const cleanStackBuildChunks = (uploadId) => {
   try { fs.rmSync(stackBuildChunkDir(uploadId), { recursive: true, force: true }); } catch { /* ignore */ }
 };
 
-const runBuildFromArchive = async (archivePath, filename, stackId, svcId, res) => {
+const runBuildFromArchive = async (archivePath, filename, stackId, svcId, res, req_dockerfile = null) => {
   res.setHeader('Content-Type', 'text/event-stream');
   res.setHeader('Cache-Control', 'no-cache');
   res.setHeader('Connection', 'keep-alive');
@@ -968,24 +968,52 @@ const runBuildFromArchive = async (archivePath, filename, stackId, svcId, res) =
       fs.rmdirSync(rootDir);
     }
 
-    // Atualiza/cria o build config do serviço no stacks.json
+    // Salva build config no serviço
     const stacks = stackManager.readStacks();
     const si = stacks.findIndex(s => s.id === stackId);
     const vi = si >= 0 ? stacks[si].services.findIndex(s => s.id === svcId) : -1;
     if (si >= 0 && vi >= 0) {
-      stacks[si].services[vi].build = { ...(stacks[si].services[vi].build || {}), context: buildDir };
+      stacks[si].services[vi].build = { ...(stacks[si].services[vi].build || {}), context: actualBuildDir, dockerfile: resolvedDockerfile };
       stackManager.writeStacks(stacks);
+    }
+
+    // Localiza todos os Dockerfiles no buildDir
+    const { execSync: execSync2 } = require('child_process');
+    let actualBuildDir = buildDir;
+    const chosenDockerfile = req_dockerfile || svc.build?.dockerfile;
+
+    let resolvedDockerfile = chosenDockerfile;
+    if (!resolvedDockerfile) {
+      // Nenhum escolhido ainda — lista e pede escolha
+      const allFound = execSync2(`find "${buildDir}" -name "Dockerfile*" -not -path "*/__MACOSX/*" -not -name "*.swp"`, { encoding: 'utf8' })
+        .split('\n').map(s => s.trim()).filter(Boolean);
+
+      if (allFound.length === 0) throw new Error('Nenhum Dockerfile encontrado no arquivo enviado');
+
+      if (allFound.length > 1) {
+        // Retorna lista para o frontend escolher
+        send(JSON.stringify({ pickDockerfile: true, options: allFound.map(f => path.relative(buildDir, f)), buildDir }));
+        res.write(`data: ${JSON.stringify({ pickDockerfile: true, options: allFound.map(f => path.relative(buildDir, f)) })}\n\n`);
+        res.end();
+        return;
+      }
+
+      resolvedDockerfile = path.basename(allFound[0]);
+      actualBuildDir = path.dirname(allFound[0]);
+    } else {
+      // Dockerfile já escolhido — localiza no buildDir
+      const found = execSync2(`find "${buildDir}" -name "${resolvedDockerfile}" -not -path "*/__MACOSX/*" | head -1`, { encoding: 'utf8' }).trim();
+      if (found) actualBuildDir = path.dirname(found);
     }
 
     // Builda a imagem
     const imageFull = `${svc.image || svc.name}:${svc.tag || 'latest'}`;
-    const dockerfile = svc.build?.dockerfile || 'Dockerfile';
     const buildArgs = svc.build?.args || {};
-    send(`🔨 Buildando ${imageFull}...`);
+    send(`🔨 Buildando ${imageFull} com ${resolvedDockerfile}...`);
 
     const DockerManager = require('../services/DockerManager');
     const dm = new DockerManager();
-    await dm.buildImage(imageFull, buildDir, send, { dockerfileName: dockerfile, buildArgs });
+    await dm.buildImage(imageFull, actualBuildDir, send, { dockerfileName: resolvedDockerfile, buildArgs });
 
     send(`✅ Build concluído! Imagem ${imageFull} pronta.`);
     res.write(`data: ${JSON.stringify({ done: true, imageFull })}\n\n`);
@@ -1001,7 +1029,7 @@ const runBuildFromArchive = async (archivePath, filename, stackId, svcId, res) =
 // Build direto (arquivo único)
 router.post('/:id/services/:svcId/build', stackUpload.single('archive'), async (req, res) => {
   if (!req.file) return res.status(400).json({ error: 'Arquivo obrigatório' });
-  await runBuildFromArchive(req.file.path, req.file.originalname || 'archive.zip', req.params.id, req.params.svcId, res);
+  await runBuildFromArchive(req.file.path, req.file.originalname || 'archive.zip', req.params.id, req.params.svcId, res, req.body?.dockerfile || null);
 });
 
 // Build chunked — init
@@ -1046,7 +1074,7 @@ router.post('/:id/services/:svcId/build/complete', async (req, res) => {
     if (meta.stackId !== req.params.id || meta.svcId !== req.params.svcId)
       return res.status(400).json({ error: 'Upload inválido' });
     cleanStackBuildChunks(uploadId);
-    await runBuildFromArchive(archivePath, filename, req.params.id, req.params.svcId, res);
+    await runBuildFromArchive(archivePath, filename, req.params.id, req.params.svcId, res, req.body?.dockerfile || null);
   } catch (err) {
     if (uploadId) cleanStackBuildChunks(uploadId);
     res.status(500).json({ error: err.message });
