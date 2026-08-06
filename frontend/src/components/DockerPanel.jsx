@@ -2415,7 +2415,12 @@ const DockerPanel = ({ showPageIntro = true }) => {
       })
       addToast(apply ? 'Configuração aplicada' : 'Configuração salva')
       await Promise.all([loadServices(), loadContainers()])
-      return response.data?.service || true
+      // Sincroniza editDialog com os dados atualizados do backend
+      const updatedService = response.data?.service
+      if (updatedService) {
+        setEditDialog((prev) => prev?.id === updatedService.id ? { ...prev, ...updatedService } : prev)
+      }
+      return updatedService || true
     } catch (err) {
       if (timer) clearInterval(timer)
       const message =

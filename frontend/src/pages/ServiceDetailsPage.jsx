@@ -2925,7 +2925,7 @@ const ServiceSettingsTab = ({ service, settingsState, setSettingsState, onReload
         apply
       })
       setMessage(apply ? '✅ Configuração aplicada com sucesso.' : '✅ Configuração salva. Será aplicada no próximo deploy.')
-      if (apply) await onReload()
+      await onReload()
     } catch (err) {
       setMessage(`❌ ${err.response?.data?.message || err.message || 'Falha ao salvar configuração'}`)
     } finally {
