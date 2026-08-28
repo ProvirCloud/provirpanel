@@ -13,6 +13,7 @@ const ZeusChat = () => {
   const [messages, setMessages] = useState(loadHistory)
   const [input, setInput] = useState('')
   const [loading, setLoading] = useState(false)
+  const [pendingPlan, setPendingPlan] = useState(null)
   const scrollRef = useRef(null)
   const inputRef = useRef(null)
   const contentRef = useRef('')
@@ -49,10 +50,10 @@ const ZeusChat = () => {
     try {
       const token = localStorage.getItem('provirpanel-token')
       const baseURL = api.defaults.baseURL || '/api'
-      const res = await fetch(`${baseURL}/zeus/chat`, {
+      const res = await fetch(`${baseURL}/zeus/chat/smart`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json', ...(token ? { Authorization: `Bearer ${token}` } : {}) },
-        body: JSON.stringify({ message: text, history, stream: true }),
+        body: JSON.stringify({ message: text, stream: true }),
         signal: controller.signal
       })
 
@@ -75,6 +76,28 @@ const ZeusChat = () => {
               contentRef.current += ev.content
               const c = contentRef.current
               setMessages(prev => { const u = [...prev]; if (u[idx]) u[idx] = { ...u[idx], content: c }; return u })
+            } else if (ev.type === 'resposta') {
+              contentRef.current = ev.content
+              const c = contentRef.current
+              setMessages(prev => { const u = [...prev]; if (u[idx]) u[idx] = { ...u[idx], content: c }; return u })
+            } else if (ev.type === 'plano') {
+              const plan = ev.plan
+              const planText = `## 📋 Plano de Ação: ${plan.titulo}\n\n${plan.resumo}\n\n**Estimativa:** ${plan.estimativa}\n\n### Tarefas:\n${plan.tasks.map((t, i) => `${i + 1}. ${t.descricao} *(${t.tipo})*`).join('\n')}\n\n${plan.riscos?.length ? `### ⚠️ Riscos:\n${plan.riscos.map(r => `- ${r}`).join('\n')}\n\n` : ''}**Resultado esperado:** ${plan.resultado_esperado}`
+              contentRef.current = planText
+              setMessages(prev => { const u = [...prev]; if (u[idx]) u[idx] = { ...u[idx], content: planText }; return u })
+              setPendingPlan(plan)
+            } else if (ev.type === 'task_start') {
+              contentRef.current += `\n\n---\n🔄 **Task ${ev.taskId}:** ${ev.descricao}\n\n`
+              const c = contentRef.current
+              setMessages(prev => { const u = [...prev]; if (u[idx]) u[idx] = { ...u[idx], content: c }; return u })
+            } else if (ev.type === 'task_complete') {
+              contentRef.current += `\n✅ Task ${ev.taskId} concluída\n`
+              const c = contentRef.current
+              setMessages(prev => { const u = [...prev]; if (u[idx]) u[idx] = { ...u[idx], content: c }; return u })
+            } else if (ev.type === 'all_complete') {
+              contentRef.current += `\n\n---\n🎉 **Todas as tarefas concluídas!**`
+              const c = contentRef.current
+              setMessages(prev => { const u = [...prev]; if (u[idx]) u[idx] = { ...u[idx], content: c }; return u })
             } else if (ev.type === 'error') {
               setMessages(prev => { const u = [...prev]; if (u[idx]) u[idx] = { role: 'assistant', content: ev.error, error: true }; return u })
             }
@@ -92,7 +115,72 @@ const ZeusChat = () => {
   }
 
   const stop = () => abortRef.current?.abort()
-  const clearChat = () => { setMessages([]); localStorage.removeItem(STORAGE_KEY) }
+  const clearChat = () => { setMessages([]); localStorage.removeItem(STORAGE_KEY); setPendingPlan(null) }
+
+  const confirmPlan = async () => {
+    if (!pendingPlan || loading) return
+    const plan = pendingPlan
+    setPendingPlan(null)
+    setLoading(true)
+
+    const idx = messages.length
+    idxRef.current = idx
+    contentRef.current = '⚡ Executando plano...\n\n'
+    setMessages(prev => [...prev, { role: 'assistant', content: contentRef.current }])
+
+    const controller = new AbortController()
+    abortRef.current = controller
+
+    try {
+      const token = localStorage.getItem('provirpanel-token')
+      const baseURL = api.defaults.baseURL || '/api'
+      const res = await fetch(`${baseURL}/zeus/chat/smart/confirm`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', ...(token ? { Authorization: `Bearer ${token}` } : {}) },
+        body: JSON.stringify({ plan }),
+        signal: controller.signal
+      })
+
+      if (!res.ok) throw new Error(`HTTP ${res.status}`)
+      const reader = res.body.getReader()
+      const decoder = new TextDecoder()
+      let buf = ''
+
+      while (true) {
+        const { done, value } = await reader.read()
+        if (done) break
+        buf += decoder.decode(value, { stream: true })
+        const lines = buf.split('\n')
+        buf = lines.pop() || ''
+        for (const line of lines) {
+          if (!line.startsWith('data: ')) continue
+          try {
+            const ev = JSON.parse(line.slice(6))
+            if (ev.type === 'token') {
+              contentRef.current += ev.content
+            } else if (ev.type === 'task_start') {
+              contentRef.current += `\n---\n🔄 **Task ${ev.taskId}:** ${ev.descricao}\n\n`
+            } else if (ev.type === 'task_complete') {
+              contentRef.current += `\n✅ Concluída\n`
+            } else if (ev.type === 'all_complete') {
+              contentRef.current += `\n\n---\n🎉 **Todas as tarefas concluídas!**`
+            }
+            const c = contentRef.current
+            setMessages(prev => { const u = [...prev]; if (u[idx]) u[idx] = { ...u[idx], content: c }; return u })
+          } catch {}
+        }
+      }
+    } catch (err) {
+      if (err.name !== 'AbortError') {
+        setMessages(prev => { const u = [...prev]; if (u[idxRef.current]) u[idxRef.current] = { role: 'assistant', content: err.message, error: true }; return u })
+      }
+    } finally {
+      setLoading(false)
+      abortRef.current = null
+    }
+  }
+
+  const rejectPlan = () => { setPendingPlan(null) }
   const [copiedIdx, setCopiedIdx] = useState(null)
   const copy = (text, idx) => {
     navigator.clipboard.writeText(text)
@@ -213,6 +301,25 @@ const ZeusChat = () => {
             </div>
           )}
         </div>
+
+        {/* Plan confirmation bar */}
+        {pendingPlan && !loading && (
+          <div className="shrink-0 px-3 py-2 sm:px-4 flex items-center gap-2"
+            style={{ background: 'rgba(56,162,255,0.08)', borderTop: '1px solid var(--color-border)' }}>
+            <Sparkles size={14} style={{ color: 'var(--color-brand)' }} />
+            <span className="text-xs flex-1" style={{ color: 'var(--color-text-muted)' }}>Executar este plano?</span>
+            <button onClick={rejectPlan}
+              className="px-3 py-1.5 text-xs rounded-lg transition-colors"
+              style={{ background: 'var(--color-surface-sunken)', color: 'var(--color-text-muted)', border: '1px solid var(--color-border)' }}>
+              Cancelar
+            </button>
+            <button onClick={confirmPlan}
+              className="px-3 py-1.5 text-xs rounded-lg text-white font-medium transition-all"
+              style={{ background: 'linear-gradient(135deg, var(--color-brand), var(--color-brand-strong))', boxShadow: '0 2px 8px rgba(56,162,255,0.3)' }}>
+              ✓ Confirmar e Executar
+            </button>
+          </div>
+        )}
 
         {/* Input */}
         <div className="shrink-0 px-3 py-3 sm:px-4" style={{ borderTop: '1px solid var(--color-border)' }}>

@@ -208,6 +208,114 @@ router.post('/chat/direct', async (req, res, next) => {
   }
 });
 
+// POST /zeus/chat/smart — intelligent routing (Bedrock + Ollama)
+router.post('/chat/smart', async (req, res, next) => {
+  try {
+    const { message, clienteId, confirmedPlan, sessionId } = req.body;
+
+    // If not streaming or confirming plan, do simple JSON request
+    if (confirmedPlan || !req.body.stream) {
+      const data = await zeusRequest('/api/chat/smart', { message, clienteId, confirmedPlan, sessionId });
+      return res.json(data);
+    }
+
+    // SSE streaming mode
+    res.setHeader('Content-Type', 'text/event-stream');
+    res.setHeader('Cache-Control', 'no-cache');
+    res.setHeader('Connection', 'keep-alive');
+    res.setHeader('X-Accel-Buffering', 'no');
+    res.flushHeaders();
+    res.write(`: ${' '.repeat(2048)}\n\n`);
+
+    const streamRes = await fetch(`${ZEUS_GATEWAY_URL}/api/chat/smart`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', 'x-api-key': ZEUS_API_KEY },
+      body: JSON.stringify({ message, clienteId, sessionId, stream: true })
+    });
+
+    if (!streamRes.ok) {
+      const err = await streamRes.text();
+      res.write(`data: ${JSON.stringify({ type: 'error', error: err })}\n\n`);
+      return res.end();
+    }
+
+    // Check if response is SSE (streaming) or JSON (plan/resposta)
+    const contentType = streamRes.headers.get('content-type') || '';
+    if (contentType.includes('text/event-stream')) {
+      const decoder = new TextDecoder();
+      let buf = '';
+      for await (const chunk of streamRes.body) {
+        buf += typeof chunk === 'string' ? chunk : decoder.decode(chunk, { stream: true });
+        const lines = buf.split('\n');
+        buf = lines.pop() || '';
+        for (const line of lines) {
+          if (line.startsWith('data: ')) {
+            res.write(line + '\n\n');
+          }
+        }
+      }
+      if (buf.startsWith('data: ')) res.write(buf + '\n\n');
+    } else {
+      // JSON response (plan or resposta) — convert to SSE event
+      const data = await streamRes.json();
+      res.write(`data: ${JSON.stringify(data)}\n\n`);
+    }
+
+    res.write(`data: ${JSON.stringify({ type: 'end' })}\n\n`);
+    return res.end();
+  } catch (err) {
+    if (!res.headersSent) return next(err);
+    res.write(`data: ${JSON.stringify({ type: 'error', error: err.message })}\n\n`);
+    res.end();
+  }
+});
+
+// POST /zeus/chat/smart/confirm — confirm and execute plan
+router.post('/chat/smart/confirm', async (req, res, next) => {
+  try {
+    const { plan, sessionId } = req.body;
+
+    res.setHeader('Content-Type', 'text/event-stream');
+    res.setHeader('Cache-Control', 'no-cache');
+    res.setHeader('Connection', 'keep-alive');
+    res.setHeader('X-Accel-Buffering', 'no');
+    res.flushHeaders();
+    res.write(`: ${' '.repeat(2048)}\n\n`);
+
+    const streamRes = await fetch(`${ZEUS_GATEWAY_URL}/api/chat/smart/confirm`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', 'x-api-key': ZEUS_API_KEY },
+      body: JSON.stringify({ plan, sessionId })
+    });
+
+    if (!streamRes.ok) {
+      const err = await streamRes.text();
+      res.write(`data: ${JSON.stringify({ type: 'error', error: err })}\n\n`);
+      return res.end();
+    }
+
+    const decoder = new TextDecoder();
+    let buf = '';
+    for await (const chunk of streamRes.body) {
+      buf += typeof chunk === 'string' ? chunk : decoder.decode(chunk, { stream: true });
+      const lines = buf.split('\n');
+      buf = lines.pop() || '';
+      for (const line of lines) {
+        if (line.startsWith('data: ')) {
+          res.write(line + '\n\n');
+        }
+      }
+    }
+    if (buf.startsWith('data: ')) res.write(buf + '\n\n');
+    res.write(`data: ${JSON.stringify({ type: 'end' })}\n\n`);
+    return res.end();
+  } catch (err) {
+    if (!res.headersSent) return next(err);
+    res.write(`data: ${JSON.stringify({ type: 'error', error: err.message })}\n\n`);
+    res.end();
+  }
+});
+
 // POST /zeus/index — index document
 router.post('/index', async (req, res, next) => {
   try {
