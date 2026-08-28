@@ -9,7 +9,10 @@ const socketOpts = (token) => ({
   transports: ['websocket']
 })
 
-export const createTerminalSocket = (token) => io(`${baseUrl}/api/terminal`, socketOpts(token))
+export const createTerminalSocket = (token) => io(`${baseUrl}/api/terminal`, {
+  ...socketOpts(token),
+  path: '/terminal-ws'
+})
 export const createDockerLogsSocket = (token) => io(`${baseUrl}/api/docker/logs`, socketOpts(token))
 export const createDockerProgressSocket = (token) => io(`${baseUrl}/api/docker/progress`, socketOpts(token))
 export const createDockerTerminalSocket = (token) => io(`${baseUrl}/api/docker/terminal`, socketOpts(token))

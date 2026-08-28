@@ -1,0 +1,15 @@
+{
+  "name": "provirpanel-terminal-service",
+  "version": "1.0.0",
+  "description": "Standalone WebSocket terminal service for ProvirPanel",
+  "main": "server.js",
+  "scripts": {
+    "start": "node server.js"
+  },
+  "dependencies": {
+    "dotenv": "^16.4.5",
+    "jsonwebtoken": "^9.0.2",
+    "node-pty": "^1.0.0",
+    "socket.io": "^4.7.5"
+  }
+}

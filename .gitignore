@@ -21,6 +21,11 @@ backend/data/
 *.seed
 *.pid.lock
 
+# Runtime-generated sites/projects and local tooling (não versionar)
+projects/
+q/
+q.zip
+
 # Logs
 logs/
 *.log

@@ -133,6 +133,13 @@ const initTerminalSocket = (io) => {
         };
       }
 
+      // Amazon Q CLI - needs PTY for interactive TUI
+      const qMatch = trimmed.match(/^q(\s+(.*))?$/);
+      if (qMatch) {
+        const qArgs = qMatch[2] ? qMatch[2].split(/\s+/) : [];
+        return { shell: "/usr/local/bin/q", args: qArgs };
+      }
+
       return null;
     };
 
@@ -169,7 +176,7 @@ const initTerminalSocket = (io) => {
             cols: 120,
             rows: 30,
             cwd: socket.cwd,
-            env: { ...process.env, TERM: 'xterm-256color' }
+            env: (() => { const e = { ...process.env, TERM: 'xterm-256color' }; delete e.Q_PARENT; return e; })()
           });
           socket.ptyProcess = ptyProc;
 

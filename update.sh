@@ -341,6 +341,44 @@ fi
 
 test_and_reload_nginx
 
+# ─── Terminal Service (processo separado para manter terminal vivo durante restarts do backend) ───
+log "Configurando Terminal Service"
+TERMINAL_SERVICE_DIR="${INSTALL_DIR}/terminal-service"
+if [[ -f "${TERMINAL_SERVICE_DIR}/package.json" ]]; then
+  log "Instalando dependencias do terminal-service"
+  cd "${TERMINAL_SERVICE_DIR}" && npm install
+
+  # Garantir que a porta do terminal-service nao conflite
+  ensure_env_var "${ENV_FILE}" "TERMINAL_SERVICE_PORT" "3003"
+
+  # Configurar upstream no nginx se nao existir
+  PANEL_NGINX="/etc/nginx/sites-available/provirpanel"
+  if [[ -f "${PANEL_NGINX}" ]] && ! grep -q "upstream-terminal" "${PANEL_NGINX}"; then
+    log "Adicionando upstream do terminal-service ao Nginx"
+    sed -i '1a upstream upstream-terminal {\n    least_conn;\n    server 127.0.0.1:3003;\n}\n' "${PANEL_NGINX}"
+  fi
+
+  # Adicionar location /terminal-ws/ se nao existir
+  if [[ -f "${PANEL_NGINX}" ]] && ! grep -q "terminal-ws" "${PANEL_NGINX}"; then
+    log "Adicionando location /terminal-ws/ ao Nginx"
+    sed -i '/location \/socket\.io\/ {/i \    location /terminal-ws/ {\n        proxy_pass http://upstream-terminal;\n        proxy_http_version 1.1;\n        proxy_set_header Upgrade $http_upgrade;\n        proxy_set_header Connection "upgrade";\n        proxy_set_header Host $host;\n        proxy_set_header X-Real-IP $remote_addr;\n        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;\n        proxy_set_header X-Forwarded-Proto $scheme;\n        proxy_connect_timeout 5s;\n        proxy_read_timeout 86400s;\n        proxy_send_timeout 86400s;\n    }\n' "${PANEL_NGINX}"
+  fi
+
+  # Iniciar/reiniciar terminal-service no PM2 (NÃO reinicia junto com o backend)
+  if pm2 describe provirpanel-terminal >/dev/null 2>&1; then
+    log "Reiniciando terminal-service"
+    pm2 restart provirpanel-terminal
+  else
+    log "Iniciando terminal-service no PM2"
+    cd "${TERMINAL_SERVICE_DIR}" && pm2 start server.js --name provirpanel-terminal
+  fi
+
+  chown -R provirpanel:provirpanel "${TERMINAL_SERVICE_DIR}" 2>/dev/null || true
+fi
+
+# Testar e recarregar nginx após terminal-service
+test_and_reload_nginx
+
 log "Reiniciando backend para carregar Sites e WordPress"
 pm2 delete provirpanel-backend 2>/dev/null || true
 cd "${INSTALL_DIR}" && pm2 start backend/src/server.js --name provirpanel-backend --env production

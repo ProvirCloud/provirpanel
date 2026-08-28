@@ -377,6 +377,7 @@ WORDPRESS_IMAGE=wordpress:latest
 WORDPRESS_DB_IMAGE=mariadb:11
 WORDPRESS_DB_FALLBACK_IMAGES=mysql:8,mariadb:10.11
 DOCKER_PULL_RETRIES=5
+TERMINAL_SERVICE_PORT=3003
 ENV
 
   ensure_env_var "${env_file}" "NGINX_CONFIG_PATH" "/etc/nginx"
@@ -469,6 +470,21 @@ server {
         proxy_set_header X-Forwarded-Proto \$scheme;
     }
     
+    # Terminal WebSocket (serviço separado na porta 3003)
+    location /terminal-ws/ {
+        proxy_pass http://localhost:3003;
+        proxy_http_version 1.1;
+        proxy_set_header Upgrade \$http_upgrade;
+        proxy_set_header Connection "upgrade";
+        proxy_set_header Host \$host;
+        proxy_set_header X-Real-IP \$remote_addr;
+        proxy_set_header X-Forwarded-For \$proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto \$scheme;
+        proxy_connect_timeout 5s;
+        proxy_read_timeout 86400s;
+        proxy_send_timeout 86400s;
+    }
+
     # Socket.io
     location /socket.io/ {
         proxy_pass http://localhost:${PANEL_PORT};
@@ -521,6 +537,18 @@ NGINX
   systemctl enable nginx
 }
 
+setup_terminal_service() {
+  log "Setting up Terminal Service (standalone)"
+  local terminal_dir="${INSTALL_DIR}/terminal-service"
+
+  if [[ -f "${terminal_dir}/package.json" ]]; then
+    cd "${terminal_dir}" && npm install
+    chown -R provirpanel:provirpanel "${terminal_dir}"
+  else
+    log "Warning: terminal-service not found in repository, skipping"
+  fi
+}
+
 configure_pm2() {
   log "Configuring PM2 processes and backend restart"
   # Parar processo existente se houver
@@ -539,6 +567,14 @@ SUDOERS
   
   # Executar PM2 com as variáveis de ambiente
   cd "${INSTALL_DIR}" && pm2 start backend/src/server.js --name provirpanel-backend --env production
+
+  # Terminal Service (processo independente - sobrevive a restarts do backend)
+  local terminal_dir="${INSTALL_DIR}/terminal-service"
+  if [[ -f "${terminal_dir}/server.js" ]]; then
+    pm2 delete provirpanel-terminal 2>/dev/null || true
+    cd "${terminal_dir}" && pm2 start server.js --name provirpanel-terminal
+  fi
+
   pm2 save
 
   log "Enabling PM2 startup service"
@@ -604,6 +640,7 @@ main() {
   build_frontend
   configure_env
   setup_prisma
+  setup_terminal_service
   configure_nginx
   configure_pm2
   create_admin_user

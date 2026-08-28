@@ -20,6 +20,7 @@ import {
   Cloud,
   Files,
   Globe,
+  BrainCircuit,
 } from 'lucide-react'
 import Editor from '@monaco-editor/react'
 import api from '../services/api.js'
@@ -168,6 +169,7 @@ const FileManager = ({ showPageIntro = true }) => {
   const [copyTargetPath, setCopyTargetPath] = useState('/')
   const [unsupportedEnvironmentMessage, setUnsupportedEnvironmentMessage] = useState('')
   const [uploadProgress, setUploadProgress] = useState(null)
+  const [zeusIndexing, setZeusIndexing] = useState(false)
   const uploadRef = useRef(null)
   const socketRef = useRef(null)
   const treeRequestRef = useRef(0)
@@ -778,6 +780,29 @@ const FileManager = ({ showPageIntro = true }) => {
 
   const usagePercent = usage.total ? Math.round((usage.used / usage.total) * 100) : 0
 
+  const handleZeusIndex = async () => {
+    if (!selectedEnvironment || selectedEnvironment.provider !== 's3') return
+    const { bucket, region, accessKeyId, secretAccessKey, endpoint } = selectedEnvironment.config || {}
+    if (!bucket || !accessKeyId || !secretAccessKey) return setToast('Ambiente S3 sem credenciais completas')
+    setZeusIndexing(true)
+    try {
+      const res = await api.post('/zeus/storage/index', {
+        endpoint: endpoint || undefined,
+        accessKey: accessKeyId,
+        secretKey: secretAccessKey,
+        region: region || 'us-east-1',
+        bucket,
+        prefix: path !== '/' ? path.replace(/^\//, '') : '',
+        collection: 'zeus_knowledge',
+      })
+      setToast(`Indexação iniciada — job: ${res.data.jobId}`)
+    } catch (err) {
+      setToast(err.response?.data?.error || 'Erro ao iniciar indexação')
+    } finally {
+      setZeusIndexing(false)
+    }
+  }
+
   return (
     <div className="space-y-6">
       <div className={`flex flex-wrap gap-4 ${showPageIntro ? 'items-center justify-between' : 'items-center justify-end'}`}>
@@ -839,6 +864,16 @@ const FileManager = ({ showPageIntro = true }) => {
             <Copy className="h-4 w-4" />
             Copiar
           </button>
+          {selectedEnvironment?.provider === 's3' && (
+            <button
+              className="flex items-center gap-2 rounded-xl border border-purple-500/40 bg-purple-500/10 px-3 py-2 text-xs text-purple-200 transition hover:border-purple-400/60 disabled:opacity-50"
+              onClick={handleZeusIndex}
+              disabled={zeusIndexing}
+            >
+              <BrainCircuit className="h-4 w-4" />
+              {zeusIndexing ? 'Indexando...' : 'Indexar no Zeus AI'}
+            </button>
+          )}
         </div>
       </div>
 
