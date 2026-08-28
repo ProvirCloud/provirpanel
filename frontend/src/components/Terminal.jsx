@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
-import { Copy, Maximize2, Minimize2, Plus, RefreshCw, Trash2, Wifi, WifiOff } from 'lucide-react'
+import { Plus, Wifi, WifiOff, X } from 'lucide-react'
 import { Terminal as TerminalIcon } from 'lucide-react'
 import { Terminal as XTerm } from 'xterm'
 import { FitAddon } from '@xterm/addon-fit'
@@ -8,7 +8,7 @@ import { createTerminalSocket } from '../services/socket.js'
 
 const TERMINAL_BOOTSTRAP_COMMAND = '__provir_shell__'
 const TERMINAL_FONT_SIZE = 14
-const TERMINAL_LINE_HEIGHT = 1.18
+const TERMINAL_LINE_HEIGHT = 1.2
 const TERMINAL_FONT_FAMILY = '"JetBrains Mono", ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", "Courier New", monospace'
 const MAX_CAPTURED_OUTPUT = 40000
 
@@ -38,51 +38,24 @@ const TERMINAL_THEME = {
 }
 
 const generateUUID = () => {
-  if (typeof crypto !== 'undefined' && crypto.randomUUID) {
-    return crypto.randomUUID()
-  }
-
-  return 'xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx'.replace(/[xy]/g, (char) => {
-    const random = Math.random() * 16 | 0
-    const value = char === 'x' ? random : ((random & 0x3) | 0x8)
-    return value.toString(16)
+  if (typeof crypto !== 'undefined' && crypto.randomUUID) return crypto.randomUUID()
+  return 'xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx'.replace(/[xy]/g, (c) => {
+    const r = Math.random() * 16 | 0
+    return (c === 'x' ? r : ((r & 0x3) | 0x8)).toString(16)
   })
-}
-
-const formatStatus = (status) => {
-  switch (status) {
-    case 'connected':
-      return 'Conectado'
-    case 'connecting':
-      return 'Conectando'
-    case 'shell-closed':
-      return 'Shell encerrada'
-    case 'auth-required':
-      return 'Login necessario'
-    default:
-      return 'Desconectado'
-  }
 }
 
 const appendOutput = (current, chunk) => `${current || ''}${chunk || ''}`.slice(-MAX_CAPTURED_OUTPUT)
 
 const summarizeCwd = (cwd) => {
-  if (!cwd || cwd === '~') {
-    return '~'
-  }
-
-  const normalized = cwd.replace(/\\/g, '/')
-  const parts = normalized.split('/').filter(Boolean)
-  if (parts.length <= 3) {
-    return normalized
-  }
-
-  return `.../${parts.slice(-3).join('/')}`
+  if (!cwd || cwd === '~') return '~'
+  const parts = cwd.replace(/\\/g, '/').split('/').filter(Boolean)
+  return parts.length <= 3 ? cwd : `…/${parts.slice(-2).join('/')}`
 }
 
 const createTab = (index) => ({
   id: generateUUID(),
-  title: `Terminal ${index}`,
+  title: `Shell ${index}`,
   status: 'connecting',
   cwd: '~'
 })
@@ -99,11 +72,9 @@ const createTerminalInstance = (container) => {
     scrollback: 5000,
     theme: TERMINAL_THEME
   })
-
   const fitAddon = new FitAddon()
   terminal.loadAddon(fitAddon)
   terminal.open(container)
-
   return { terminal, fitAddon }
 }
 
@@ -111,7 +82,6 @@ const Terminal = ({ showPageIntro = true }) => {
   const initialTab = useMemo(() => createTab(1), [])
   const [tabs, setTabs] = useState(() => [initialTab])
   const [activeId, setActiveId] = useState(initialTab.id)
-  const [isExpanded, setIsExpanded] = useState(false)
   const tabsRef = useRef([initialTab])
   const terminalsRef = useRef(new Map())
   const fitAddonsRef = useRef(new Map())
@@ -120,30 +90,20 @@ const Terminal = ({ showPageIntro = true }) => {
   const observersRef = useRef(new Map())
   const lastOutputRef = useRef(new Map())
 
-  useEffect(() => {
-    tabsRef.current = tabs
-  }, [tabs])
+  useEffect(() => { tabsRef.current = tabs }, [tabs])
 
   const updateTab = useCallback((id, updates) => {
-    setTabs((currentTabs) => currentTabs.map((tab) => (
-      tab.id === id ? { ...tab, ...updates } : tab
-    )))
+    setTabs((cur) => cur.map((t) => t.id === id ? { ...t, ...updates } : t))
   }, [])
 
   const fitTerminal = useCallback((id) => {
     const terminal = terminalsRef.current.get(id)
     const fitAddon = fitAddonsRef.current.get(id)
     const socket = socketsRef.current.get(id)
-    if (!terminal || !fitAddon) {
-      return
-    }
-
+    if (!terminal || !fitAddon) return
     fitAddon.fit()
     terminal.scrollToBottom()
-
-    if (socket?.connected) {
-      socket.emit('resize', { cols: terminal.cols, rows: terminal.rows })
-    }
+    if (socket?.connected) socket.emit('resize', { cols: terminal.cols, rows: terminal.rows })
   }, [])
 
   const focusTerminal = useCallback((id) => {
@@ -155,24 +115,15 @@ const Terminal = ({ showPageIntro = true }) => {
 
   const writeInfo = useCallback((id, text, color = '90') => {
     const terminal = terminalsRef.current.get(id)
-    if (!terminal) {
-      return
-    }
-
+    if (!terminal) return
     terminal.write(`\r\n\x1b[${color}m${text}\x1b[0m\r\n`)
     terminal.scrollToBottom()
   }, [])
 
   const startShell = useCallback((id, announce = false) => {
     const socket = socketsRef.current.get(id)
-    if (!socket?.connected) {
-      return
-    }
-
-    if (announce) {
-      writeInfo(id, '[reiniciando shell interativa...]')
-    }
-
+    if (!socket?.connected) return
+    if (announce) writeInfo(id, '[reiniciando shell...]')
     lastOutputRef.current.set(id, '')
     updateTab(id, { status: 'connected' })
     socket.emit('command', { command: TERMINAL_BOOTSTRAP_COMMAND })
@@ -180,87 +131,63 @@ const Terminal = ({ showPageIntro = true }) => {
 
   const destroySocket = useCallback((id) => {
     const socket = socketsRef.current.get(id)
-    if (!socket) {
-      return
-    }
-
+    if (!socket) return
     socket.removeAllListeners()
     socket.disconnect()
     socketsRef.current.delete(id)
   }, [])
 
   const cleanupTerminal = useCallback((id) => {
-    const observer = observersRef.current.get(id)
-    if (observer) {
-      observer.disconnect()
-      observersRef.current.delete(id)
-    }
-
+    observersRef.current.get(id)?.disconnect()
+    observersRef.current.delete(id)
     containersRef.current.delete(id)
-
-    const terminal = terminalsRef.current.get(id)
-    if (terminal) {
-      terminal.dispose()
-      terminalsRef.current.delete(id)
-    }
-
+    terminalsRef.current.get(id)?.dispose()
+    terminalsRef.current.delete(id)
     fitAddonsRef.current.delete(id)
     lastOutputRef.current.delete(id)
   }, [])
 
   const connectSocket = useCallback((id) => {
-    if (socketsRef.current.has(id)) {
-      return
-    }
-
+    if (socketsRef.current.has(id)) return
     const socket = createTerminalSocket()
-    if (!socket) {
-      updateTab(id, { status: 'disconnected' })
-      return
-    }
+    if (!socket) { updateTab(id, { status: 'disconnected' }); return }
 
     socketsRef.current.set(id, socket)
     updateTab(id, { status: 'connecting' })
 
     socket.on('connect', () => {
       updateTab(id, { status: 'connected' })
-      writeInfo(id, '[sessao conectada]')
+      writeInfo(id, '[conectado]')
       focusTerminal(id)
       startShell(id)
     })
 
     socket.on('connect_error', (error) => {
-      const unauthorized = /unauthorized/i.test(error?.message || '')
-      updateTab(id, { status: unauthorized ? 'auth-required' : 'disconnected' })
-      writeInfo(id, unauthorized ? '[sessao expirada. faca login novamente.]' : '[falha ao conectar a shell.]', '31')
+      const unauth = /unauthorized/i.test(error?.message || '')
+      updateTab(id, { status: unauth ? 'auth-required' : 'disconnected' })
+      writeInfo(id, unauth ? '[sessão expirada]' : '[falha na conexão]', '31')
     })
 
     socket.on('disconnect', (reason) => {
       updateTab(id, { status: 'disconnected' })
-      if (reason !== 'io client disconnect') {
-        writeInfo(id, '[conexao encerrada]')
-      }
+      if (reason !== 'io client disconnect') writeInfo(id, '[desconectado]')
     })
 
     socket.on('output', (payload) => {
       const terminal = terminalsRef.current.get(id)
       const data = payload?.data || ''
-      if (terminal && data) {
-        terminal.write(data)
-        terminal.scrollToBottom()
-      }
-
+      if (terminal && data) { terminal.write(data); terminal.scrollToBottom() }
       lastOutputRef.current.set(id, appendOutput(lastOutputRef.current.get(id), data))
     })
 
     socket.on('done', (payload) => {
       updateTab(id, { status: 'shell-closed' })
-      writeInfo(id, `[shell encerrada - code ${payload?.code ?? 0}. use Resetar conexao para abrir outra sessao.]`)
+      writeInfo(id, `[shell encerrada (code ${payload?.code ?? 0})]`)
     })
 
     socket.on('error', (payload) => {
       updateTab(id, { status: 'shell-closed' })
-      writeInfo(id, payload?.message || 'Falha ao executar comando.', '31')
+      writeInfo(id, payload?.message || 'Erro na execução.', '31')
     })
 
     socket.on('cwd', (payload) => {
@@ -269,9 +196,7 @@ const Terminal = ({ showPageIntro = true }) => {
   }, [focusTerminal, startShell, updateTab, writeInfo])
 
   const ensureTerminal = useCallback((id, container) => {
-    if (!container || terminalsRef.current.has(id)) {
-      return
-    }
+    if (!container || terminalsRef.current.has(id)) return
 
     const { terminal, fitAddon } = createTerminalInstance(container)
     terminalsRef.current.set(id, terminal)
@@ -279,35 +204,21 @@ const Terminal = ({ showPageIntro = true }) => {
 
     terminal.onData((data) => {
       const socket = socketsRef.current.get(id)
-      if (socket?.connected) {
-        socket.emit('input', { data })
-      }
+      if (socket?.connected) socket.emit('input', { data })
     })
 
     terminal.attachCustomKeyEventHandler((event) => {
       const key = event.key.toLowerCase()
-      const usingModifier = event.ctrlKey || event.metaKey
-
-      if (usingModifier && key === 'c') {
-        const selection = terminal.getSelection()
-        if (selection) {
-          if (navigator.clipboard?.writeText) {
-            navigator.clipboard.writeText(selection).catch(() => {})
-          }
-          return false
-        }
+      const mod = event.ctrlKey || event.metaKey
+      if (mod && key === 'c') {
+        const sel = terminal.getSelection()
+        if (sel) { navigator.clipboard?.writeText(sel).catch(() => {}); return false }
         return true
       }
-
-      // Block Ctrl+V key event — paste is handled by the DOM paste event below
-      if (usingModifier && key === 'v') {
-        return false
-      }
-
+      if (mod && key === 'v') return false
       return true
     })
 
-    // Single paste handler via DOM event — avoids duplication from clipboard permission prompt
     let pasteHandled = false
     container.addEventListener('paste', (e) => {
       e.preventDefault()
@@ -331,291 +242,103 @@ const Terminal = ({ showPageIntro = true }) => {
   }, [connectSocket, fitTerminal, focusTerminal])
 
   useEffect(() => () => {
-    Array.from(socketsRef.current.keys()).forEach((id) => destroySocket(id))
-    Array.from(terminalsRef.current.keys()).forEach((id) => cleanupTerminal(id))
+    Array.from(socketsRef.current.keys()).forEach(destroySocket)
+    Array.from(terminalsRef.current.keys()).forEach(cleanupTerminal)
   }, [cleanupTerminal, destroySocket])
 
-  useEffect(() => {
-    if (activeId) {
-      focusTerminal(activeId)
-    }
-  }, [activeId, focusTerminal])
-
-  useEffect(() => {
-    if (!isExpanded) {
-      return undefined
-    }
-
-    const previousOverflow = document.body.style.overflow
-    const handleKeyDown = (event) => {
-      if (event.key === 'Escape') {
-        setIsExpanded(false)
-      }
-    }
-
-    document.body.style.overflow = 'hidden'
-    window.addEventListener('keydown', handleKeyDown)
-
-    return () => {
-      document.body.style.overflow = previousOverflow
-      window.removeEventListener('keydown', handleKeyDown)
-    }
-  }, [isExpanded])
-
-  useEffect(() => {
-    const frame = requestAnimationFrame(() => {
-      if (activeId) {
-        focusTerminal(activeId)
-      }
-    })
-
-    return () => cancelAnimationFrame(frame)
-  }, [activeId, focusTerminal, isExpanded])
+  useEffect(() => { if (activeId) focusTerminal(activeId) }, [activeId, focusTerminal])
 
   const addTab = () => {
     const nextTab = createTab(tabsRef.current.length + 1)
-    setTabs((currentTabs) => [...currentTabs, nextTab])
+    setTabs((cur) => [...cur, nextTab])
     setActiveId(nextTab.id)
   }
 
   const closeTab = (id) => {
-    if (tabsRef.current.length === 1) {
-      return
-    }
-
+    if (tabsRef.current.length === 1) return
     destroySocket(id)
     cleanupTerminal(id)
-
-    setTabs((currentTabs) => {
-      const nextTabs = currentTabs.filter((tab) => tab.id !== id)
-      if (activeId === id && nextTabs.length > 0) {
-        setActiveId(nextTabs[0].id)
-      }
-      return nextTabs
+    setTabs((cur) => {
+      const next = cur.filter((t) => t.id !== id)
+      if (activeId === id && next.length > 0) setActiveId(next[0].id)
+      return next
     })
   }
 
-  const resetConnection = () => {
-    const activeTab = tabs.find((tab) => tab.id === activeId)
-    if (!activeTab) {
-      return
-    }
-
-    const socket = socketsRef.current.get(activeId)
-    if (socket?.connected && activeTab.status === 'shell-closed') {
-      startShell(activeId, true)
-      focusTerminal(activeId)
-      return
-    }
-
-    destroySocket(activeId)
-    updateTab(activeId, { status: 'connecting' })
-    connectSocket(activeId)
-    focusTerminal(activeId)
-  }
-
-  const clearTerminal = () => {
-    const terminal = terminalsRef.current.get(activeId)
-    const socket = socketsRef.current.get(activeId)
-    const activeTab = tabs.find((tab) => tab.id === activeId)
-    if (!terminal) {
-      return
-    }
-
-    if (socket?.connected && activeTab?.status === 'connected') {
-      socket.emit('input', { data: '\f' })
-      return
-    }
-
-    terminal.clear()
-    terminal.scrollToBottom()
-    lastOutputRef.current.set(activeId, '')
-  }
-
-  const copyLastOutput = async () => {
-    const terminal = terminalsRef.current.get(activeId)
-    const selection = terminal?.getSelection()
-    const output = selection || lastOutputRef.current.get(activeId) || ''
-    if (!output) {
-      return
-    }
-
-    try {
-      await navigator.clipboard.writeText(output.trim())
-    } catch {
-      // Ignore clipboard errors.
-    }
-  }
-
-  const setContainerRef = useCallback((id) => (element) => {
-    if (!element) {
-      return
-    }
-
-    containersRef.current.set(id, element)
-    ensureTerminal(id, element)
+  const setContainerRef = useCallback((id) => (el) => {
+    if (!el) return
+    containersRef.current.set(id, el)
+    ensureTerminal(id, el)
   }, [ensureTerminal])
 
-  const activeTab = tabs.find((tab) => tab.id === activeId)
-  const shellHeightClass = isExpanded ? 'min-h-0' : 'min-h-[560px]'
+  const activeTab = tabs.find((t) => t.id === activeId)
 
   return (
-    <div
-      className={isExpanded
-        ? 'fixed inset-0 z-[100] flex min-h-screen flex-col gap-3 overflow-hidden p-3 sm:p-4'
-        : 'flex min-h-[calc(100vh-180px)] flex-col gap-4'
-      }
-      style={isExpanded ? { background: 'var(--color-bg)' } : undefined}
-    >
-      <div className={`flex flex-wrap gap-3 ${showPageIntro ? 'items-center justify-between' : 'items-center justify-end'}`}>
-        {showPageIntro ? (
-          <div>
-            <p className="zeus-kicker text-xs font-semibold uppercase">Terminal</p>
-            <h2 className="text-2xl font-semibold" style={{ color: 'var(--text-primary)' }}>Sessao interativa completa</h2>
-          </div>
-        ) : null}
-
-        <div className="flex flex-wrap items-center gap-2">
-          <button
-            className="flex items-center gap-2 rounded-lg border px-3 py-2 text-xs transition"
-            style={{ background: 'var(--bg-elevated)', borderColor: 'var(--border-default)', color: 'var(--text-secondary)' }}
-            onMouseEnter={(event) => {
-              event.currentTarget.style.borderColor = 'var(--accent)'
-              event.currentTarget.style.color = 'var(--text-primary)'
-            }}
-            onMouseLeave={(event) => {
-              event.currentTarget.style.borderColor = 'var(--border-default)'
-              event.currentTarget.style.color = 'var(--text-secondary)'
-            }}
-            onClick={copyLastOutput}
-          >
-            <Copy className="h-4 w-4" />
-            Copiar saida
-          </button>
-          <button
-            className="flex items-center gap-2 rounded-lg border px-3 py-2 text-xs transition"
-            style={{ background: 'var(--bg-elevated)', borderColor: 'var(--border-default)', color: 'var(--text-secondary)' }}
-            onMouseEnter={(event) => {
-              event.currentTarget.style.borderColor = 'var(--accent)'
-              event.currentTarget.style.color = 'var(--text-primary)'
-            }}
-            onMouseLeave={(event) => {
-              event.currentTarget.style.borderColor = 'var(--border-default)'
-              event.currentTarget.style.color = 'var(--text-secondary)'
-            }}
-            onClick={clearTerminal}
-          >
-            <Trash2 className="h-4 w-4" />
-            Limpar
-          </button>
-          <button
-            className="flex items-center gap-2 rounded-lg border px-3 py-2 text-xs transition"
-            style={{ background: 'var(--bg-elevated)', borderColor: 'var(--border-default)', color: 'var(--text-secondary)' }}
-            onMouseEnter={(event) => {
-              event.currentTarget.style.borderColor = 'var(--accent)'
-              event.currentTarget.style.color = 'var(--text-primary)'
-            }}
-            onMouseLeave={(event) => {
-              event.currentTarget.style.borderColor = 'var(--border-default)'
-              event.currentTarget.style.color = 'var(--text-secondary)'
-            }}
-            onClick={resetConnection}
-          >
-            <RefreshCw className="h-4 w-4" />
-            Resetar conexao
-          </button>
-          <button
-            className="flex items-center gap-2 rounded-lg border px-3 py-2 text-xs transition"
-            style={{ background: 'var(--bg-elevated)', borderColor: 'var(--border-default)', color: 'var(--text-secondary)' }}
-            onMouseEnter={(event) => {
-              event.currentTarget.style.borderColor = 'var(--accent)'
-              event.currentTarget.style.color = 'var(--text-primary)'
-            }}
-            onMouseLeave={(event) => {
-              event.currentTarget.style.borderColor = 'var(--border-default)'
-              event.currentTarget.style.color = 'var(--text-secondary)'
-            }}
-            onClick={() => setIsExpanded((current) => !current)}
-            aria-pressed={isExpanded}
-            title={isExpanded ? 'Sair da tela cheia' : 'Expandir terminal'}
-          >
-            {isExpanded ? <Minimize2 className="h-4 w-4" /> : <Maximize2 className="h-4 w-4" />}
-            {isExpanded ? 'Sair da tela cheia' : 'Tela cheia'}
-          </button>
-          <button
-            className="flex items-center gap-2 rounded-2xl bg-[linear-gradient(135deg,_#16366f,_#2563eb)] px-3 py-2 text-xs font-semibold text-white transition hover:brightness-110"
-            onClick={addTab}
-          >
-            <Plus className="h-4 w-4" />
-            Nova aba
-          </button>
-        </div>
-      </div>
-
-      <div className="flex flex-wrap gap-2">
+    <div className="flex h-full w-full flex-col overflow-hidden" style={{ background: '#0d1117' }}>
+      {/* Tab bar */}
+      <div className="flex shrink-0 items-center gap-0 overflow-x-auto px-1 pt-1" style={{ background: '#010409' }}>
         {tabs.map((tab) => {
           const isActive = activeId === tab.id
-
+          const isConnected = tab.status === 'connected'
           return (
             <button
               key={tab.id}
               onClick={() => setActiveId(tab.id)}
-              className="flex items-center gap-2 rounded-full border px-4 py-2 text-xs transition"
-              style={isActive
-                ? { background: 'var(--accent-dim)', borderColor: 'rgba(77,126,247,0.35)', color: 'var(--accent)' }
-                : { background: 'var(--bg-elevated)', borderColor: 'var(--border-default)', color: 'var(--text-secondary)' }
-              }
+              className={`group relative flex items-center gap-1.5 px-3 py-1.5 text-[11px] font-medium transition-all rounded-t-lg ${
+                isActive
+                  ? 'bg-[#0d1117] text-gray-200 z-10'
+                  : 'text-gray-500 hover:text-gray-300 hover:bg-[#0d1117]/50'
+              }`}
             >
-              <TerminalIcon className="h-3.5 w-3.5" />
+              {/* Connection dot */}
+              <span className={`w-1.5 h-1.5 rounded-full ${isConnected ? 'bg-green-400' : 'bg-gray-600'}`} />
               <span>{tab.title}</span>
-              <span className="hidden max-w-40 truncate text-[10px] text-inherit opacity-70 md:inline">{summarizeCwd(tab.cwd)}</span>
-              <span className="rounded-full px-2 py-0.5 text-[10px]" style={{ background: 'var(--bg-card)', color: 'var(--text-muted)' }}>
-                {formatStatus(tab.status)}
-              </span>
-              {tabs.length > 1 ? (
+              <span className="hidden sm:inline text-[9px] text-gray-600 max-w-[80px] truncate">{summarizeCwd(tab.cwd)}</span>
+              {tabs.length > 1 && (
                 <span
-                  className="ml-1 hover:text-rose-400"
-                  style={{ color: 'var(--text-muted)' }}
-                  onClick={(event) => {
-                    event.stopPropagation()
-                    closeTab(tab.id)
-                  }}
+                  onClick={(e) => { e.stopPropagation(); closeTab(tab.id) }}
+                  className="ml-1 opacity-0 group-hover:opacity-100 text-gray-600 hover:text-red-400 transition-opacity"
                 >
-                  ×
+                  <X size={10} />
                 </span>
-              ) : null}
+              )}
+              {/* Active indicator */}
+              {isActive && <span className="absolute bottom-0 left-2 right-2 h-[2px] rounded-full bg-blue-500" />}
             </button>
           )
         })}
+
+        {/* New tab button */}
+        <button
+          onClick={addTab}
+          className="flex items-center gap-1 px-2.5 py-1.5 ml-0.5 text-[11px] text-gray-500 hover:text-gray-200 rounded-t-lg transition-colors hover:bg-[#0d1117]/50"
+          title="Nova aba"
+        >
+          <Plus size={12} />
+        </button>
+
+        {/* Right side: status */}
+        <div className="ml-auto flex items-center gap-1.5 px-2 text-[10px] text-gray-600">
+          {activeTab?.status === 'connected'
+            ? <><Wifi size={10} className="text-green-400" /><span className="text-green-400/70">conectado</span></>
+            : <><WifiOff size={10} className="text-red-400/60" /><span className="text-red-400/60">{activeTab?.status === 'connecting' ? 'conectando' : 'desconectado'}</span></>
+          }
+        </div>
       </div>
 
-      <div className={`flex min-h-[0] flex-1 flex-col border border-[#30363d] bg-[linear-gradient(180deg,#010409_0%,#050a11_100%)] p-4 shadow-[0_24px_64px_rgba(0,0,0,0.5)] ${isExpanded ? 'rounded-xl' : 'rounded-[1.5rem]'}`}>
-        <div className="mb-3 flex flex-wrap items-center justify-between gap-3 text-xs text-[#8b949e]">
-          <span className="flex items-center gap-2">
-            {activeTab?.status === 'connected' ? <Wifi className="h-4 w-4 text-[#58a6ff]" /> : <WifiOff className="h-4 w-4 text-[#ff7b72]" />}
-            {formatStatus(activeTab?.status)}
-          </span>
-          <span className="max-w-full truncate text-right text-[#6e7681]">{activeTab?.cwd || '~'}</span>
-        </div>
-
-        <div className={`relative flex-1 overflow-hidden rounded-[22px] border border-[#30363d] bg-[#0d1117] shadow-[0_16px_48px_rgba(0,0,0,0.4)] ${shellHeightClass}`}>
-          {tabs.map((tab) => (
+      {/* Terminal area */}
+      <div className="relative flex-1 overflow-hidden">
+        {tabs.map((tab) => (
+          <div
+            key={tab.id}
+            className={`absolute inset-0 ${activeId === tab.id ? 'visible' : 'invisible pointer-events-none'}`}
+          >
             <div
-              key={tab.id}
-              className={`absolute inset-0 ${activeId === tab.id ? 'visible' : 'invisible pointer-events-none'}`}
-            >
-              <div
-                ref={setContainerRef(tab.id)}
-                className="provir-terminal-shell h-full w-full"
-              />
-            </div>
-          ))}
-        </div>
-
-        <div className="mt-3 flex flex-wrap items-center justify-between gap-2 text-[11px] text-[#6e7681]">
-          <span>Ctrl/Cmd+C copia selecao ou envia interrupcao para o shell</span>
-          <span>Ctrl/Cmd+V cola diretamente na sessao ativa</span>
-        </div>
+              ref={setContainerRef(tab.id)}
+              className="provir-terminal-shell h-full w-full p-1"
+            />
+          </div>
+        ))}
       </div>
     </div>
   )
