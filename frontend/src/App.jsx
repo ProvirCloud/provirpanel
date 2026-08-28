@@ -26,6 +26,7 @@ import GitHubServiceWizardPage from './pages/GitHubServiceWizardPage.jsx'
 import ServiceDetailsPage from './pages/ServiceDetailsPage.jsx'
 import StacksPanel from './components/StacksPanel.jsx'
 import ZeusChat from './components/ZeusChat.jsx'
+import FloatingTerminal from './components/FloatingTerminal.jsx'
 import ZeusPanels from './components/ZeusPanels.jsx'
 import DatabaseConnectionsPanel from './components/DatabaseConnectionsPanel.jsx'
 import WorkspacesPage from './pages/WorkspacesPage.jsx'
@@ -118,6 +119,7 @@ const App = () => {
             <ProtectedRoute loading={authState.loading} authenticated={authState.authenticated}>
               <MainLayout />
               <ZeusChat />
+              <FloatingTerminal />
             </ProtectedRoute>
           }
         >
