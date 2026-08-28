@@ -1,18 +1,19 @@
-import { useEffect, useRef } from 'react'
+/**
+ * TerminalPage - Container placeholder para a rota /terminal.
+ * 
+ * O FloatingTerminal (instância única global) detecta esta página via useLocation
+ * e "encaixa" visualmente neste container usando position:fixed + getBoundingClientRect.
+ * Isso evita unmount/remount do Terminal, mantendo a sessão WebSocket viva.
+ */
 
 const TERMINAL_PAGE_CONTAINER_ID = 'terminal-page-container'
 
-/**
- * TerminalPage - Container para o terminal quando na rota /terminal.
- * O FloatingTerminal detecta este container e renderiza o terminal aqui via portal.
- * Isso mantém uma única instância de Terminal (sem duplicação de WebSocket).
- */
 const TerminalPage = () => {
   return (
     <div
       id={TERMINAL_PAGE_CONTAINER_ID}
-      className="flex flex-col h-full w-full min-h-[400px] rounded-xl overflow-hidden border border-[var(--color-border)]"
-      style={{ background: '#0d1117' }}
+      className="h-full w-full min-h-[500px] rounded-xl"
+      style={{ background: 'transparent' }}
     />
   )
 }
