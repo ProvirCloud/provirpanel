@@ -2,7 +2,9 @@
 set -euo pipefail
 
 INSTALL_DIR="$(pwd)/provirpanel"
-REPO_URL="${PROVIRPANEL_REPO_URL:-git@github-zeus:ProvirCloud/provirpanel.git}"
+# Usa SSH padrao do github.com (sem token embutido). Sobrescrevivel via env
+# PROVIRPANEL_REPO_URL. Evita tokens em texto plano na URL do remote.
+REPO_URL="${PROVIRPANEL_REPO_URL:-git@github.com:ProvirCloud/provirpanel.git}"
 
 log() {
   printf "\n[update] %s\n" "$1"
@@ -242,6 +244,21 @@ git fetch origin || {
   echo "Erro: falha ao acessar ${REPO_URL}. Configure uma chave SSH/deploy key autorizada no GitHub para este servidor."
   exit 1
 }
+
+# Detectar se o codigo do terminal-service mudou entre o HEAD atual e origin/main.
+# Usado mais abaixo para so reiniciar o provirpanel-terminal quando necessario
+# (evita derrubar a sessao do terminal do painel durante a atualizacao).
+TERMINAL_SERVICE_CHANGED=0
+if git rev-parse HEAD >/dev/null 2>&1; then
+  if ! git diff --quiet HEAD origin/main -- terminal-service/ 2>/dev/null; then
+    TERMINAL_SERVICE_CHANGED=1
+  fi
+else
+  # Sem HEAD valido (primeiro deploy): trata como mudanca para garantir start.
+  TERMINAL_SERVICE_CHANGED=1
+fi
+export TERMINAL_SERVICE_CHANGED
+
 git reset --hard origin/main
 
 log "Atualizando dependências backend"
@@ -364,10 +381,22 @@ if [[ -f "${TERMINAL_SERVICE_DIR}/package.json" ]]; then
     sed -i '/location \/socket\.io\/ {/i \    location /terminal-ws/ {\n        proxy_pass http://upstream-terminal;\n        proxy_http_version 1.1;\n        proxy_set_header Upgrade $http_upgrade;\n        proxy_set_header Connection "upgrade";\n        proxy_set_header Host $host;\n        proxy_set_header X-Real-IP $remote_addr;\n        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;\n        proxy_set_header X-Forwarded-Proto $scheme;\n        proxy_connect_timeout 5s;\n        proxy_read_timeout 86400s;\n        proxy_send_timeout 86400s;\n    }\n' "${PANEL_NGINX}"
   fi
 
-  # Iniciar/reiniciar terminal-service no PM2 (NÃO reinicia junto com o backend)
+  # Iniciar/reiniciar terminal-service no PM2
+  # IMPORTANTE: este update.sh pode estar rodando DENTRO do terminal do painel,
+  # que esta conectado ao proprio provirpanel-terminal (porta 3003). Reiniciar o
+  # servico de forma sincrona mataria o WebSocket e derrubaria a atualizacao no meio.
+  # Por isso: (1) so reinicia se o codigo do terminal-service realmente mudou e
+  # (2) o restart e desacoplado (setsid) para nao morrer junto com a sessao atual.
   if pm2 describe provirpanel-terminal >/dev/null 2>&1; then
-    log "Reiniciando terminal-service"
-    pm2 restart provirpanel-terminal
+    if [[ "${TERMINAL_SERVICE_CHANGED:-0}" == "1" ]]; then
+      log "Codigo do terminal-service mudou: agendando restart desacoplado (nao derruba a sessao atual)"
+      # Roda em nova sessao, apos um pequeno delay, para que o update.sh termine
+      # e a resposta chegue ao terminal antes do WebSocket ser reciclado.
+      setsid bash -c 'sleep 3; pm2 restart provirpanel-terminal' >/dev/null 2>&1 < /dev/null &
+      disown 2>/dev/null || true
+    else
+      log "terminal-service inalterado: mantendo processo atual (sessao do terminal preservada)"
+    fi
   else
     log "Iniciando terminal-service no PM2"
     cd "${TERMINAL_SERVICE_DIR}" && pm2 start server.js --name provirpanel-terminal
@@ -379,17 +408,28 @@ fi
 # Testar e recarregar nginx após terminal-service
 test_and_reload_nginx
 
-log "Reiniciando backend para carregar Sites e WordPress"
-pm2 delete provirpanel-backend 2>/dev/null || true
-cd "${INSTALL_DIR}" && pm2 start backend/src/server.js --name provirpanel-backend --env production
+log "Recarregando backend para carregar Sites e WordPress"
+# Usa reload gracioso (zero-downtime) quando o app ja existe, evitando o gap de
+# porta (EADDRINUSE) que ocorria com delete+start. Só faz start no primeiro deploy.
+if pm2 describe provirpanel-backend >/dev/null 2>&1; then
+  cd "${INSTALL_DIR}" && pm2 reload provirpanel-backend --update-env
+else
+  cd "${INSTALL_DIR}" && pm2 start backend/src/server.js --name provirpanel-backend --env production
+fi
 pm2 save
 
-# Garantir que PM2 inicie no boot
-env PATH=$PATH:/usr/bin /usr/lib/node_modules/pm2/bin/pm2 startup systemd -u root --hp /root 2>/dev/null || true
-pm2 startup systemd 2>/dev/null || true
+# Garantir que PM2 inicie no boot para o USUARIO ATUAL do deploy (nunca root).
+# Rodar o daemon PM2 como root criava um segundo daemon paralelo e provocava
+# conflito de porta (dois provirpanel-backend disputando a 3001). Mantemos um
+# unico daemon PM2, pertencente ao usuario que executa este update.
+DEPLOY_USER="$(id -un)"
+DEPLOY_HOME="$(eval echo "~${DEPLOY_USER}")"
+STARTUP_CMD="$(pm2 startup systemd -u "${DEPLOY_USER}" --hp "${DEPLOY_HOME}" 2>/dev/null | grep -E '^sudo ' | tail -n 1 || true)"
+if [[ -n "${STARTUP_CMD}" ]]; then
+  # A instalacao da unit systemd exige root; executa apenas o comando gerado pelo PM2.
+  eval "${STARTUP_CMD}" 2>/dev/null || log "AVISO: nao foi possivel instalar a unit systemd do PM2 (execute manualmente: ${STARTUP_CMD})"
+fi
 pm2 save
-systemctl enable pm2-root 2>/dev/null || systemctl enable pm2 2>/dev/null || true
-systemctl start pm2-root 2>/dev/null || systemctl start pm2 2>/dev/null || true
 
 log "Atualização concluída com sucesso"
 log "Painel: http://$(hostname -I 2>/dev/null | awk '{print $1}' || echo 'localhost')/admin/"

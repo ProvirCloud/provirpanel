@@ -53,5 +53,8 @@ Thumbs.db
 # PM2
 .pm2/
 
+# Backups de deploy gerados localmente
+.deploy-backup-*/
+
 # Docker
 .dockerignore
