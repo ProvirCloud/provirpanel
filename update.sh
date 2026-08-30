@@ -290,6 +290,11 @@ log "Compilando frontend"
 cd frontend && npm run build && cd ..
 
 log "Atualizando arquivos estáticos"
+mkdir -p /var/www/panel
+# Remove bundles hasheados antigos para nao acumular lixo em /var/www/panel/assets
+# a cada deploy (o Vite gera nomes com hash; sem isso, os antigos ficam para sempre).
+# Nao remove index.html, favicons nem outros estaticos — apenas os assets hasheados.
+rm -f /var/www/panel/assets/index-*.js /var/www/panel/assets/index-*.css 2>/dev/null || true
 cp -r frontend/dist/* /var/www/panel/
 chown -R www-data:www-data /var/www/panel
 chmod -R 755 /var/www/panel
