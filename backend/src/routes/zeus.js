@@ -1,5 +1,6 @@
 const { Router } = require('express');
 const { collectLocalContext, formatContextForPrompt, collectPanelsContext, formatPanelsContext } = require('../services/zeus-context');
+const { TOOL_DEFS, runTool } = require('../services/zeus-agent-tools');
 const router = Router();
 
 // Allow self-signed certs for server-to-server communication
@@ -312,6 +313,109 @@ router.post('/chat/smart/confirm', async (req, res, next) => {
   } catch (err) {
     if (!res.headersSent) return next(err);
     res.write(`data: ${JSON.stringify({ type: 'error', error: err.message })}\n\n`);
+    res.end();
+  }
+});
+
+// POST /zeus/agent — agente read-only com tool-use (Bedrock Converse)
+// Loop: modelo → toolUse → executa tool localmente (JWT do user) → toolResult → repete.
+// Streama eventos SSE: tool_call, tool_result, token (resposta final), end, error.
+const AGENT_SYSTEM_PROMPT = `Você é o Zeus, assistente de infraestrutura do Provir Cloud Panel.
+Você tem acesso a ferramentas de LEITURA que consultam dados reais do painel: serviços/containers Docker, métricas, bancos de dados cadastrados, sites e Nginx.
+Regras:
+- Quando o usuário pedir para listar, mostrar ou verificar o estado de máquina, serviços, containers, bancos, sites ou métricas, USE as ferramentas para obter dados reais em vez de inventar.
+- Você é read-only: NÃO pode iniciar, parar, reiniciar nem apagar nada. Se pedirem uma ação dessas, explique que nesta fase só consegue consultar informações.
+- Após obter os dados, responda em português, de forma objetiva, usando markdown (tabelas ou listas quando fizer sentido).
+- Se uma ferramenta falhar, informe o erro de forma clara.`;
+
+router.post('/agent', async (req, res, next) => {
+  const MAX_ITERATIONS = 6;
+  const sendEvent = (data) => res.write(`data: ${JSON.stringify(data)}\n\n`);
+
+  try {
+    const { message, history } = req.body;
+    if (!message || typeof message !== 'string' || !message.trim()) {
+      return res.status(400).json({ error: 'message is required' });
+    }
+    const token = req.headers.authorization?.replace('Bearer ', '');
+    if (!token) return res.status(401).json({ error: 'token ausente' });
+
+    res.setHeader('Content-Type', 'text/event-stream');
+    res.setHeader('Cache-Control', 'no-cache');
+    res.setHeader('Connection', 'keep-alive');
+    res.setHeader('X-Accel-Buffering', 'no');
+    res.flushHeaders();
+    res.write(`: ${' '.repeat(2048)}\n\n`);
+
+    // Monta histórico no formato Converse (só texto)
+    const messages = [];
+    if (Array.isArray(history)) {
+      for (const h of history.slice(-8)) {
+        if (!h || !h.role || !h.content) continue;
+        const role = h.role === 'assistant' ? 'assistant' : 'user';
+        messages.push({ role, content: [{ text: String(h.content) }] });
+      }
+    }
+    messages.push({ role: 'user', content: [{ text: message.trim() }] });
+
+    let finalText = '';
+
+    for (let i = 0; i < MAX_ITERATIONS; i++) {
+      const result = await zeusRequest('/api/chat/converse', {
+        messages,
+        system: AGENT_SYSTEM_PROMPT,
+        tools: TOOL_DEFS,
+        maxTokens: 2048,
+        temperature: 0.2,
+      });
+
+      // Reinsere a mensagem do assistant (com eventuais toolUse) no histórico
+      if (result.assistantMessage) {
+        messages.push(result.assistantMessage);
+      }
+
+      if (result.stopReason === 'tool_use' && Array.isArray(result.toolUses) && result.toolUses.length) {
+        const toolResultBlocks = [];
+        for (const tu of result.toolUses) {
+          sendEvent({ type: 'tool_call', name: tu.name, input: tu.input });
+          let toolContent;
+          let isError = false;
+          try {
+            const out = await runTool(tu.name, tu.input, token);
+            toolContent = out;
+          } catch (err) {
+            isError = true;
+            toolContent = { error: err.message };
+          }
+          sendEvent({ type: 'tool_result', name: tu.name, error: isError, result: toolContent });
+          toolResultBlocks.push({
+            toolResult: {
+              toolUseId: tu.toolUseId,
+              content: [{ json: toolContent }],
+              ...(isError ? { status: 'error' } : {}),
+            },
+          });
+        }
+        // Envia os resultados das tools de volta ao modelo
+        messages.push({ role: 'user', content: toolResultBlocks });
+        continue; // próxima iteração: modelo processa os resultados
+      }
+
+      // stopReason end_turn (ou outro) → resposta final
+      finalText = result.text || '';
+      break;
+    }
+
+    if (!finalText) {
+      finalText = 'Não consegui concluir a consulta (limite de iterações atingido ou resposta vazia).';
+    }
+
+    sendEvent({ type: 'token', content: finalText });
+    sendEvent({ type: 'end' });
+    return res.end();
+  } catch (err) {
+    if (!res.headersSent) return next(err);
+    sendEvent({ type: 'error', error: err.message });
     res.end();
   }
 });

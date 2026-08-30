@@ -50,10 +50,10 @@ const ZeusChat = () => {
     try {
       const token = localStorage.getItem('provirpanel-token')
       const baseURL = api.defaults.baseURL || '/api'
-      const res = await fetch(`${baseURL}/zeus/chat/smart`, {
+      const res = await fetch(`${baseURL}/zeus/agent`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json', ...(token ? { Authorization: `Bearer ${token}` } : {}) },
-        body: JSON.stringify({ message: text, stream: true }),
+        body: JSON.stringify({ message: text, history }),
         signal: controller.signal
       })
 
@@ -61,6 +61,15 @@ const ZeusChat = () => {
       const reader = res.body.getReader()
       const decoder = new TextDecoder()
       let buf = ''
+      const toolLabels = {
+        list_services: 'Consultando serviços Docker',
+        get_service_metrics: 'Obtendo métricas do serviço',
+        list_docker_containers: 'Listando containers Docker',
+        list_databases: 'Consultando bancos de dados',
+        list_sites: 'Listando sites',
+        get_server_metrics: 'Obtendo métricas do servidor',
+        list_nginx: 'Consultando Nginx'
+      }
 
       while (true) {
         const { done, value } = await reader.read()
@@ -72,30 +81,20 @@ const ZeusChat = () => {
           if (!line.startsWith('data: ')) continue
           try {
             const ev = JSON.parse(line.slice(6))
-            if (ev.type === 'token') {
-              contentRef.current += ev.content
+            if (ev.type === 'tool_call') {
+              const label = toolLabels[ev.name] || `Executando ${ev.name}`
+              contentRef.current += `\n🔧 _${label}..._\n`
               const c = contentRef.current
               setMessages(prev => { const u = [...prev]; if (u[idx]) u[idx] = { ...u[idx], content: c }; return u })
-            } else if (ev.type === 'resposta') {
+            } else if (ev.type === 'tool_result') {
+              if (ev.error) {
+                contentRef.current += `\n⚠️ _Falha em ${ev.name}: ${ev.result?.error || 'erro'}_\n`
+                const c = contentRef.current
+                setMessages(prev => { const u = [...prev]; if (u[idx]) u[idx] = { ...u[idx], content: c }; return u })
+              }
+            } else if (ev.type === 'token') {
+              // Resposta final do agente (texto completo)
               contentRef.current = ev.content
-              const c = contentRef.current
-              setMessages(prev => { const u = [...prev]; if (u[idx]) u[idx] = { ...u[idx], content: c }; return u })
-            } else if (ev.type === 'plano') {
-              const plan = ev.plan
-              const planText = `## 📋 Plano de Ação: ${plan.titulo}\n\n${plan.resumo}\n\n**Estimativa:** ${plan.estimativa}\n\n### Tarefas:\n${plan.tasks.map((t, i) => `${i + 1}. ${t.descricao} *(${t.tipo})*`).join('\n')}\n\n${plan.riscos?.length ? `### ⚠️ Riscos:\n${plan.riscos.map(r => `- ${r}`).join('\n')}\n\n` : ''}**Resultado esperado:** ${plan.resultado_esperado}`
-              contentRef.current = planText
-              setMessages(prev => { const u = [...prev]; if (u[idx]) u[idx] = { ...u[idx], content: planText }; return u })
-              setPendingPlan(plan)
-            } else if (ev.type === 'task_start') {
-              contentRef.current += `\n\n---\n🔄 **Task ${ev.taskId}:** ${ev.descricao}\n\n`
-              const c = contentRef.current
-              setMessages(prev => { const u = [...prev]; if (u[idx]) u[idx] = { ...u[idx], content: c }; return u })
-            } else if (ev.type === 'task_complete') {
-              contentRef.current += `\n✅ Task ${ev.taskId} concluída\n`
-              const c = contentRef.current
-              setMessages(prev => { const u = [...prev]; if (u[idx]) u[idx] = { ...u[idx], content: c }; return u })
-            } else if (ev.type === 'all_complete') {
-              contentRef.current += `\n\n---\n🎉 **Todas as tarefas concluídas!**`
               const c = contentRef.current
               setMessages(prev => { const u = [...prev]; if (u[idx]) u[idx] = { ...u[idx], content: c }; return u })
             } else if (ev.type === 'error') {
@@ -157,11 +156,12 @@ const ZeusChat = () => {
           try {
             const ev = JSON.parse(line.slice(6))
             if (ev.type === 'token') {
-              contentRef.current += ev.content
+              // Output completo virá no task_complete — não acumula tokens (evita duplicação).
             } else if (ev.type === 'task_start') {
               contentRef.current += `\n---\n🔄 **Task ${ev.taskId}:** ${ev.descricao}\n\n`
             } else if (ev.type === 'task_complete') {
-              contentRef.current += `\n✅ Concluída\n`
+              const out = (ev.resultado || '').trim()
+              contentRef.current += out ? `${out}\n\n✅ **Task ${ev.taskId} concluída**\n` : `✅ **Task ${ev.taskId} concluída**\n`
             } else if (ev.type === 'all_complete') {
               contentRef.current += `\n\n---\n🎉 **Todas as tarefas concluídas!**`
             }
@@ -216,7 +216,7 @@ const ZeusChat = () => {
             <div>
               <span className="text-sm font-semibold" style={{ color: 'var(--color-text)' }}>Zeus AI</span>
               <span className="ml-2 rounded-full px-2 py-0.5 text-[9px] font-semibold uppercase tracking-wider"
-                style={{ background: 'var(--color-brand-soft)', color: 'var(--color-brand)' }}>RAG</span>
+                style={{ background: 'var(--color-brand-soft)', color: 'var(--color-brand)' }}>AGENTE</span>
             </div>
           </div>
           <div className="flex items-center gap-1">
