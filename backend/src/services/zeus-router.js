@@ -38,11 +38,14 @@ const INFRA_ACTION_RE = new RegExp(
 // Usamos lookahead unicode (?![\p{L}]) em vez de \b porque, em JS, o word
 // boundary \b não reconhece letras acentuadas (á, é, ê...) como parte da
 // palavra, o que fazia "olá" e "você" não casarem.
-const GREETING_RE = /^(ol[aá]|oi|e a[ií]|opa|bom dia|boa tarde|boa noite|hey|hi|hello|yo)(?![\p{L}])/iu;
-const THANKS_RE = /(?<![\p{L}])(obrigad[oa]|valeu|thanks|thank you|agrade[cç]|tks|vlw)(?![\p{L}])/iu;
-const SMALLTALK_RE = /(?<![\p{L}])(tudo bem|como vai|beleza|de boa|quem [eé] voc[eê]|o que voc[eê] (faz|pode fazer)|who are you|what can you do|tchau|bye|at[eé] mais)(?![\p{L}])/iu;
+const GREETING_RE = /^(ol[aá]|oi+|e a[ií]|opa|salve|bom dia|boa tarde|boa noite|hey|hi|hello|yo|hola)(?![\p{L}])/iu;
+const THANKS_RE = /(?<![\p{L}])(obrigad[oa]|valeu|thanks|thank you|agrade[cç]|tks|vlw|grato|gratid[aã]o)(?![\p{L}])/iu;
+const SMALLTALK_RE = /(?<![\p{L}])(tudo bem|tudo bom|como vai|como voc[eê] est[aá]|beleza|de boa|quem [eé] voc[eê]|o que voc[eê] (faz|pode fazer|é)|voc[eê] pode (me )?ajudar|voc[eê] (é|e) (inteligente|[oó]tim[oa]|legal|bom|boa|incr[ií]vel)|who are you|what can you do|how are you|tchau|bye|at[eé] (mais|logo|breve))(?![\p{L}])/iu;
 // "ajuda"/"help" isolado só é trivial em mensagens muito curtas (ver isTrivialChat).
 const HELP_RE = /(?<![\p{L}])(ajuda|help)(?![\p{L}])/iu;
+// Confirmações/reações curtas (ack). Só contam em mensagens bem curtas para não
+// capturar coisas como "ok, agora liste os serviços".
+const ACK_RE = /^(ok+|okay|certo|certinho|blz|beleza|show|massa|top|legal|perfeito|entendi|entendido|bacana|maneiro|joia|jóia|isso|isso a[ií]|boa|[oó]timo|excelente|👍|🙏|😄|😀)(?![\p{L}])/iu;
 
 /**
  * Retorna true se a mensagem for trivial o suficiente para o LLM local.
@@ -65,7 +68,10 @@ function isTrivialChat(message) {
   // "ajuda"/"help" isolado é trivial apenas em mensagens bem curtas (<= 40 chars);
   // em frases longas/vagas, preferimos o Bedrock (conservador).
   const shortHelp = text.length <= 40 && HELP_RE.test(text);
-  return trivial || shortHelp;
+  // Confirmações/reações (ok, certo, blz, boa, ótimo...) só em mensagens bem
+  // curtas (<= 30 chars) para não capturar "ok, agora reinicie o serviço".
+  const shortAck = text.length <= 30 && ACK_RE.test(text);
+  return trivial || shortHelp || shortAck;
 }
 
 /**
