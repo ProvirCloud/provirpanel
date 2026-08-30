@@ -1,6 +1,7 @@
 const { Router } = require('express');
 const { collectLocalContext, formatContextForPrompt, collectPanelsContext, formatPanelsContext } = require('../services/zeus-context');
 const { TOOL_DEFS, runTool, WRITE_TOOL_DEFS, WRITE_TOOL_META, WRITE_TOOL_NAMES, canRoleUseWriteTool, runWriteTool } = require('../services/zeus-agent-tools');
+const { routeProvider } = require('../services/zeus-router');
 const router = Router();
 
 // Allow self-signed certs for server-to-server communication
@@ -365,6 +366,48 @@ router.post('/agent', async (req, res, next) => {
       }
     }
     messages.push({ role: 'user', content: [{ text: `[contexto: seu perfil de usuário é "${req.user?.role || 'viewer'}"]\n\n${message.trim()}` }] });
+
+    // ── Roteamento híbrido: mensagens triviais/conversacionais vão para o LLM
+    // local (Ollama, grátis). Consultas/ações e qualquer dúvida vão para o
+    // Bedrock (tool-use). Conservador: só desvia o que é claramente trivial.
+    const provider = routeProvider(message, history);
+    if (provider === 'ollama') {
+      sendEvent({ type: 'provider', provider: 'ollama' });
+      try {
+        const streamRes = await fetch(`${ZEUS_GATEWAY_URL}/api/chat/direct/stream`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json', 'x-api-key': ZEUS_API_KEY },
+          body: JSON.stringify({
+            messages: [
+              { role: 'system', content: 'Você é o Zeus, assistente de infraestrutura do Provir Cloud Panel. Responda em português brasileiro, de forma breve e cordial. Nunca diga que é outro modelo (como Qwen ou Alibaba); você é o Zeus AI da Provir Cloud. Para conversas triviais, seja simpático e, quando fizer sentido, lembre que pode consultar serviços, containers, bancos, métricas e sites do painel.' },
+              { role: 'user', content: message.trim() },
+            ],
+            options: { large: false },
+          }),
+        });
+        if (!streamRes.ok) throw new Error(`Ollama direct falhou (${streamRes.status})`);
+        // Repassa os eventos SSE do gateway (type: token / done / end)
+        const decoder = new TextDecoder();
+        let buf = '';
+        for await (const chunk of streamRes.body) {
+          buf += typeof chunk === 'string' ? chunk : decoder.decode(chunk, { stream: true });
+          const lines = buf.split('\n');
+          buf = lines.pop() || '';
+          for (const line of lines) {
+            if (line.startsWith('data: ')) res.write(line + '\n\n');
+          }
+        }
+        if (buf.startsWith('data: ')) res.write(buf + '\n\n');
+        sendEvent({ type: 'end' });
+        return res.end();
+      } catch (err) {
+        // Fallback conservador: se o Ollama falhar, cai no Bedrock.
+        console.warn('[zeus/agent] Ollama trivial falhou, fallback Bedrock:', err.message);
+        sendEvent({ type: 'provider', provider: 'bedrock', fallback: true });
+      }
+    } else {
+      sendEvent({ type: 'provider', provider: 'bedrock' });
+    }
 
     const role = req.user?.role || 'viewer';
 
