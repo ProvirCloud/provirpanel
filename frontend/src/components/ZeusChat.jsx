@@ -14,6 +14,7 @@ const ZeusChat = () => {
   const [input, setInput] = useState('')
   const [loading, setLoading] = useState(false)
   const [pendingPlan, setPendingPlan] = useState(null)
+  const [pendingAction, setPendingAction] = useState(null)
   const scrollRef = useRef(null)
   const inputRef = useRef(null)
   const contentRef = useRef('')
@@ -97,6 +98,13 @@ const ZeusChat = () => {
               contentRef.current = ev.content
               const c = contentRef.current
               setMessages(prev => { const u = [...prev]; if (u[idx]) u[idx] = { ...u[idx], content: c }; return u })
+            } else if (ev.type === 'action_proposal') {
+              const a = ev.action
+              const rollback = ev.meta?.rollback
+              const proposalText = `${contentRef.current}\n\n---\n⚠️ **Ação proposta:** \`${a.tool}\`\n\n**Alvo:** ${a.input?.serviceName || a.input?.serviceId || a.input?.name || '—'}\n**Risco:** ${ev.meta?.risk || 'medium'}${rollback ? `\n**Rollback:** ${rollback}` : ''}\n\nConfirme para executar.`
+              contentRef.current = proposalText
+              setMessages(prev => { const u = [...prev]; if (u[idx]) u[idx] = { ...u[idx], content: proposalText }; return u })
+              setPendingAction(a)
             } else if (ev.type === 'error') {
               setMessages(prev => { const u = [...prev]; if (u[idx]) u[idx] = { role: 'assistant', content: ev.error, error: true }; return u })
             }
@@ -114,7 +122,7 @@ const ZeusChat = () => {
   }
 
   const stop = () => abortRef.current?.abort()
-  const clearChat = () => { setMessages([]); localStorage.removeItem(STORAGE_KEY); setPendingPlan(null) }
+  const clearChat = () => { setMessages([]); localStorage.removeItem(STORAGE_KEY); setPendingPlan(null); setPendingAction(null) }
 
   const confirmPlan = async () => {
     if (!pendingPlan || loading) return
@@ -181,6 +189,76 @@ const ZeusChat = () => {
   }
 
   const rejectPlan = () => { setPendingPlan(null) }
+
+  const confirmAction = async () => {
+    if (!pendingAction || loading) return
+    const action = pendingAction
+    setPendingAction(null)
+    setLoading(true)
+
+    const idx = messages.length
+    idxRef.current = idx
+    contentRef.current = `⚡ Executando \`${action.tool}\`...\n\n`
+    setMessages(prev => [...prev, { role: 'assistant', content: contentRef.current }])
+
+    const controller = new AbortController()
+    abortRef.current = controller
+
+    try {
+      const token = localStorage.getItem('provirpanel-token')
+      const baseURL = api.defaults.baseURL || '/api'
+      const res = await fetch(`${baseURL}/zeus/agent/confirm`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', ...(token ? { Authorization: `Bearer ${token}` } : {}) },
+        body: JSON.stringify({ action }),
+        signal: controller.signal
+      })
+
+      if (!res.ok) {
+        let msg = `HTTP ${res.status}`
+        try { const j = await res.json(); msg = j.error || msg } catch {}
+        throw new Error(msg)
+      }
+      const reader = res.body.getReader()
+      const decoder = new TextDecoder()
+      let buf = ''
+
+      while (true) {
+        const { done, value } = await reader.read()
+        if (done) break
+        buf += decoder.decode(value, { stream: true })
+        const lines = buf.split('\n')
+        buf = lines.pop() || ''
+        for (const line of lines) {
+          if (!line.startsWith('data: ')) continue
+          try {
+            const ev = JSON.parse(line.slice(6))
+            if (ev.type === 'action_result') {
+              const rb = ev.rollback
+              contentRef.current += `✅ **Ação \`${ev.tool}\` executada.**\n\n\`\`\`json\n${JSON.stringify(ev.result, null, 2)}\n\`\`\`\n${rb ? `\n↩️ _Rollback disponível: ${rb.type}${rb.endpoint ? ` (${rb.endpoint})` : ''}_` : ''}`
+            } else if (ev.type === 'action_error') {
+              contentRef.current += `❌ **Falha ao executar \`${ev.tool}\`:** ${ev.error}`
+            } else if (ev.type === 'action_running') {
+              contentRef.current += `⏳ Executando...\n\n`
+            } else if (ev.type === 'error') {
+              contentRef.current += `❌ ${ev.error}`
+            }
+            const c = contentRef.current
+            setMessages(prev => { const u = [...prev]; if (u[idx]) u[idx] = { ...u[idx], content: c }; return u })
+          } catch {}
+        }
+      }
+    } catch (err) {
+      if (err.name !== 'AbortError') {
+        setMessages(prev => { const u = [...prev]; if (u[idxRef.current]) u[idxRef.current] = { role: 'assistant', content: err.message, error: true }; return u })
+      }
+    } finally {
+      setLoading(false)
+      abortRef.current = null
+    }
+  }
+
+  const rejectAction = () => { setPendingAction(null) }
   const [copiedIdx, setCopiedIdx] = useState(null)
   const copy = (text, idx) => {
     navigator.clipboard.writeText(text)
@@ -301,6 +379,27 @@ const ZeusChat = () => {
             </div>
           )}
         </div>
+
+        {/* Action confirmation bar (Fase 2) */}
+        {pendingAction && !loading && (
+          <div className="shrink-0 px-3 py-2 sm:px-4 flex items-center gap-2"
+            style={{ background: 'rgba(245,158,11,0.10)', borderTop: '1px solid var(--color-border)' }}>
+            <Sparkles size={14} style={{ color: '#f59e0b' }} />
+            <span className="text-xs flex-1" style={{ color: 'var(--color-text-muted)' }}>
+              Executar <code>{pendingAction.tool}</code>?
+            </span>
+            <button onClick={rejectAction}
+              className="px-3 py-1.5 text-xs rounded-lg transition-colors"
+              style={{ background: 'var(--color-surface-sunken)', color: 'var(--color-text-muted)', border: '1px solid var(--color-border)' }}>
+              Cancelar
+            </button>
+            <button onClick={confirmAction}
+              className="px-3 py-1.5 text-xs rounded-lg text-white font-medium transition-all"
+              style={{ background: 'linear-gradient(135deg, #f59e0b, #d97706)', boxShadow: '0 2px 8px rgba(245,158,11,0.3)' }}>
+              ✓ Confirmar Ação
+            </button>
+          </div>
+        )}
 
         {/* Plan confirmation bar */}
         {pendingPlan && !loading && (

@@ -1,6 +1,6 @@
 const { Router } = require('express');
 const { collectLocalContext, formatContextForPrompt, collectPanelsContext, formatPanelsContext } = require('../services/zeus-context');
-const { TOOL_DEFS, runTool } = require('../services/zeus-agent-tools');
+const { TOOL_DEFS, runTool, WRITE_TOOL_DEFS, WRITE_TOOL_META, WRITE_TOOL_NAMES, canRoleUseWriteTool, runWriteTool } = require('../services/zeus-agent-tools');
 const router = Router();
 
 // Allow self-signed certs for server-to-server communication
@@ -321,12 +321,20 @@ router.post('/chat/smart/confirm', async (req, res, next) => {
 // Loop: modelo → toolUse → executa tool localmente (JWT do user) → toolResult → repete.
 // Streama eventos SSE: tool_call, tool_result, token (resposta final), end, error.
 const AGENT_SYSTEM_PROMPT = `Você é o Zeus, assistente de infraestrutura do Provir Cloud Panel.
-Você tem acesso a ferramentas de LEITURA que consultam dados reais do painel: serviços/containers Docker, métricas, bancos de dados cadastrados, sites e Nginx.
-Regras:
-- Quando o usuário pedir para listar, mostrar ou verificar o estado de máquina, serviços, containers, bancos, sites ou métricas, USE as ferramentas para obter dados reais em vez de inventar.
-- Você é read-only: NÃO pode iniciar, parar, reiniciar nem apagar nada. Se pedirem uma ação dessas, explique que nesta fase só consegue consultar informações.
-- Após obter os dados, responda em português, de forma objetiva, usando markdown (tabelas ou listas quando fizer sentido).
-- Se uma ferramenta falhar, informe o erro de forma clara.`;
+Você tem ferramentas de LEITURA (list_services, get_service_metrics, list_docker_containers, list_databases, list_sites, get_server_metrics, list_nginx) e ferramentas de AÇÃO (restart_service, start_service, stop_service, update_service, create_service, delete_service).
+
+Regras de LEITURA:
+- Para consultar estado de máquina, serviços, containers, bancos, sites ou métricas, USE as ferramentas de leitura em vez de inventar dados.
+
+Regras de AÇÃO (importante):
+- Ações NÃO são executadas por você diretamente. Ao chamar uma ferramenta de ação, o sistema apenas PREPARA uma proposta que o usuário precisa CONFIRMAR manualmente.
+- Antes de propor uma ação sobre um serviço, resolva o serviceId real (use list_services se necessário) para garantir o alvo correto.
+- delete_service NUNCA remove nada: serve só para explicar o impacto e verificar bloqueios/dependências.
+- Se faltar informação essencial para create_service ou update_service, PERGUNTE ao usuário em vez de assumir valores.
+- Permissões: usuários 'viewer' só podem reiniciar (restart_service) e consultar; demais ações são exclusivas de 'admin'. Se o usuário não tiver permissão, explique isso.
+- IMPORTANTE: você só dispõe das ferramentas que lhe foram fornecidas neste turno. Se o usuário pedir uma ação para a qual você NÃO tem a ferramenta correspondente disponível, isso significa que ele não tem permissão — NÃO finja propor a ação nem escreva "proposta de ação"; apenas explique, de forma clara, que a ação requer perfil admin e que o perfil atual não pode executá-la.
+
+Responda em português, objetivo, usando markdown quando ajudar.`;
 
 router.post('/agent', async (req, res, next) => {
   const MAX_ITERATIONS = 6;
@@ -356,7 +364,14 @@ router.post('/agent', async (req, res, next) => {
         messages.push({ role, content: [{ text: String(h.content) }] });
       }
     }
-    messages.push({ role: 'user', content: [{ text: message.trim() }] });
+    messages.push({ role: 'user', content: [{ text: `[contexto: seu perfil de usuário é "${req.user?.role || 'viewer'}"]\n\n${message.trim()}` }] });
+
+    const role = req.user?.role || 'viewer';
+
+    // Ferramentas expostas ao modelo: leitura sempre; escrita conforme role.
+    // (viewer só enxerga restart entre as de escrita; admin vê todas.)
+    const writeToolsForRole = WRITE_TOOL_DEFS.filter((t) => canRoleUseWriteTool(role, t.name));
+    const toolsForModel = [...TOOL_DEFS, ...writeToolsForRole];
 
     let finalText = '';
 
@@ -364,7 +379,7 @@ router.post('/agent', async (req, res, next) => {
       const result = await zeusRequest('/api/chat/converse', {
         messages,
         system: AGENT_SYSTEM_PROMPT,
-        tools: TOOL_DEFS,
+        tools: toolsForModel,
         maxTokens: 2048,
         temperature: 0.2,
       });
@@ -375,6 +390,45 @@ router.post('/agent', async (req, res, next) => {
       }
 
       if (result.stopReason === 'tool_use' && Array.isArray(result.toolUses) && result.toolUses.length) {
+        // Se QUALQUER tool pedida for de escrita, interceptamos: propomos a ação
+        // (a primeira write tool encontrada) e encerramos o turno SEM executar.
+        const writeUse = result.toolUses.find((tu) => WRITE_TOOL_NAMES.has(tu.name));
+        if (writeUse) {
+          const meta = WRITE_TOOL_META[writeUse.name] || {};
+          const allowed = canRoleUseWriteTool(role, writeUse.name);
+
+          if (!allowed) {
+            sendEvent({
+              type: 'token',
+              content: `🔒 A ação **${writeUse.name}** requer perfil **admin**. Seu perfil (**${role}**) pode consultar informações e reiniciar serviços. Peça a um administrador para executar esta ação.`,
+            });
+            sendEvent({ type: 'end' });
+            return res.end();
+          }
+
+          if (meta.executes === false) {
+            // delete_service e afins: nunca executa — instrui o modelo a explicar.
+            const explainMsg = {
+              role: 'user',
+              content: [{
+                text: `A ação "${writeUse.name}" NÃO é executável pelo agente. Explique ao usuário o impacto de remover o serviço (id: ${writeUse.input?.serviceId || '?'}), verifique via list_services se ele existe e mencione que a remoção precisa ser feita manualmente pelo painel. NÃO proponha executar.`,
+              }],
+            };
+            messages.push(explainMsg);
+            continue;
+          }
+
+          // Proposta de ação — exige confirmação humana.
+          sendEvent({
+            type: 'action_proposal',
+            action: { tool: writeUse.name, input: writeUse.input || {} },
+            meta: { risk: meta.risk || 'medium', requiredRole: meta.requiredRole || 'admin', rollback: meta.rollback || null },
+          });
+          sendEvent({ type: 'end' });
+          return res.end();
+        }
+
+        // Nenhuma write tool → executa as read tools normalmente
         const toolResultBlocks = [];
         for (const tu of result.toolUses) {
           sendEvent({ type: 'tool_call', name: tu.name, input: tu.input });
@@ -396,9 +450,8 @@ router.post('/agent', async (req, res, next) => {
             },
           });
         }
-        // Envia os resultados das tools de volta ao modelo
         messages.push({ role: 'user', content: toolResultBlocks });
-        continue; // próxima iteração: modelo processa os resultados
+        continue;
       }
 
       // stopReason end_turn (ou outro) → resposta final
@@ -411,6 +464,59 @@ router.post('/agent', async (req, res, next) => {
     }
 
     sendEvent({ type: 'token', content: finalText });
+    sendEvent({ type: 'end' });
+    return res.end();
+  } catch (err) {
+    if (!res.headersSent) return next(err);
+    sendEvent({ type: 'error', error: err.message });
+    res.end();
+  }
+});
+
+// POST /zeus/agent/confirm — executa uma ação previamente PROPOSTA e confirmada
+// pelo usuário. Revalida o role no servidor (defesa em profundidade) e devolve
+// a referência de rollback. É o ÚNICO ponto onde write tools são executadas.
+router.post('/agent/confirm', async (req, res, next) => {
+  const sendEvent = (data) => res.write(`data: ${JSON.stringify(data)}\n\n`);
+  try {
+    const { action } = req.body;
+    if (!action || !action.tool) {
+      return res.status(400).json({ error: 'action.tool é obrigatório' });
+    }
+    const token = req.headers.authorization?.replace('Bearer ', '');
+    if (!token) return res.status(401).json({ error: 'token ausente' });
+
+    const role = req.user?.role || 'viewer';
+    const toolName = action.tool;
+
+    // Gate de role (revalidação no servidor)
+    if (!WRITE_TOOL_NAMES.has(toolName)) {
+      return res.status(400).json({ error: `Ação inválida: ${toolName}` });
+    }
+    if (!canRoleUseWriteTool(role, toolName)) {
+      return res.status(403).json({ error: `Perfil "${role}" não pode executar "${toolName}". Requer admin.` });
+    }
+    const meta = WRITE_TOOL_META[toolName] || {};
+    if (meta.executes === false) {
+      return res.status(400).json({ error: `A ação "${toolName}" não é executável pelo agente.` });
+    }
+
+    res.setHeader('Content-Type', 'text/event-stream');
+    res.setHeader('Cache-Control', 'no-cache');
+    res.setHeader('Connection', 'keep-alive');
+    res.setHeader('X-Accel-Buffering', 'no');
+    res.flushHeaders();
+    res.write(`: ${' '.repeat(2048)}\n\n`);
+
+    sendEvent({ type: 'action_running', tool: toolName, input: action.input || {} });
+
+    try {
+      const { result, rollback } = await runWriteTool(toolName, action.input || {}, token);
+      sendEvent({ type: 'action_result', tool: toolName, result, rollback });
+    } catch (err) {
+      sendEvent({ type: 'action_error', tool: toolName, error: err.message });
+    }
+
     sendEvent({ type: 'end' });
     return res.end();
   } catch (err) {
