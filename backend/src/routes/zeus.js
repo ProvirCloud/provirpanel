@@ -5,10 +5,24 @@ const { routeProvider } = require('../services/zeus-router');
 const aiTurn = require('../services/ai-turn');
 const aiAgents = require('../services/ai-agents');
 const aiBlocksMapper = require('../services/ai-blocks-mapper');
+const serviceDoctor = require('../services/service-doctor');
 const router = Router();
 
 // Allow self-signed certs for server-to-server communication
 process.env.NODE_TLS_REJECT_UNAUTHORIZED = '0';
+
+// Remove blocos de raciocínio interno que alguns modelos (Bedrock/Ollama) emitem
+// junto da resposta final. Não devem vazar para o usuário. Cobre <thinking>...,
+// <think>... e uma tag de abertura sem fechamento (resposta truncada).
+function stripThinking(text) {
+  if (!text) return text;
+  return String(text)
+    .replace(/<thinking>[\s\S]*?<\/thinking>/gi, '')
+    .replace(/<think>[\s\S]*?<\/think>/gi, '')
+    .replace(/<\/?thinking>/gi, '')
+    .replace(/<\/?think>/gi, '')
+    .replace(/^\s+/, '');
+}
 
 const ZEUS_GATEWAY_URL = process.env.ZEUS_GATEWAY_URL || 'http://localhost:3002';
 const ZEUS_API_KEY = process.env.ZEUS_API_KEY || 'zeus_master_key_change_me';
@@ -331,7 +345,8 @@ Regras de LEITURA:
 - Para consultar estado de máquina, serviços, containers, bancos, sites ou métricas, USE as ferramentas de leitura em vez de inventar dados.
 
 Regras de AÇÃO (importante):
-- Ações NÃO são executadas por você diretamente. Ao chamar uma ferramenta de ação, o sistema apenas PREPARA uma proposta que o usuário precisa CONFIRMAR manualmente.
+- Para QUALQUER alteração de configuração (healthcheck, portas, envs, imagem, comando, etc.), você DEVE CHAMAR a ferramenta correspondente (ex.: update_service). NUNCA escreva o JSON/YAML da configuração, um "exemplo de configuração" ou instruções de "vá em settings e cole isto" como texto na resposta — isso é considerado ERRO. Quem aplica a mudança é a ferramenta; o próprio painel mostra ao usuário o card de confirmação. Se você se pegar prestes a escrever um bloco de configuração, PARE e chame a ferramenta em vez disso.
+- Ações NÃO são executadas por você diretamente. Ao CHAMAR uma ferramenta de ação (via tool use, não como texto), o sistema apenas PREPARA uma proposta que o usuário precisa CONFIRMAR manualmente.
 - Antes de propor uma ação sobre um serviço, resolva o serviceId real (use list_services se necessário) para garantir o alvo correto.
 - delete_service NUNCA remove nada: serve só para explicar o impacto e verificar bloqueios/dependências.
 - Se faltar informação essencial para create_service ou update_service, PERGUNTE ao usuário em vez de assumir valores.
@@ -354,12 +369,58 @@ router.post('/agent', async (req, res, next) => {
   const sendEvent = (data) => res.write(`data: ${JSON.stringify(data)}\n\n`);
 
   try {
-    const { message, history, conversationId, agent } = req.body;
+    const { message, history, conversationId, agent, serviceId } = req.body;
     if (!message || typeof message !== 'string' || !message.trim()) {
       return res.status(400).json({ error: 'message is required' });
     }
     const token = req.headers.authorization?.replace('Bearer ', '');
     if (!token) return res.status(401).json({ error: 'token ausente' });
+
+    // Contexto do serviço (opcional): quando a página de detalhes do serviço usa
+    // este agente, envia `serviceId`. Resolvemos o serviço e montamos um contexto
+    // rico (config, estrutura, código-fonte, últimos deploys) para injetar no
+    // system prompt do turno — assim o agente responde sobre AQUELE serviço.
+    let serviceContextText = '';
+    let serviceName = '';
+    if (serviceId) {
+      try {
+        // Reusa a MESMA inspeção da ferramenta (config + imagem + status ao vivo
+        // + logs recentes + source) para que o agente já saiba TUDO do serviço em
+        // foco no primeiro turno, sem depender de decidir chamar uma tool. Usa
+        // sempre o serviceId da requisição atual (evita responder sobre outro
+        // serviço por causa de histórico antigo da conversa).
+        const insp = await runTool('inspect_service_config', { serviceId }, token);
+        const s = insp.service || {};
+        serviceName = s.name || '';
+        const img = insp.image || {};
+        const parts = [
+          `id: ${s.id}`,
+          `nome: ${s.name}`,
+          `imagem: ${s.image}`,
+          `status ao vivo: ${s.liveStatus || s.status || 'desconhecido'}${s.healthStatus ? ` (health: ${s.healthStatus})` : ''}`,
+          `porta host→container: ${s.hostPort ?? '?'}→${s.containerPort ?? '?'}`,
+          s.command ? `comando: ${Array.isArray(s.command) ? s.command.join(' ') : s.command}` : '',
+          `envVars: ${JSON.stringify(s.envVars || [])}`,
+          s.volumes?.length ? `volumes: ${JSON.stringify(s.volumes)}` : '',
+          s.healthcheck ? `healthcheck: ${JSON.stringify(s.healthcheck)}` : '',
+          s.delivery?.repository ? `repositório: ${s.delivery.repository} (${s.delivery.branch || 'main'})` : '',
+          s.stats ? `métricas: CPU ${s.stats.cpuPercent}% | RAM ${s.stats.memoryUsage}` : '',
+          img.exposedPorts ? `\n[imagem] portas expostas: ${JSON.stringify(img.exposedPorts)} | cmd: ${JSON.stringify(img.cmd)} | entrypoint: ${JSON.stringify(img.entrypoint)} | workingDir: ${img.workingDir || '-'}` : '',
+          insp.deployment ? `\n[deploy] ${JSON.stringify(insp.deployment)}` : '',
+          insp.fileTree?.length ? `\n[estrutura] ${insp.fileTree.join(', ')}` : '',
+          Object.keys(insp.configFiles || {}).length
+            ? `\n[configs]\n${Object.entries(insp.configFiles).map(([n, c]) => `--- ${n} ---\n${c}`).join('\n\n')}`
+            : '',
+          insp.recentLogs ? `\n[logs recentes]\n${insp.recentLogs}` : '',
+          (insp.sourceSample || []).length
+            ? `\n[código-fonte${insp.sourceTruncated ? ' (amostra)' : ''}]\n${insp.sourceSample.map((f) => `--- ${f.file} ---\n${f.content}`).join('\n\n')}`
+            : '',
+        ].filter(Boolean);
+        serviceContextText = parts.join('\n');
+      } catch (e) {
+        console.warn('[zeus/agent] falha ao montar contexto do serviço:', e.message);
+      }
+    }
 
     // ── Persistência (Fase 1.6): grava a msg do usuário, atualiza perfil e
     // devolve o nível de conhecimento efetivo (para adaptar o tom — Fase 4).
@@ -399,6 +460,10 @@ router.post('/agent', async (req, res, next) => {
         messages.push({ role, content: [{ text: String(h.content) }] });
       }
     }
+    // Bedrock Converse exige que a conversa COMECE com uma mensagem 'user'.
+    // Remove quaisquer mensagens 'assistant' iniciais (ex.: history que começa
+    // com uma resposta do assistente) para não quebrar a chamada.
+    while (messages.length && messages[0].role === 'assistant') messages.shift();
     messages.push({ role: 'user', content: [{ text: `[contexto: seu perfil de usuário é "${req.user?.role || 'viewer'}"]\n\n${message.trim()}` }] });
 
     // System prompt do turno: base + persona do agente (Fase 2.1) + adaptação ao
@@ -410,12 +475,17 @@ router.post('/agent', async (req, res, next) => {
       persona ? `\n\n[Persona do agente selecionado] ${persona}` : '',
       skillGuidance ? `\n\n[Adaptação de tom] ${skillGuidance}` : '',
       summaryText ? `\n\n[Resumo da conversa até aqui]\n${summaryText}` : '',
+      serviceContextText ? `\n\n[Contexto do serviço em foco — o usuário está na página deste serviço; use estas informações para responder sobre ele]\n${serviceContextText}` : '',
+      serviceId ? `\n\n[Sessão privada deste container]\nEsta é uma sessão PRIVADA e isolada, presa ao container id="${serviceId}"${serviceName ? ` (nome: "${serviceName}")` : ''}. Trate como se você tivesse "entrado" neste container: seu escopo é SOMENTE ele. IGNORE qualquer serviço citado em mensagens anteriores e NUNCA procure, liste ou compare outros serviços. O contexto acima (config, status ao vivo, logs, imagem e código-fonte) JÁ foi coletado: responda DIRETO sobre este container, sem pedir o ID e sem listar serviços. IMPORTANTE: qualquer pergunta sobre "saúde", "health", "está saudável", "uso de CPU/memória", "está de pé", "status" ou "como ele está" refere-se SEMPRE a ESTE container — responda com o status ao vivo, health e métricas dele (já presentes no contexto acima, ou via get_service_metrics("${serviceId}")). NUNCA responda com a saúde/métricas do SERVIDOR/host inteiro. Use TODO o seu conhecimento para explicar e resolver a configuração/erros deste container. Para ajustar QUALQUER configuração deste container (inclusive healthcheck), você DEVE CHAMAR a ferramenta update_service (serviceId="${serviceId}", updates={...} só com o que muda) — NÃO escreva o JSON/YAML nem diga para o usuário "ir em settings e colar"; a chamada da ferramenta é o que faz o painel exibir o card de confirmação. Ex.: para configurar/corrigir o healthcheck, chame update_service com updates={ healthcheck: { enabled: true, target: "/", ... } }. Toda alteração exige confirmação do usuário; explique brevemente o porquê ao lado da chamada. Se algo essencial faltar, use inspect_service_config("${serviceId}") para reconfirmar.` : '',
     ].join('');
 
     // ── Roteamento híbrido: mensagens triviais/conversacionais vão para o LLM
     // local (Ollama, grátis). Consultas/ações e qualquer dúvida vão para o
     // Bedrock (tool-use). Conservador: só desvia o que é claramente trivial.
-    const provider = routeProvider(message, history);
+    // Quando a página do serviço está em foco (serviceId), força Bedrock: o
+    // agente precisa de tool-use (inspect_service_config/update_service) e o
+    // contexto do serviço para responder — nunca cai no Ollama trivial.
+    const provider = serviceId ? 'bedrock' : routeProvider(message, history);
     if (provider === 'ollama') {
       sendEvent({ type: 'provider', provider: 'ollama' });
       try {
@@ -452,7 +522,7 @@ router.post('/agent', async (req, res, next) => {
         }
         if (buf.startsWith('data: ')) res.write(buf + '\n\n');
         if (persistEnabled) {
-          await aiTurn.endTurn({ conversationId, user: req.user, content: ollamaText });
+          await aiTurn.endTurn({ conversationId, user: req.user, content: stripThinking(ollamaText) });
         }
         sendEvent({ type: 'end' });
         return res.end();
@@ -470,7 +540,21 @@ router.post('/agent', async (req, res, next) => {
     // Ferramentas expostas ao modelo: leitura sempre; escrita conforme role.
     // (viewer só enxerga restart entre as de escrita; admin vê todas.)
     const writeToolsForRole = WRITE_TOOL_DEFS.filter((t) => canRoleUseWriteTool(role, t.name));
-    const toolsForModel = [...TOOL_DEFS, ...writeToolsForRole];
+    let toolsForModel = [...TOOL_DEFS, ...writeToolsForRole];
+
+    // Quando há um serviço em foco, o agente está RESTRITO a ele e já recebeu
+    // todo o contexto. Removemos as ferramentas de listagem ampla (que fariam o
+    // modelo "consultar todos os serviços" e disparariam a tabela/lista na UI) e
+    // também as métricas do SERVIDOR inteiro — perguntas como "como está a saúde
+    // dele?" devem ser respondidas sobre ESTE container (healthStatus/stats já
+    // injetados no contexto, ou get_service_metrics deste id), nunca sobre o host.
+    if (serviceId) {
+      const BROAD_LIST_TOOLS = new Set([
+        'list_services', 'list_docker_containers', 'list_databases',
+        'list_sites', 'list_nginx', 'get_server_metrics',
+      ]);
+      toolsForModel = toolsForModel.filter((t) => !BROAD_LIST_TOOLS.has(t.name));
+    }
 
     let finalText = '';
     const turnBlocks = []; // blocos interativos acumulados a partir dos tool_result
@@ -579,6 +663,7 @@ router.post('/agent', async (req, res, next) => {
     if (!finalText) {
       finalText = 'Não consegui concluir a consulta (limite de iterações atingido ou resposta vazia).';
     }
+    finalText = stripThinking(finalText);
 
     sendEvent({ type: 'token', content: finalText });
     if (persistEnabled) {
@@ -642,6 +727,60 @@ router.post('/agent/confirm', async (req, res, next) => {
       sendEvent({ type: 'action_error', tool: toolName, error: err.message });
     }
 
+    sendEvent({ type: 'end' });
+    return res.end();
+  } catch (err) {
+    if (!res.headersSent) return next(err);
+    sendEvent({ type: 'error', error: err.message });
+    res.end();
+  }
+});
+
+// POST /zeus/service/:id/resolve — RESOLVE completo da configuração do serviço.
+// Ação dedicada (não é chat): inspeciona, diagnostica e APLICA as correções de
+// configuração necessárias para o container rodar e ficar bem configurado,
+// streamando cada passo via SSE. Aplicar config = admin (revalidado no doctor).
+// Aceita { dryRun: true } para somente diagnosticar sem aplicar.
+router.post('/service/:id/resolve', async (req, res, next) => {
+  const sendEvent = (data) => res.write(`data: ${JSON.stringify(data)}\n\n`);
+  try {
+    const serviceId = req.params.id;
+    if (!serviceId) return res.status(400).json({ error: 'serviceId é obrigatório' });
+
+    const token = req.headers.authorization?.replace('Bearer ', '');
+    if (!token) return res.status(401).json({ error: 'token ausente' });
+
+    const role = req.user?.role || 'viewer';
+    const dryRun = req.body?.dryRun === true;
+
+    // Aplicar alterações de configuração requer admin. Não-admin só pode
+    // diagnosticar (dryRun forçado), para não expor uma ação que não pode concluir.
+    const effectiveDryRun = dryRun || role !== 'admin';
+
+    res.setHeader('Content-Type', 'text/event-stream');
+    res.setHeader('Cache-Control', 'no-cache');
+    res.setHeader('Connection', 'keep-alive');
+    res.setHeader('X-Accel-Buffering', 'no');
+    res.flushHeaders();
+    res.write(`: ${' '.repeat(2048)}\n\n`);
+
+    if (role !== 'admin') {
+      sendEvent({
+        phase: 'info',
+        status: 'info',
+        message: 'Seu perfil não é admin: vou apenas diagnosticar a configuração (sem aplicar alterações).',
+      });
+    }
+
+    try {
+      const summary = await serviceDoctor.runResolve(
+        { serviceId, token, user: req.user, dryRun: effectiveDryRun },
+        (step) => sendEvent({ type: 'step', ...step })
+      );
+      sendEvent({ type: 'result', summary });
+    } catch (err) {
+      sendEvent({ type: 'error', error: err.message });
+    }
     sendEvent({ type: 'end' });
     return res.end();
   } catch (err) {

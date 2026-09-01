@@ -49,10 +49,12 @@ import {
   servicesApi,
   zeusAiApi
 } from '../services/serviceDetailsApi.js'
-import { Send, RefreshCw, Bot, ClipboardCopy } from 'lucide-react'
+import { Send, RefreshCw, Bot, ClipboardCopy, Wrench } from 'lucide-react'
 import Markdown from 'react-markdown'
 import remarkGfm from 'remark-gfm'
 import { createDockerTerminalSocket } from '../services/socket.js'
+import useZeusStream from '../hooks/useZeusStream'
+import AiBlocks from '../components/ai-blocks/AiBlocks'
 import AiFixPanel, { DeployAiDiagnosis } from '../components/AiFixPanel.jsx'
 import { DeliveryCodeOrigin, DeliveryStack, DeliveryPipeline, DeliveryAI } from '../components/delivery'
 import { SettingsServiceInfo, SettingsApplication, SettingsNetwork, SettingsStorage, SettingsDeploy, SettingsHealthcheck, SettingsAdvanced, SettingsDangerZone } from '../components/settings'
@@ -1799,25 +1801,47 @@ const ServiceMetricsTab = ({ service }) => {
   )
 }
 
-const ServiceAiTab = ({ service }) => {
-  const storageKey = `ai-chat-${service.id}`
-  const [messages, setMessages] = useState(() => {
-    try { return JSON.parse(sessionStorage.getItem(storageKey)) || [] } catch { return [] }
-  })
+const TOOL_LABELS = {
+  get_service_metrics: 'Obtendo métricas do serviço',
+  inspect_service_config: 'Analisando a configuração do container',
+}
+
+// Chat do serviço = SESSÃO PRIVADA, presa a ESTE container.
+// - Contexto restrito ao container (config, imagem, artefato, logs, source).
+// - Não usa/prende agente e NÃO persiste conversa no servidor (efêmera).
+// - Histórico vive só no cliente (memória do componente) e some ao sair/recarregar.
+// É como "entrar no fluxo do container": o assistente usa todo o conhecimento
+// para resolver/explicar SÓ este serviço, sem procurar outros.
+const ServiceAiTab = ({ service, messages, setMessages }) => {
   const [input, setInput] = useState('')
   const [loading, setLoading] = useState(false)
+  const [resolving, setResolving] = useState(false)
+  const [copiedIdx, setCopiedIdx] = useState(null)
+  const [pendingAction, setPendingAction] = useState(null)
   const scrollRef = useRef(null)
   const inputRef = useRef(null)
   const contentRef = useRef('')
   const idxRef = useRef(-1)
-  const abortRef = useRef(null)
+  const { sendMessage: streamMessage, resolveService, confirmAction, stop } = useZeusStream()
 
   useEffect(() => { scrollRef.current?.scrollTo({ top: scrollRef.current.scrollHeight, behavior: 'smooth' }) }, [messages])
   useEffect(() => { inputRef.current?.focus() }, [])
-  useEffect(() => { if (messages.length) sessionStorage.setItem(storageKey, JSON.stringify(messages)) }, [messages, storageKey])
 
-  const copyText = (text) => {
-    navigator.clipboard.writeText(text)
+  // Sessão presa ao container: se o serviço em foco MUDAR de fato, zera o
+  // histórico (não mistura conversas de containers diferentes). Não limpa na
+  // simples remontagem da guia — as mensagens agora vivem no componente pai e
+  // devem sobreviver à troca de abas.
+  const prevServiceIdRef = useRef(service.id)
+  useEffect(() => {
+    if (prevServiceIdRef.current !== service.id) {
+      prevServiceIdRef.current = service.id
+      setMessages([])
+      setInput('')
+    }
+  }, [service.id, setMessages])
+
+  const copyText = (text, idx) => {
+    navigator.clipboard.writeText(text); setCopiedIdx(idx); setTimeout(() => setCopiedIdx(null), 1500)
   }
 
   const sendMessage = async () => {
@@ -1826,70 +1850,140 @@ const ServiceAiTab = ({ service }) => {
     setInput('')
     setLoading(true)
 
-    const history = messages.filter(m => m.role !== 'system').map(m => ({ role: m.role, content: m.content }))
-    const idx = messages.length + 1
-    idxRef.current = idx
+    const history = messages.filter(m => !m.error && m.role !== 'system').slice(-10).map(m => ({ role: m.role, content: m.content }))
+    const baseIdx = messages.length + 1
+    idxRef.current = baseIdx
     contentRef.current = ''
     setMessages(prev => [...prev, { role: 'user', content: text }, { role: 'assistant', content: '' }])
 
-    const controller = new AbortController()
-    abortRef.current = controller
+    const patch = (updater) => setMessages(prev => {
+      const u = [...prev]
+      if (u[baseIdx]) u[baseIdx] = updater(u[baseIdx])
+      return u
+    })
 
     try {
-      const token = localStorage.getItem('provirpanel-token')
-      const res = await fetch(`/api/ci-cd/services/${service.id}/ai-chat`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json', ...(token ? { Authorization: `Bearer ${token}` } : {}) },
-        body: JSON.stringify({ message: text, history, stream: true }),
-        signal: controller.signal
-      })
-
-      if (!res.ok) throw new Error(`HTTP ${res.status}`)
-
-      const reader = res.body.getReader()
-      const decoder = new TextDecoder()
-      let buf = ''
-
-      while (true) {
-        const { done, value } = await reader.read()
-        if (done) break
-        buf += decoder.decode(value, { stream: true })
-        const lines = buf.split('\n')
-        buf = lines.pop() || ''
-        for (const line of lines) {
-          if (!line.startsWith('data: ')) continue
-          try {
-            const ev = JSON.parse(line.slice(6))
-            if (ev.type === 'token') {
-              contentRef.current += ev.content
-              const c = contentRef.current
-              setMessages(prev => { const u = [...prev]; if (u[idx]) u[idx] = { ...u[idx], content: c }; return u })
-            } else if (ev.type === 'error') {
-              setMessages(prev => { const u = [...prev]; if (u[idx]) u[idx] = { role: 'assistant', content: ev.error, error: true }; return u })
-            }
-          } catch {}
+      // Sem conversationId e sem agent: sessão efêmera, não persiste no servidor
+      // e não prende a um agente. serviceId mantém o contexto restrito ao container.
+      await streamMessage({ message: text, history, serviceId: service.id }, (ev) => {
+        if (ev.type === 'tool_call') {
+          contentRef.current += `\n🔧 _${TOOL_LABELS[ev.name] || `Analisando ${ev.name}`}..._\n`
+          patch(m => ({ ...m, content: contentRef.current }))
+        } else if (ev.type === 'tool_result' && ev.error) {
+          contentRef.current += `\n⚠️ _Falha em ${ev.name}_\n`
+          patch(m => ({ ...m, content: contentRef.current }))
+        } else if (ev.type === 'token') {
+          contentRef.current = ev.content
+          patch(m => ({ ...m, content: contentRef.current }))
+        } else if (ev.type === 'block') {
+          patch(m => ({ ...m, blocks: [...(m.blocks || []), ev.block] }))
+        } else if (ev.type === 'action_proposal') {
+          // Proposta de ação (ex.: update_service para healthcheck/portas): mostra
+          // o card de confirmação. Sem isto, o turno terminava em silêncio.
+          setPendingAction(ev.action)
+          patch(m => ({ ...m, blocks: [...(m.blocks || []), { kind: 'action_proposal', action: ev.action, meta: ev.meta }] }))
+        } else if (ev.type === 'error') {
+          patch(() => ({ role: 'assistant', content: ev.error, error: true }))
         }
-      }
+      })
     } catch (err) {
       if (err.name !== 'AbortError') {
-        setMessages(prev => { const u = [...prev]; if (u[idxRef.current]) u[idxRef.current] = { role: 'assistant', content: err.message, error: true }; return u })
+        patch(() => ({ role: 'assistant', content: err.message, error: true }))
       }
     } finally {
       setLoading(false)
-      abortRef.current = null
     }
   }
 
-  const stopGeneration = () => { abortRef.current?.abort() }
+  const clearConversation = () => { setMessages([]) }
 
-  const handleReindex = async () => {
+  // Confirma e executa uma ação proposta pelo agente (ex.: update_service).
+  // Chama /zeus/agent/confirm e streama action_running/result/error como mensagem.
+  const handleConfirmAction = async (action) => {
+    if (loading) return
+    setPendingAction(null)
     setLoading(true)
+    const baseIdx = messages.length
+    idxRef.current = baseIdx
+    contentRef.current = `⚡ Executando \`${action.tool}\`...\n\n`
+    setMessages(prev => [...prev, { role: 'assistant', content: contentRef.current }])
+    const patch = (updater) => setMessages(prev => {
+      const u = [...prev]
+      if (u[baseIdx]) u[baseIdx] = updater(u[baseIdx])
+      return u
+    })
     try {
-      const res = await githubDeliveryApi.aiChatReindex(service.id)
-      setMessages(prev => [...prev, { role: 'system', content: `Re-indexado: ${res.fileCount} arquivos (${res.chunks} chunks)` }])
+      await confirmAction({ action }, (ev) => {
+        if (ev.type === 'action_running') {
+          contentRef.current += '⏳ Aplicando...\n\n'
+        } else if (ev.type === 'action_result') {
+          contentRef.current += `✅ **Configuração aplicada.**${ev.rollback ? `\n\n↩️ _Rollback disponível: ${ev.rollback.type || ''}_` : ''}`
+        } else if (ev.type === 'action_error') {
+          contentRef.current += `❌ **Falha ao aplicar:** ${ev.error}`
+        } else if (ev.type === 'error') {
+          contentRef.current += `❌ ${ev.error}`
+        }
+        patch(m => ({ ...m, content: contentRef.current }))
+      })
     } catch (err) {
-      setMessages(prev => [...prev, { role: 'system', content: `Erro: ${err.message}`, error: true }])
-    } finally { setLoading(false) }
+      if (err.name !== 'AbortError') patch(() => ({ role: 'assistant', content: err.message, error: true }))
+    } finally {
+      setLoading(false)
+    }
+  }
+
+  const handleRejectAction = () => setPendingAction(null)
+
+  // "Resolver configuração": ação dedicada que inspeciona, diagnostica e aplica
+  // as correções de configuração do container. Os passos são streamados como uma
+  // mensagem do assistente (append incremental), sem persistir nada.
+  const resolveConfiguration = async () => {
+    if (loading || resolving) return
+    setResolving(true)
+    setLoading(true)
+
+    const baseIdx = messages.length + 1
+    idxRef.current = baseIdx
+    contentRef.current = '### 🩺 Resolvendo a configuração deste container...\n'
+    setMessages(prev => [
+      ...prev,
+      { role: 'user', content: 'Resolver a configuração deste container' },
+      { role: 'assistant', content: contentRef.current },
+    ])
+
+    const patch = (updater) => setMessages(prev => {
+      const u = [...prev]
+      if (u[baseIdx]) u[baseIdx] = updater(u[baseIdx])
+      return u
+    })
+
+    const stepIcon = (status) => (
+      status === 'done' ? '✅' : status === 'failed' ? '❌' : status === 'skipped' ? '⏭️' : status === 'info' ? 'ℹ️' : '⏳'
+    )
+
+    try {
+      await resolveService({ serviceId: service.id }, (ev) => {
+        if (ev.type === 'step') {
+          // O passo final (summary) já vem formatado em markdown: substitui o corpo.
+          if (ev.phase === 'summary') {
+            contentRef.current = ev.message
+          } else {
+            contentRef.current += `\n${stepIcon(ev.status)} ${ev.message}`
+          }
+          patch(m => ({ ...m, content: contentRef.current }))
+        } else if (ev.type === 'error') {
+          contentRef.current += `\n\n❌ **Erro:** ${ev.error}`
+          patch(m => ({ ...m, content: contentRef.current }))
+        }
+      })
+    } catch (err) {
+      if (err.name !== 'AbortError') {
+        patch(m => ({ ...m, content: `${contentRef.current}\n\n❌ ${err.message}`, error: false }))
+      }
+    } finally {
+      setResolving(false)
+      setLoading(false)
+    }
   }
 
   return (
@@ -1901,9 +1995,13 @@ const ServiceAiTab = ({ service }) => {
             <div className="w-14 h-14 rounded-full bg-purple-500/10 flex items-center justify-center">
               <Bot className="w-7 h-7 text-purple-400" />
             </div>
-            <p className="text-zinc-400 text-sm text-center max-w-sm">Pergunte sobre o código deste projeto</p>
+            <p className="text-zinc-400 text-sm text-center max-w-sm">Sessão privada deste container — pergunte sobre a configuração, status ou logs. Fica restrito a este serviço.</p>
+            <button onClick={resolveConfiguration} disabled={loading || resolving}
+              className="inline-flex items-center gap-2 px-4 py-2 rounded-lg bg-emerald-600/15 border border-emerald-500/30 text-emerald-300 hover:bg-emerald-600/25 transition-colors disabled:opacity-40 text-sm font-medium">
+              <Wrench className="w-4 h-4" /> Diagnosticar e resolver a configuração
+            </button>
             <div className="flex flex-wrap gap-2 justify-center max-w-lg">
-              {['O que esse sistema faz?', 'Quais endpoints existem?', 'Explique a arquitetura', 'Tem problemas no código?'].map(q => (
+              {['O que esse serviço faz?', 'Como está a saúde dele?', 'A porta e o comando estão corretos?', 'Por que o último deploy falhou?'].map(q => (
                 <button key={q} onClick={() => { setInput(q); inputRef.current?.focus() }}
                   className="px-3 py-1.5 text-xs rounded-full border border-zinc-700 hover:border-purple-500/50 hover:bg-purple-500/5 text-zinc-400 hover:text-zinc-200 transition-all">
                   {q}
@@ -1947,11 +2045,18 @@ const ServiceAiTab = ({ service }) => {
                     <Markdown remarkPlugins={[remarkGfm]}>{msg.content || (loading && i === idxRef.current ? '\u2588' : '')}</Markdown>
                   </div>
                 )}
+                {msg.blocks?.length > 0 && (
+                  <AiBlocks
+                    blocks={msg.blocks}
+                    onConfirmAction={pendingAction && msg.blocks.some(b => b.kind === 'action_proposal') ? handleConfirmAction : null}
+                    onRejectAction={pendingAction && msg.blocks.some(b => b.kind === 'action_proposal') ? handleRejectAction : null}
+                    disabled={loading} />
+                )}
                 {msg.content && !msg.error && !loading && (
                   <div className="flex items-center gap-1 mt-2">
-                    <button onClick={() => copyText(msg.content)}
+                    <button onClick={() => copyText(msg.content, i)}
                       className="flex items-center gap-1 px-2 py-1 text-xs rounded hover:bg-zinc-800 text-zinc-500 hover:text-zinc-300 transition-colors">
-                      <ClipboardCopy className="w-3 h-3" /> Copiar
+                      <ClipboardCopy className="w-3 h-3" /> {copiedIdx === i ? 'Copiado!' : 'Copiar'}
                     </button>
                   </div>
                 )}
@@ -1976,23 +2081,23 @@ const ServiceAiTab = ({ service }) => {
       {/* Input bar */}
       <div className="px-4 py-3 border-t border-zinc-800">
         <div className="flex items-center gap-2">
-          <button onClick={handleReindex} disabled={loading} title="Re-indexar"
+          <button onClick={clearConversation} disabled={loading} title="Limpar sessão"
             className="p-2.5 rounded-lg hover:bg-zinc-800 text-zinc-500 hover:text-zinc-300 transition-colors disabled:opacity-40">
-            <RefreshCw className={`w-4 h-4 ${loading ? 'animate-spin' : ''}`} />
-          </button>
-          <button onClick={() => { setMessages([]); sessionStorage.removeItem(storageKey) }} title="Limpar conversa"
-            className="p-2.5 rounded-lg hover:bg-zinc-800 text-zinc-500 hover:text-zinc-300 transition-colors">
             <Trash2 className="w-4 h-4" />
+          </button>
+          <button onClick={resolveConfiguration} disabled={loading || resolving} title="Diagnosticar e resolver a configuração deste container"
+            className="inline-flex items-center gap-1.5 px-3 py-2 rounded-lg bg-emerald-600/15 border border-emerald-500/30 text-emerald-300 hover:bg-emerald-600/25 transition-colors disabled:opacity-40 disabled:cursor-not-allowed text-xs font-medium whitespace-nowrap">
+            <Wrench className="w-4 h-4" /> {resolving ? 'Resolvendo...' : 'Resolver configuração'}
           </button>
           <input ref={inputRef} type="text" value={input}
             onChange={e => setInput(e.target.value)}
             onKeyDown={e => e.key === 'Enter' && !e.shiftKey && sendMessage()}
-            placeholder="Pergunte sobre o projeto..."
+            placeholder="Pergunte sobre este container..."
             disabled={loading}
             className="flex-1 bg-zinc-900 border border-zinc-800 rounded-xl px-4 py-2.5 text-sm text-zinc-200 placeholder-zinc-600 focus:outline-none focus:border-purple-500/40 disabled:opacity-50"
           />
           {loading ? (
-            <button onClick={stopGeneration} className="p-2.5 rounded-lg bg-red-500/10 hover:bg-red-500/20 text-red-400 transition-colors">
+            <button onClick={stop} className="p-2.5 rounded-lg bg-red-500/10 hover:bg-red-500/20 text-red-400 transition-colors">
               <svg className="w-4 h-4" fill="currentColor" viewBox="0 0 16 16"><rect x="3" y="3" width="10" height="10" rx="1" /></svg>
             </button>
           ) : (
@@ -3018,6 +3123,9 @@ const ServiceDetailsPage = () => {
   const [actionState, setActionState] = useState('')
   const [deployProgress, setDeployProgress] = useState(null)
   const [deployNotification, setDeployNotification] = useState(null)
+  // Mensagens do chat da IA elevadas ao pai: sobrevivem à troca de guia (o
+  // ServiceAiTab é desmontado ao sair da aba, o que zerava o histórico local).
+  const [aiMessages, setAiMessages] = useState([])
 
   const service = detail?.service
 
@@ -3181,7 +3289,7 @@ const ServiceDetailsPage = () => {
       <ServiceTabs activeTab={activeTab} onChange={setActiveTab} />
 
       {activeTab === 'overview' ? <ServiceOverviewTab service={service} detail={detail} activity={activity} /> : null}
-      {activeTab === 'ai' ? <ServiceAiTab service={service} /> : null}
+      {activeTab === 'ai' ? <ServiceAiTab service={service} messages={aiMessages} setMessages={setAiMessages} /> : null}
       {activeTab === 'deploys' ? (
         <ServiceDeploysTab
           service={service}

@@ -96,6 +96,18 @@ const TOOL_DEFS = [
       'Lista os virtual hosts do Nginx configurados (domínios, se está ativo e SSL).',
     inputSchema: { type: 'object', properties: {}, required: [] },
   },
+  {
+    name: 'inspect_service_config',
+    description:
+      'Inspeção PROFUNDA de UM serviço específico para entender e configurar automaticamente. Retorna: (1) config atual do serviço no painel (porta host/container, comando, envVars, volumes, healthcheck, networkName, delivery/repo); (2) inspeção da IMAGEM Docker (ExposedPorts, Env padrão, Cmd, Entrypoint, WorkingDir, Volumes, Labels) — útil para descobrir a porta e o comando corretos; (3) artefato publicado / deploy ativo (diretório do projeto, versão); (4) estrutura de arquivos e amostra do código-fonte quando disponível. Use ANTES de propor uma configuração via update_service. Requer serviceId. Trabalhe SOMENTE no serviço informado.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        serviceId: { type: 'string', description: 'ID do serviço a inspecionar (obrigatório)' },
+      },
+      required: ['serviceId'],
+    },
+  },
 ];
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -126,6 +138,28 @@ function resolveServiceStatus(s = {}) {
   return raw || 'unknown';
 }
 
+/**
+ * Resolve uma referência de serviço aceitando o ID real OU o NOME do serviço
+ * (case-insensitive). O agente frequentemente passa o nome visível na tela
+ * (ex.: "test") em vez do UUID — isto evita o erro "serviço não encontrado".
+ *
+ * @param {string} ref  id ou nome do serviço
+ * @returns {{ id: string, name: string, service: Object } | null}
+ */
+function resolveServiceRef(ref) {
+  if (!ref) return null;
+  const DockerManager = require('./DockerManager');
+  const dm = new DockerManager();
+  const services = dm.listServices() || [];
+  const needle = String(ref).trim().toLowerCase();
+  // 1) match exato por id; 2) match exato por nome (case-insensitive).
+  const found =
+    services.find((s) => String(s.id) === String(ref)) ||
+    services.find((s) => String(s.name || '').toLowerCase() === needle);
+  if (!found) return null;
+  return { id: found.id, name: found.name, service: found };
+}
+
 // ─────────────────────────────────────────────────────────────────────────────
 // Implementações — cada uma recebe (input, token) e devolve um objeto JSON
 // compacto e legível para o modelo.
@@ -149,8 +183,10 @@ const IMPLS = {
   },
 
   async get_service_metrics(input, token) {
-    const id = input.serviceId;
-    if (!id) throw new Error('serviceId é obrigatório');
+    const rawRef = input.serviceId;
+    if (!rawRef) throw new Error('serviceId é obrigatório');
+    const ref = resolveServiceRef(rawRef);
+    const id = ref ? ref.id : rawRef;
     const data = await localGet(`/docker/services/${encodeURIComponent(id)}/metrics`, token);
     const m = data?.metrics?.current || data?.metrics || {};
     return {
@@ -241,6 +277,145 @@ const IMPLS = {
       })),
     };
   },
+
+  // Inspeção profunda de UM serviço: config do painel + inspeção da imagem
+  // Docker + artefato publicado + estrutura/source. Tudo LIMITADO ao serviceId.
+  async inspect_service_config(input, token) {
+    const serviceId = input.serviceId;
+    if (!serviceId) throw new Error('serviceId é obrigatório');
+
+    // 1) Config atual do serviço — usa a fonte RAW do DockerManager (inclui
+    // deployments/envVars/volumes completos, ao contrário da REST sanitizada).
+    // Resolve por id OU nome (o agente às vezes passa o nome visível na tela).
+    const DockerManager = require('./DockerManager');
+    const dm = new DockerManager();
+    const ref = resolveServiceRef(serviceId);
+    const service = ref ? ref.service : (dm.listServices() || []).find((s) => s.id === serviceId);
+    if (!service) throw new Error(`Serviço ${serviceId} não encontrado`);
+    // A partir daqui usa SEMPRE o id real resolvido (nas chamadas REST abaixo).
+    const realId = service.id;
+
+    const out = {
+      service: {
+        id: service.id,
+        name: service.name,
+        image: service.image,
+        templateId: service.templateId || null,
+        status: resolveServiceStatus(service),
+        hostPort: service.hostPort ?? null,
+        containerPort: service.containerPort ?? null,
+        command: service.command || null,
+        nodeServiceMode: service.nodeServiceMode || null,
+        healthcheck: service.healthcheck || null,
+        networkName: service.networkName || null,
+        envVars: (service.envVars || []).map((e) => ({ key: e.key, value: e.secret ? '***' : e.value })),
+        volumes: service.volumes || [],
+        delivery: service.delivery
+          ? { repository: service.delivery.repository || null, branch: service.delivery.branch || null }
+          : null,
+      },
+    };
+
+    // 1b) Status AO VIVO + logs recentes (via REST do painel, com o token do
+    // usuário). O status do objeto raw pode estar desatualizado; a rota de
+    // detalhes reflete o estado real do container (running/stopped/unhealthy).
+    try {
+      const details = await localGet(`/docker/services/${encodeURIComponent(realId)}`, token);
+      const live = details?.service || details || {};
+      out.service.liveStatus = resolveServiceStatus(live);
+      out.service.containerStatus = live.containerStatus || live.status || null;
+      out.service.healthStatus = live.healthStatus || null;
+      if (details?.stats) {
+        out.service.stats = {
+          cpuPercent: details.stats.cpuPercent ?? null,
+          memoryUsage: fmtBytes(details.stats.memoryUsage),
+          memoryLimit: fmtBytes(details.stats.memoryLimit),
+        };
+      }
+    } catch (e) {
+      out.liveStatusError = e.message;
+    }
+    try {
+      const logsRes = await localGet(`/docker/services/${encodeURIComponent(realId)}/logs?tail=40`, token);
+      let text = '';
+      if (typeof logsRes === 'string') {
+        text = logsRes;
+      } else if (logsRes && typeof logsRes.text === 'string') {
+        // Rota atual do painel devolve { text: "linha\nlinha..." } (com timestamps).
+        text = logsRes.text;
+      } else {
+        const entries = Array.isArray(logsRes) ? logsRes : (logsRes?.logs || logsRes?.entries || []);
+        text = entries
+          .map((l) => (typeof l === 'string' ? l : (l.message || l.line || JSON.stringify(l))))
+          .join('\n');
+      }
+      // Remove os timestamps RFC3339 do Docker no início de cada linha (ruído
+      // que atrapalha as heurísticas e polui o contexto do modelo).
+      const cleaned = text
+        .split('\n')
+        .map((line) => line.replace(/^\d{4}-\d{2}-\d{2}T[\d:.]+Z\s?/, ''))
+        .filter((line) => line.trim().length)
+        .slice(-40)
+        .join('\n');
+      out.recentLogs = cleaned.slice(-4000);
+    } catch (e) {
+      out.recentLogsError = e.message;
+    }
+
+    // 2) Inspeção da IMAGEM Docker (porta exposta, env, cmd, entrypoint, etc.)
+    try {
+      if (service.image) {
+        const img = await dm.docker.getImage(service.image).inspect();
+        const cfg = img.Config || {};
+        out.image = {
+          id: (img.Id || '').slice(0, 19),
+          exposedPorts: Object.keys(cfg.ExposedPorts || {}),
+          env: cfg.Env || [],
+          cmd: cfg.Cmd || null,
+          entrypoint: cfg.Entrypoint || null,
+          workingDir: cfg.WorkingDir || null,
+          volumes: Object.keys(cfg.Volumes || {}),
+          labels: cfg.Labels || {},
+          user: cfg.User || null,
+        };
+      }
+    } catch (e) {
+      out.imageInspectError = e.message;
+    }
+
+    // 3) Artefato publicado / deploy ativo  +  4) estrutura e source
+    try {
+      const { gatherServiceContext } = require('./deploy-ai');
+      const deployments = Array.isArray(service.deployments) ? service.deployments : [];
+      const active = deployments.find((d) => d.status === 'active') || deployments.find((d) => d.id === service.activeDeploymentId);
+      const lastFailed = deployments.find((d) => d.status === 'failed');
+      const target = active || lastFailed;
+      const projectDir = target?.projectDir || (service.volumes || [])[0]?.hostPath || null;
+
+      out.deployment = target
+        ? { id: target.id, status: target.status, versionLabel: target.versionLabel || null, projectDir: projectDir || null, error: target.error || null }
+        : { status: 'none', projectDir: projectDir || null };
+
+      const ctx = gatherServiceContext(service, projectDir);
+      out.fileTree = (ctx.fileTree || []).slice(0, 80);
+      out.configFiles = ctx.configFiles || {};
+      // Amostra do source (limita tamanho para não estourar o contexto do modelo)
+      const src = ctx.sourceCode || [];
+      let budget = 24000;
+      out.sourceSample = [];
+      for (const f of src) {
+        const content = (f.content || '').slice(0, 4000);
+        if (budget - content.length < 0) break;
+        budget -= content.length;
+        out.sourceSample.push({ file: f.file, content });
+      }
+      out.sourceTruncated = src.length > out.sourceSample.length;
+    } catch (e) {
+      out.sourceError = e.message;
+    }
+
+    return out;
+  },
 };
 
 /**
@@ -295,8 +470,36 @@ const WRITE_TOOL_DEFS = [
   },
   {
     name: 'update_service',
-    description: 'Atualiza a configuração de um serviço (envs, imagem, portas, etc.). Faz backup/versionamento para permitir rollback. Requer serviceId e um objeto updates. Confirmação obrigatória (somente admin).',
-    inputSchema: { type: 'object', properties: { serviceId: { type: 'string' }, serviceName: { type: 'string' }, updates: { type: 'object', description: 'campos a atualizar' } }, required: ['serviceId', 'updates'] },
+    description: 'Aplica uma alteração na configuração de um serviço (healthcheck, portas, envs, imagem, comando, etc.). CHAME esta ferramenta sempre que o usuário pedir para configurar/corrigir/alterar algo do serviço — NÃO responda com o JSON em texto. Faz backup/versionamento para permitir rollback. Confirmação obrigatória (somente admin).',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        serviceId: { type: 'string' },
+        serviceName: { type: 'string' },
+        updates: {
+          type: 'object',
+          description: 'Somente os campos que MUDAM. Campos aceitos: hostPort (number), containerPort (number), image (string), command (string), envVars (array de {key,value}), healthcheck ({ enabled: boolean, target: string p.ex. "/health", intervalSeconds, timeoutSeconds, retries, startPeriodSeconds }).',
+          properties: {
+            hostPort: { type: 'number' },
+            containerPort: { type: 'number' },
+            image: { type: 'string' },
+            command: { type: 'string' },
+            healthcheck: {
+              type: 'object',
+              properties: {
+                enabled: { type: 'boolean' },
+                target: { type: 'string', description: 'caminho HTTP checado, ex.: "/" ou "/health"' },
+                intervalSeconds: { type: 'number' },
+                timeoutSeconds: { type: 'number' },
+                retries: { type: 'number' },
+                startPeriodSeconds: { type: 'number' },
+              },
+            },
+          },
+        },
+      },
+      required: ['serviceId', 'updates'],
+    },
   },
   {
     name: 'create_service',
@@ -330,7 +533,9 @@ async function snapshotService(serviceId, token) {
   try {
     const data = await localGet('/docker/services', token);
     const services = Array.isArray(data) ? data : (data.services || []);
-    const s = services.find((x) => x.id === serviceId);
+    const needle = String(serviceId).trim().toLowerCase();
+    const s = services.find((x) => String(x.id) === String(serviceId))
+      || services.find((x) => String(x.name || '').toLowerCase() === needle);
     if (!s) return null;
     return {
       id: s.id,
@@ -414,7 +619,18 @@ async function runWriteTool(name, input, token) {
   }
   const impl = WRITE_IMPLS[name];
   if (!impl) throw new Error(`Executor ausente para: ${name}`);
-  return impl(input || {}, token);
+  // Normaliza a referência do serviço: o agente pode ter passado o NOME em vez
+  // do id real. Resolve para o id antes de executar, evitando falha de "não
+  // encontrado" ou de agir no alvo errado.
+  const normalized = { ...(input || {}) };
+  if (normalized.serviceId) {
+    const ref = resolveServiceRef(normalized.serviceId);
+    if (ref) {
+      normalized.serviceId = ref.id;
+      if (!normalized.serviceName) normalized.serviceName = ref.name;
+    }
+  }
+  return impl(normalized, token);
 }
 
 module.exports = {

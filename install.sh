@@ -506,6 +506,14 @@ server {
         alias /var/www/panel/;
         try_files \$uri \$uri/ /admin/index.html;
         index index.html;
+
+        # index.html NAO deve ser cacheado: os assets tem hash no nome (servidos
+        # por /assets/ e /admin/assets/ com precedencia), mas o HTML aponta para
+        # o bundle atual. Sem isto, um HTML cacheado serve bundles antigos apos
+        # um deploy.
+        add_header Cache-Control "no-cache, no-store, must-revalidate" always;
+        add_header Pragma "no-cache" always;
+        expires -1;
     }
 
     # Assets na raiz para permitir publicar o painel em subdominio sem /admin

@@ -56,8 +56,16 @@ export function useZeusStream() {
   /**
    * Envia mensagem ao agente. `onEvent(ev)` recebe cada evento SSE.
    */
-  const sendMessage = useCallback(async ({ message, history, conversationId, agent }, onEvent) => {
-    return readStream('/zeus/agent', { message, history, conversationId, agent }, { onEvent })
+  const sendMessage = useCallback(async ({ message, history, conversationId, agent, serviceId }, onEvent) => {
+    return readStream('/zeus/agent', { message, history, conversationId, agent, serviceId }, { onEvent })
+  }, [readStream])
+
+  /**
+   * Dispara a resolução completa da configuração de um serviço/container.
+   * `onEvent(ev)` recebe cada passo SSE (type: 'step' | 'result' | 'error' | 'end').
+   */
+  const resolveService = useCallback(async ({ serviceId, dryRun }, onEvent) => {
+    return readStream(`/zeus/service/${encodeURIComponent(serviceId)}/resolve`, { dryRun: !!dryRun }, { onEvent })
   }, [readStream])
 
   /**
@@ -72,7 +80,7 @@ export function useZeusStream() {
     abortRef.current = null
   }, [])
 
-  return { sendMessage, confirmAction, stop }
+  return { sendMessage, resolveService, confirmAction, stop }
 }
 
 export default useZeusStream
