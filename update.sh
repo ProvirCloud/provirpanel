@@ -307,7 +307,50 @@ configure_nginx_permissions
 seed_blueprints
 
 # Corrigir ownership do projeto
-chown -R provirpanel:provirpanel "${INSTALL_DIR}"
+# ATENÇÃO: NÃO aplicar chown genérico dentro de projects/docker/ — ali ficam os
+# volumes de dados dos containers, cujo dono deve ser o uid do respectivo serviço
+# (ex.: redis roda como uid 999). Um chown -R provirpanel (1001) quebraria, por
+# exemplo, o BGSAVE do redis com "Permission denied". Por isso podamos
+# projects/docker do chown recursivo e reajustamos cada volume logo abaixo.
+DOCKER_DATA_DIR="${INSTALL_DIR}/projects/docker"
+find "${INSTALL_DIR}" -path "${DOCKER_DATA_DIR}" -prune -o \
+  -exec chown provirpanel:provirpanel {} +
+
+# Reajustar cada volume em projects/docker/ para o uid:gid do serviço que o usa.
+# Deriva o uid a partir da config do próprio container (docker inspect .Config.User);
+# quando ausente, cai para um mapa por imagem conhecida. Redis é sempre 999:999.
+if [ -d "${DOCKER_DATA_DIR}" ]; then
+  for voldir in "${DOCKER_DATA_DIR}"/*/; do
+    [ -d "${voldir}" ] || continue
+    svc="$(basename "${voldir}")"
+    # Ignora diretórios de metadados internos (ex.: .versions)
+    case "${svc}" in .*) continue ;; esac
+
+    owner=""
+    # 1) uid:gid explícito configurado no container (mais confiável)
+    cfg_user="$(docker inspect -f '{{.Config.User}}' "${svc}" 2>/dev/null || true)"
+    if printf '%s' "${cfg_user}" | grep -qE '^[0-9]+:[0-9]+$'; then
+      owner="${cfg_user}"
+    else
+      # 2) fallback por imagem conhecida
+      img="$(docker inspect -f '{{.Config.Image}}' "${svc}" 2>/dev/null | tr '[:upper:]' '[:lower:]' || true)"
+      case "${img}" in
+        redis|redis:*|*/redis:*)        owner="999:999" ;;
+        postgres|postgres:*|*/postgres:*) owner="999:999" ;;
+        *pgadmin*)                       owner="5050:5050" ;;
+        *n8n*)                           owner="1000:1000" ;;
+      esac
+    fi
+
+    if [ -n "${owner}" ]; then
+      log "Reajustando volume ${svc} -> ${owner}"
+      chown -R "${owner}" "${voldir}"
+    else
+      # Sem dono conhecido: mantém provirpanel (comportamento seguro p/ apps genéricos)
+      chown -R provirpanel:provirpanel "${voldir}"
+    fi
+  done
+fi
 
 # Testar e recarregar Nginx
 
