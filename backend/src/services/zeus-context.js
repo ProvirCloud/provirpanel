@@ -35,14 +35,18 @@ const collectLocalContext = async (api, token, hostHeader) => {
   const dockerData = await safeFetch(`${api}/docker/services`);
   if (dockerData) {
     const services = Array.isArray(dockerData) ? dockerData : (dockerData.services || []);
-    const runningServices = services.filter(s => s.status === 'running' || s.runtimeState === 'running');
+    const runningServices = services.filter(s =>
+      s.status === 'running' ||
+      s.runtimeState === 'running' ||
+      String(s.containerStatus || '').toLowerCase().startsWith('up')
+    );
 
     context.services = await Promise.all(services.map(async s => {
       const base = {
         id: s.id,
         name: s.name,
         image: s.image,
-        status: s.status,
+        status: s.status || (String(s.containerStatus || '').toLowerCase().startsWith('up') ? 'running' : (s.containerStatus || 'unknown')),
         ports: s.ports,
         group: s.group
       };
