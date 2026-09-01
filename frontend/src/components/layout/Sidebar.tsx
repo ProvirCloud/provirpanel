@@ -1,4 +1,4 @@
-import { Activity, Boxes, Brain, Database, Files, FileText, Globe, Layers3, Route, SearchCheck, Terminal, X } from 'lucide-react'
+import { Activity, Boxes, Brain, Database, Files, FileText, Globe, KeyRound, Layers3, Route, SearchCheck, Sparkles, Terminal, X } from 'lucide-react'
 import { useEffect, useState } from 'react'
 import logoNameDark from '../../assets/images/logoname.webp'
 import logoNameLight from '../../assets/images/logoname_w.webp'
@@ -46,7 +46,8 @@ const sections = [
   {
     label: 'Operação',
     items: [
-      { to: '/', label: 'Dashboard', icon: Activity, end: true },
+      { to: '/', label: 'Assistente', icon: Sparkles, end: true },
+      { to: '/dashboard', label: 'Dashboard', icon: Activity },
       { to: '/stacks', label: 'Infra Canvas', icon: Layers3 },
       { to: '/sites', label: 'Sites', icon: Globe },
     ],
@@ -86,6 +87,23 @@ type SidebarContentProps = {
 const SidebarContent = ({ onNavigate, showClose = false }: SidebarContentProps) => {
   const { theme } = useTheme()
   const logo = theme === 'light' ? logoNameDark : logoNameLight
+  const [isCentral, setIsCentral] = useState(false)
+
+  useEffect(() => {
+    const token = localStorage.getItem('provirpanel-token')
+    fetch('/api/zeus/panel-info', { headers: { Authorization: `Bearer ${token}` } })
+      .then((r) => (r.ok ? r.json() : null))
+      .then((info) => { if (info?.role === 'central') setIsCentral(true) })
+      .catch(() => {})
+  }, [])
+
+  // Injeta o item "Integrações" (Tokens) apenas no Hub Central.
+  const effectiveSections = sections.map((section) => {
+    if (section.label === 'Inteligência' && isCentral) {
+      return { ...section, items: [...section.items, { to: '/integrations', label: 'Integrações', icon: KeyRound }] }
+    }
+    return section
+  })
 
   return (
     <>
@@ -106,7 +124,7 @@ const SidebarContent = ({ onNavigate, showClose = false }: SidebarContentProps) 
       <PanelBadge />
 
       <div className="flex-1 space-y-8 overflow-y-auto pr-1">
-        {sections.map((section) => (
+        {effectiveSections.map((section) => (
           <SidebarSection key={section.label} label={section.label} items={section.items} onNavigate={onNavigate} />
         ))}
       </div>

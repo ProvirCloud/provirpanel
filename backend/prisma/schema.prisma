@@ -23,6 +23,9 @@ model User {
   mfaRequired Boolean @default(false) @map("mfa_required")
   createdAt DateTime @default(now()) @map("created_at")
 
+  aiConversations AiConversation[]
+  aiProfile       AiUserProfile?
+
   @@map("users")
 }
 
@@ -254,4 +257,75 @@ model ChildPanel {
   createdAt DateTime  @default(now()) @map("created_at")
 
   @@map("child_panels")
+}
+
+// ==================== AI CHAT (Assistant principal) ====================
+
+model AiConversation {
+  id            String   @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  userId        String   @map("user_id") @db.Uuid
+  user          User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  clienteId     String?  @map("cliente_id") // escopo multi-cliente (null = painel local)
+  title         String   @default("Nova conversa")
+  agent         String   @default("auto") // 'auto' ou um dos harness IDs
+  summary       String?  @db.Text // resumo acumulado do contexto antigo
+  summaryTokens Int      @default(0) @map("summary_tokens")
+  metadata      Json     @default("{}")
+  archived      Boolean  @default(false)
+  createdAt     DateTime @default(now()) @map("created_at")
+  updatedAt     DateTime @updatedAt @map("updated_at")
+
+  messages AiMessage[]
+
+  @@index([userId, updatedAt(sort: Desc)], name: "idx_ai_conv_user")
+  @@index([clienteId], name: "idx_ai_conv_cliente")
+  @@map("ai_conversations")
+}
+
+model AiMessage {
+  id             String   @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  conversationId String   @map("conversation_id") @db.Uuid
+  conversation   AiConversation @relation(fields: [conversationId], references: [id], onDelete: Cascade)
+  role           String   // 'user' | 'assistant' | 'system' | 'tool'
+  content        String?  @db.Text
+  blocks         Json?    // blocos interativos (generative UI) — Fase 3
+  tokens         Int      @default(0)
+  createdAt      DateTime @default(now()) @map("created_at")
+
+  @@index([conversationId, createdAt], name: "idx_ai_msg_conv")
+  @@map("ai_messages")
+}
+
+model AiUserProfile {
+  userId     String   @id @map("user_id") @db.Uuid
+  user       User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  skillLevel String   @default("auto") @map("skill_level") // auto|iniciante|intermediario|avancado
+  signals    Json     @default("{}") // métricas silenciosas p/ inferência
+  summary    String?  @db.Text // resumo do perfil (preferências/estilo)
+  updatedAt  DateTime @updatedAt @map("updated_at")
+
+  @@map("ai_user_profiles")
+}
+
+model AiUpload {
+  id             String   @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  userId         String   @map("user_id") @db.Uuid
+  conversationId String?  @map("conversation_id") @db.Uuid
+  filename       String
+  mime           String?
+  sizeBytes      Int      @default(0) @map("size_bytes")
+  kind           String   @default("other") // zip | pdf | image | text | other
+  intent         String   @default("auto") // auto|create_service|documentation|training|analyze_logs|inspect|store|publish_site
+  status         String   @default("received") // received|analyzing|awaiting_user|done|error
+  tmpPath        String?  @map("tmp_path")     // caminho temporário do arquivo recebido
+  storagePath    String?  @map("storage_path") // destino final, se salvo
+  analysis       Json?    // { summary, detection, suggestion, ... }
+  decision       Json?    // { action, target, ... }
+  error          String?  @db.Text
+  createdAt      DateTime @default(now()) @map("created_at")
+  updatedAt      DateTime @default(now()) @updatedAt @map("updated_at")
+
+  @@index([userId, createdAt(sort: Desc)], name: "idx_ai_upload_user")
+  @@index([conversationId], name: "idx_ai_upload_conv")
+  @@map("ai_uploads")
 }

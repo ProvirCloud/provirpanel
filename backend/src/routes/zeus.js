@@ -2,6 +2,9 @@ const { Router } = require('express');
 const { collectLocalContext, formatContextForPrompt, collectPanelsContext, formatPanelsContext } = require('../services/zeus-context');
 const { TOOL_DEFS, runTool, WRITE_TOOL_DEFS, WRITE_TOOL_META, WRITE_TOOL_NAMES, canRoleUseWriteTool, runWriteTool } = require('../services/zeus-agent-tools');
 const { routeProvider } = require('../services/zeus-router');
+const aiTurn = require('../services/ai-turn');
+const aiAgents = require('../services/ai-agents');
+const aiBlocksMapper = require('../services/ai-blocks-mapper');
 const router = Router();
 
 // Allow self-signed certs for server-to-server communication
@@ -337,17 +340,37 @@ Regras de AÇÃO (importante):
 
 Responda em português, objetivo, usando markdown quando ajudar.`;
 
+// Adaptação de tom por nível de conhecimento (inferido silenciosamente; nunca
+// exposto ao usuário). Injetado no system prompt do turno.
+const SKILL_GUIDANCE = {
+  iniciante: 'O usuário é iniciante. Use linguagem simples, evite jargão, explique termos técnicos com analogias e dê exemplos práticos passo a passo. Não presuma conhecimento prévio.',
+  intermediario: 'O usuário tem conhecimento intermediário. Seja claro e direto, pode usar termos técnicos comuns, mas explique conceitos mais avançados quando surgirem.',
+  avancado: 'O usuário é avançado. Seja técnico, direto e conciso. Pode usar terminologia especializada sem explicar o básico. Foque em precisão e eficiência.',
+  auto: '',
+};
+
 router.post('/agent', async (req, res, next) => {
   const MAX_ITERATIONS = 6;
   const sendEvent = (data) => res.write(`data: ${JSON.stringify(data)}\n\n`);
 
   try {
-    const { message, history } = req.body;
+    const { message, history, conversationId, agent } = req.body;
     if (!message || typeof message !== 'string' || !message.trim()) {
       return res.status(400).json({ error: 'message is required' });
     }
     const token = req.headers.authorization?.replace('Bearer ', '');
     if (!token) return res.status(401).json({ error: 'token ausente' });
+
+    // ── Persistência (Fase 1.6): grava a msg do usuário, atualiza perfil e
+    // devolve o nível de conhecimento efetivo (para adaptar o tom — Fase 4).
+    // Best-effort: se conversationId for inválido/ausente, apenas não persiste.
+    const turn = await aiTurn.beginTurn({ conversationId, user: req.user, message: message.trim() });
+    const skillLevel = turn.skillLevel || 'auto';
+    const persistEnabled = turn.ok;
+
+    // Agente efetivo (Fase 2.1): a conversa persistida tem precedência sobre o
+    // body; cai para 'auto' se inválido/ausente.
+    const effectiveAgent = turn.conversation?.agent || agent || 'auto';
 
     res.setHeader('Content-Type', 'text/event-stream');
     res.setHeader('Cache-Control', 'no-cache');
@@ -356,9 +379,20 @@ router.post('/agent', async (req, res, next) => {
     res.flushHeaders();
     res.write(`: ${' '.repeat(2048)}\n\n`);
 
-    // Monta histórico no formato Converse (só texto)
+    // Monta histórico no formato Converse (só texto).
+    // Se a conversa é persistida, usa o histórico do banco (summary + msgs
+    // recentes já com orçamento de tokens); senão, usa o `history` do cliente.
     const messages = [];
-    if (Array.isArray(history)) {
+    let summaryText = '';
+    if (persistEnabled) {
+      const built = await aiTurn.buildConverseHistory({ conversationId, user: req.user });
+      summaryText = built.summaryText || '';
+      // O histórico persistido já inclui a mensagem do usuário recém-gravada;
+      // removemos a última se for a própria mensagem atual (evita duplicar).
+      const hist = built.messages;
+      if (hist.length && hist[hist.length - 1].role === 'user') hist.pop();
+      messages.push(...hist);
+    } else if (Array.isArray(history)) {
       for (const h of history.slice(-8)) {
         if (!h || !h.role || !h.content) continue;
         const role = h.role === 'assistant' ? 'assistant' : 'user';
@@ -366,6 +400,17 @@ router.post('/agent', async (req, res, next) => {
       }
     }
     messages.push({ role: 'user', content: [{ text: `[contexto: seu perfil de usuário é "${req.user?.role || 'viewer'}"]\n\n${message.trim()}` }] });
+
+    // System prompt do turno: base + persona do agente (Fase 2.1) + adaptação ao
+    // nível (Fase 4) + resumo do histórico antigo (quando a conversa é longa).
+    const persona = aiAgents.getPersona(effectiveAgent);
+    const skillGuidance = SKILL_GUIDANCE[skillLevel] || '';
+    const systemForTurn = [
+      AGENT_SYSTEM_PROMPT,
+      persona ? `\n\n[Persona do agente selecionado] ${persona}` : '',
+      skillGuidance ? `\n\n[Adaptação de tom] ${skillGuidance}` : '',
+      summaryText ? `\n\n[Resumo da conversa até aqui]\n${summaryText}` : '',
+    ].join('');
 
     // ── Roteamento híbrido: mensagens triviais/conversacionais vão para o LLM
     // local (Ollama, grátis). Consultas/ações e qualquer dúvida vão para o
@@ -379,7 +424,7 @@ router.post('/agent', async (req, res, next) => {
           headers: { 'Content-Type': 'application/json', 'x-api-key': ZEUS_API_KEY },
           body: JSON.stringify({
             messages: [
-              { role: 'system', content: 'Você é o Zeus, assistente de infraestrutura do Provir Cloud Panel. Responda em português brasileiro, de forma breve e cordial. Nunca diga que é outro modelo (como Qwen ou Alibaba); você é o Zeus AI da Provir Cloud. Para conversas triviais, seja simpático e, quando fizer sentido, lembre que pode consultar serviços, containers, bancos, métricas e sites do painel.' },
+              { role: 'system', content: `Você é o Zeus, assistente de infraestrutura do Provir Cloud Panel. Responda em português brasileiro, de forma breve e cordial. Nunca diga que é outro modelo (como Qwen ou Alibaba); você é o Zeus AI da Provir Cloud. Para conversas triviais, seja simpático e, quando fizer sentido, lembre que pode consultar serviços, containers, bancos, métricas e sites do painel.${aiAgents.getPersona(effectiveAgent) ? `\n\n[Persona] ${aiAgents.getPersona(effectiveAgent)}` : ''}` },
               { role: 'user', content: message.trim() },
             ],
             options: { large: false },
@@ -389,15 +434,26 @@ router.post('/agent', async (req, res, next) => {
         // Repassa os eventos SSE do gateway (type: token / done / end)
         const decoder = new TextDecoder();
         let buf = '';
+        let ollamaText = '';
         for await (const chunk of streamRes.body) {
           buf += typeof chunk === 'string' ? chunk : decoder.decode(chunk, { stream: true });
           const lines = buf.split('\n');
           buf = lines.pop() || '';
           for (const line of lines) {
-            if (line.startsWith('data: ')) res.write(line + '\n\n');
+            if (line.startsWith('data: ')) {
+              res.write(line + '\n\n');
+              // Acumula o texto para persistir ao final (best-effort).
+              try {
+                const ev = JSON.parse(line.slice(6));
+                if (ev && ev.type === 'token' && ev.content) ollamaText += ev.content;
+              } catch { /* linha não-JSON */ }
+            }
           }
         }
         if (buf.startsWith('data: ')) res.write(buf + '\n\n');
+        if (persistEnabled) {
+          await aiTurn.endTurn({ conversationId, user: req.user, content: ollamaText });
+        }
         sendEvent({ type: 'end' });
         return res.end();
       } catch (err) {
@@ -417,11 +473,12 @@ router.post('/agent', async (req, res, next) => {
     const toolsForModel = [...TOOL_DEFS, ...writeToolsForRole];
 
     let finalText = '';
+    const turnBlocks = []; // blocos interativos acumulados a partir dos tool_result
 
     for (let i = 0; i < MAX_ITERATIONS; i++) {
       const result = await zeusRequest('/api/chat/converse', {
         messages,
-        system: AGENT_SYSTEM_PROMPT,
+        system: systemForTurn,
         tools: toolsForModel,
         maxTokens: 2048,
         temperature: 0.2,
@@ -441,10 +498,11 @@ router.post('/agent', async (req, res, next) => {
           const allowed = canRoleUseWriteTool(role, writeUse.name);
 
           if (!allowed) {
-            sendEvent({
-              type: 'token',
-              content: `🔒 A ação **${writeUse.name}** requer perfil **admin**. Seu perfil (**${role}**) pode consultar informações e reiniciar serviços. Peça a um administrador para executar esta ação.`,
-            });
+            const denyMsg = `🔒 A ação **${writeUse.name}** requer perfil **admin**. Seu perfil (**${role}**) pode consultar informações e reiniciar serviços. Peça a um administrador para executar esta ação.`;
+            sendEvent({ type: 'token', content: denyMsg });
+            if (persistEnabled) {
+              await aiTurn.endTurn({ conversationId, user: req.user, content: denyMsg });
+            }
             sendEvent({ type: 'end' });
             return res.end();
           }
@@ -462,11 +520,17 @@ router.post('/agent', async (req, res, next) => {
           }
 
           // Proposta de ação — exige confirmação humana.
-          sendEvent({
-            type: 'action_proposal',
-            action: { tool: writeUse.name, input: writeUse.input || {} },
-            meta: { risk: meta.risk || 'medium', requiredRole: meta.requiredRole || 'admin', rollback: meta.rollback || null },
-          });
+          const proposal = { tool: writeUse.name, input: writeUse.input || {} };
+          const proposalMeta = { risk: meta.risk || 'medium', requiredRole: meta.requiredRole || 'admin', rollback: meta.rollback || null };
+          sendEvent({ type: 'action_proposal', action: proposal, meta: proposalMeta });
+          if (persistEnabled) {
+            await aiTurn.endTurn({
+              conversationId,
+              user: req.user,
+              content: `Ação proposta: \`${writeUse.name}\` (aguardando confirmação).`,
+              blocks: [{ kind: 'action_proposal', action: proposal, meta: proposalMeta }],
+            });
+          }
           sendEvent({ type: 'end' });
           return res.end();
         }
@@ -485,6 +549,16 @@ router.post('/agent', async (req, res, next) => {
             toolContent = { error: err.message };
           }
           sendEvent({ type: 'tool_result', name: tu.name, error: isError, result: toolContent });
+          // Bloco interativo (generative UI) — tabela/métrica/erro conforme a tool.
+          try {
+            const block = isError
+              ? aiBlocksMapper.errorBlock(tu.name, toolContent?.error)
+              : aiBlocksMapper.toolResultToBlock(tu.name, toolContent);
+            if (block) {
+              turnBlocks.push(block);
+              sendEvent({ type: 'block', block });
+            }
+          } catch { /* mapeamento best-effort */ }
           toolResultBlocks.push({
             toolResult: {
               toolUseId: tu.toolUseId,
@@ -507,6 +581,14 @@ router.post('/agent', async (req, res, next) => {
     }
 
     sendEvent({ type: 'token', content: finalText });
+    if (persistEnabled) {
+      await aiTurn.endTurn({
+        conversationId,
+        user: req.user,
+        content: finalText,
+        blocks: turnBlocks.length ? turnBlocks : undefined,
+      });
+    }
     sendEvent({ type: 'end' });
     return res.end();
   } catch (err) {
@@ -636,6 +718,39 @@ router.get('/panel-info', async (_req, res) => {
     role: ZEUS_PANEL_ROLE,
     scopeName
   });
+});
+
+// ─── Integration tokens (somente HubCentral + admin) ─────────────────────────
+// Geração de credenciais é sensível: só no painel central e para admins.
+const centralAdminOnly = (req, res, next) => {
+  if (ZEUS_PANEL_ROLE !== 'central') {
+    return res.status(403).json({ error: 'Disponível apenas no Hub Central.' });
+  }
+  if ((req.user?.role || 'viewer') !== 'admin') {
+    return res.status(403).json({ error: 'Requer perfil admin.' });
+  }
+  next();
+};
+
+router.get('/integrations/tokens', centralAdminOnly, async (_req, res, next) => {
+  try { res.json(await zeusGet('/api/integrations/tokens')); } catch (err) { next(err); }
+});
+
+router.post('/integrations/tokens', centralAdminOnly, async (req, res, next) => {
+  try {
+    const { name, scope } = req.body || {};
+    res.status(201).json(await zeusRequest('/api/integrations/tokens', { name, scope }));
+  } catch (err) { next(err); }
+});
+
+router.delete('/integrations/tokens/:id', centralAdminOnly, async (req, res, next) => {
+  try {
+    const r = await fetch(`${ZEUS_GATEWAY_URL}/api/integrations/tokens/${encodeURIComponent(req.params.id)}`, {
+      method: 'DELETE',
+      headers: { 'x-api-key': ZEUS_API_KEY }
+    });
+    res.status(r.status).json(await r.json());
+  } catch (err) { next(err); }
 });
 
 router.post('/panels/register', async (req, res, next) => {

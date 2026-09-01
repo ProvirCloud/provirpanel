@@ -1,5 +1,6 @@
 import { BrowserRouter, Navigate, Route, Routes } from 'react-router-dom'
 import { Suspense, useCallback, useEffect, useState } from 'react'
+import { useLocation } from 'react-router-dom'
 import TaskBar from './components/layout/TaskBar'
 import LoginPage from './pages/LoginPage.jsx'
 import MainLayout from './pages/MainLayout.jsx'
@@ -31,12 +32,22 @@ import TerminalPage from './components/TerminalPage.jsx'
 import ZeusPanels from './components/ZeusPanels.jsx'
 import DatabaseConnectionsPanel from './components/DatabaseConnectionsPanel.jsx'
 import WorkspacesPage from './pages/WorkspacesPage.jsx'
+import AssistantPage from './pages/AssistantPage.jsx'
+import IntegrationTokensPanel from './components/IntegrationTokensPanel.jsx'
 import api from './services/api.js'
 import { getPanelBasename } from './utils/panelPath.js'
 
 const RouteLoader = () => (
   <div className="zeus-panel px-6 py-16 text-center text-[var(--color-text-muted)]">Carregando módulo...</div>
 )
+
+// O chat flutuante fica disponível em todas as telas, EXCETO na página principal
+// do Assistente ("/"), que já é o chat em tela cheia (evita duplicação).
+const FloatingZeusChat = () => {
+  const location = useLocation()
+  if (location.pathname === '/') return null
+  return <ZeusChat />
+}
 
 const ProtectedRoute = ({ loading, authenticated, children }) => {
   if (loading) {
@@ -119,12 +130,13 @@ const App = () => {
           element={
             <ProtectedRoute loading={authState.loading} authenticated={authState.authenticated}>
               <MainLayout />
-              <ZeusChat />
+              <FloatingZeusChat />
               <FloatingTerminal />
             </ProtectedRoute>
           }
         >
-          <Route index element={<Dashboard />} />
+          <Route index element={<ModulePage showHeader={false} title="Assistente" subtitle="Converse com o Zeus AI"><AssistantPage /></ModulePage>} />
+          <Route path="dashboard" element={<Dashboard />} />
           <Route path="stacks" element={<InfrastructureCanvasPage />} />
           <Route path="stacks/canvas" element={<ModulePage showHeader={false} title="Infrastructure Canvas" subtitle="Editor visual de stacks"><StacksPanel /></ModulePage>} />
           <Route path="terminal" element={<ModulePage title="Terminal" subtitle="Acesso operacional aos ambientes conectados"><TerminalPage /></ModulePage>} />
@@ -147,6 +159,7 @@ const App = () => {
           <Route path="zeus-panels" element={<ModulePage title="Zeus AI" subtitle="Painéis conectados e inteligência centralizada"><ZeusPanels /></ModulePage>} />
           <Route path="databases" element={<ModulePage title="Database Connections" subtitle="Conexões, schemas e indexação para AI"><DatabaseConnectionsPanel /></ModulePage>} />
           <Route path="workspaces" element={<ModulePage title="Workspaces" subtitle="Grupos, empresas, projetos e painéis filhos"><WorkspacesPage /></ModulePage>} />
+          <Route path="integrations" element={<ModulePage title="Integrações" subtitle="Tokens de integração (Open WebUI / OpenAI-compatível)"><IntegrationTokensPanel /></ModulePage>} />
         </Route>
         <Route path="*" element={<Navigate to="/" replace />} />
       </Routes>
