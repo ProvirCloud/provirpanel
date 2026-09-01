@@ -99,6 +99,34 @@ const TOOL_DEFS = [
 ];
 
 // ─────────────────────────────────────────────────────────────────────────────
+// Helpers
+// ─────────────────────────────────────────────────────────────────────────────
+
+/**
+ * Deriva o estado de runtime de um serviço a partir dos campos enviados pelo
+ * backend (`containerStatus`, `healthStatus`). Espelha a lógica de
+ * `normalizeRuntimeState` do frontend (ServiceDetailsPage) para que o chat/Zeus
+ * reporte o mesmo status exibido na tela de serviços — evitando o "unknown".
+ */
+function resolveServiceStatus(s = {}) {
+  const health = String(s.healthStatus || '').toLowerCase();
+  if (health === 'unhealthy') return 'unhealthy';
+
+  const raw = String(
+    s.status || s.runtimeState || s.containerStatus || ''
+  ).toLowerCase();
+
+  if (raw === 'missing') return 'stopped';
+  if (raw.includes('unhealthy')) return 'unhealthy';
+  if (raw.includes('running') || raw.startsWith('up')) return 'running';
+  if (raw.includes('exited') || raw.includes('stopped')) return 'stopped';
+  if (raw.includes('paused')) return 'paused';
+  if (raw.includes('restarting')) return 'restarting';
+  if (raw.includes('created')) return 'created';
+  return raw || 'unknown';
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
 // Implementações — cada uma recebe (input, token) e devolve um objeto JSON
 // compacto e legível para o modelo.
 // ─────────────────────────────────────────────────────────────────────────────
@@ -113,7 +141,7 @@ const IMPLS = {
         id: s.id,
         name: s.name,
         image: s.image,
-        status: s.status || s.runtimeState || 'unknown',
+        status: resolveServiceStatus(s),
         ports: s.ports,
         group: s.group || s.uiGroupId || null,
       })),
@@ -307,7 +335,7 @@ async function snapshotService(serviceId, token) {
     return {
       id: s.id,
       name: s.name,
-      status: s.status || s.runtimeState || 'unknown',
+      status: resolveServiceStatus(s),
       activeDeploymentId: s.activeDeploymentId || null,
     };
   } catch {
