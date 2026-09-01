@@ -564,7 +564,9 @@ router.post('/agent', async (req, res, next) => {
         messages,
         system: systemForTurn,
         tools: toolsForModel,
-        maxTokens: 2048,
+        // Teto de tokens da resposta do agente. Nova Pro suporta até ~5000 de
+        // saída; 4096 dá folga para diagnósticos/resumos longos sem cortar.
+        maxTokens: 4096,
         temperature: 0.2,
       });
 
