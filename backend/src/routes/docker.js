@@ -4132,7 +4132,7 @@ router.delete('/containers/:id', async (req, res, next) => {
 });
 
 // Update service
-router.put('/services/:id', async (req, res, next) => {
+const updateServiceHandler = async (req, res, next) => {
   try {
     const requestBody = req.body || {};
     const services = dockerManager.listServices();
@@ -4539,6 +4539,80 @@ router.put('/services/:id', async (req, res, next) => {
     res.json({ service: sanitizeServiceForClient(persistedService) });
   } catch (err) {
     appendServiceLog('error', `Erro ao atualizar servico ${req.params.id}: ${err.message}`);
+    next(err);
+  }
+};
+
+router.put('/services/:id', updateServiceHandler);
+
+// Redeploy: baixa a versao mais recente da imagem (com autenticacao do registry,
+// se houver) e recria o container reaproveitando TODA a configuracao atual do
+// servico (portas, envs, volumes, comando, rede). Nao duplica o servico.
+router.post('/services/:id/redeploy', async (req, res, next) => {
+  try {
+    const services = dockerManager.listServices();
+    const service = services.find((s) => s.id === req.params.id);
+    if (!service) {
+      return res.status(404).json({ message: 'Service not found' });
+    }
+    const image = String(service.image || '').trim();
+    if (!image) {
+      return res.status(400).json({ message: 'Serviço sem imagem associada' });
+    }
+
+    // Resolve autenticacao pelo host da imagem (mesma logica do pull manual).
+    const rawImageHost = normalizeRegistryHost(image);
+    const imageHasHost = Boolean(
+      rawImageHost &&
+        (rawImageHost.includes('.') || rawImageHost.includes(':') || rawImageHost === 'localhost')
+    );
+    const imageHost = imageHasHost ? rawImageHost : 'docker.io';
+    let authconfig = null;
+    if (imageHasHost) {
+      const registries = readRegistries();
+      const registry =
+        registries.find((reg) => reg.serverAddress === imageHost) ||
+        registries.find(
+          (reg) =>
+            (imageHost === 'ghcr.io' && reg.serverAddress === 'github.com') ||
+            (imageHost === 'github.com' && reg.serverAddress === 'ghcr.io')
+        ) ||
+        null;
+      if (registry && (registry.username || registry.password)) {
+        authconfig = {
+          username: registry.username || '',
+          password: registry.password || '',
+          serveraddress: imageHost === 'docker.io' ? 'https://index.docker.io/v1/' : imageHost
+        };
+      }
+    }
+
+    appendServiceLog('info', `Redeploy iniciado para ${service.name}: atualizando imagem ${image}`);
+    let pullResult;
+    try {
+      pullResult = await dockerManager.forcePullImage(image, {
+        authconfig,
+        onProgress: (msg) => appendServiceLog('info', `[${service.name}] ${msg}`)
+      });
+    } catch (pullErr) {
+      appendServiceLog('error', `Redeploy falhou ao baixar imagem de ${service.name}: ${pullErr.message}`);
+      return res.status(400).json({
+        message: `Falha ao baixar a nova versao da imagem: ${pullErr.message}`
+      });
+    }
+
+    appendServiceLog(
+      'info',
+      pullResult.updated
+        ? `Nova versao da imagem baixada para ${service.name} (${(pullResult.currentId || '').slice(7, 19)})`
+        : `Imagem ${image} ja estava na versao mais recente para ${service.name}`
+    );
+
+    // Recria o container com a MESMA config atual (sem alteracoes), forcando apply.
+    req.body = { apply: true };
+    res.locals.redeployPullResult = pullResult;
+    return updateServiceHandler(req, res, next);
+  } catch (err) {
     next(err);
   }
 });

@@ -326,6 +326,35 @@ class DockerManager {
     });
   }
 
+  /**
+   * Faz o pull da imagem SEMPRE (mesmo que ja exista localmente), usando
+   * authconfig opcional. Usado no redeploy para trazer a nova versao da tag.
+   * Retorna { updated: boolean, previousId, currentId }.
+   */
+  async forcePullImage(imageName, { authconfig = null, onProgress } = {}) {
+    let previousId = null;
+    try {
+      const before = await this.docker.getImage(imageName).inspect();
+      previousId = before?.Id || null;
+    } catch (err) {
+      previousId = null;
+    }
+    if (onProgress) onProgress(`⬇️  Atualizando imagem ${imageName}...`);
+    await this.pullImage(imageName, onProgress, { allowAny: true, authconfig });
+    let currentId = null;
+    try {
+      const after = await this.docker.getImage(imageName).inspect();
+      currentId = after?.Id || null;
+    } catch (err) {
+      currentId = null;
+    }
+    return {
+      updated: Boolean(currentId && currentId !== previousId),
+      previousId,
+      currentId
+    };
+  }
+
   async ensureImageExists(imageName, onProgress) {
     try {
       await this.docker.getImage(imageName).inspect();

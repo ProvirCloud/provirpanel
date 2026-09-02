@@ -36,6 +36,7 @@ import {
   Terminal,
   Trash2,
   UploadCloud,
+  DownloadCloud,
   X,
   Zap,
   Sparkles
@@ -524,7 +525,7 @@ const HeaderButton = ({ children, icon: Icon, variant = 'default', ...props }) =
   )
 }
 
-const ServiceHeader = ({ service, actionState, onBack, onDeploy, onEdit, onRestart, onStop, onStart }) => {
+const ServiceHeader = ({ service, actionState, onBack, onDeploy, onEdit, onRestart, onStop, onStart, onRedeploy }) => {
   const runtime = normalizeRuntimeState(service)
   const isRunning = runtime === 'running'
   const publicUrl = resolvePublicUrl(service)
@@ -585,6 +586,9 @@ const ServiceHeader = ({ service, actionState, onBack, onDeploy, onEdit, onResta
         </div>
         <div className="flex flex-wrap gap-2">
           <HeaderButton icon={UploadCloud} variant="primary" onClick={onDeploy}>Deploy</HeaderButton>
+          <HeaderButton icon={DownloadCloud} onClick={onRedeploy} disabled={!!actionState}>
+            Atualizar imagem
+          </HeaderButton>
           <HeaderButton icon={RefreshCcw} onClick={onRestart} disabled={!service.containerId || actionState}>
             Restart
           </HeaderButton>
@@ -3268,6 +3272,10 @@ const ServiceDetailsPage = () => {
         onStart={() => runServiceAction('Iniciando serviço...', () => servicesApi.start(service.id))}
         onStop={() => runServiceAction('Parando serviço...', () => servicesApi.stop(service.id))}
         onRestart={() => runServiceAction('Reiniciando serviço...', () => servicesApi.restart(service.id))}
+        onRedeploy={() => {
+          if (!window.confirm(`Atualizar a imagem "${service.image || ''}" e recriar o container mantendo toda a configuração atual?`)) return
+          runServiceAction('Atualizando imagem e recriando container...', () => servicesApi.redeploy(service.id))
+        }}
       />
       <DeployNotification
         notification={deployNotification?.serviceId && deployNotification.serviceId !== service.id ? null : deployNotification}

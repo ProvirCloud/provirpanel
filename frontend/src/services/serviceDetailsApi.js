@@ -193,6 +193,11 @@ export const servicesApi = {
     return response.data
   },
 
+  async redeploy(serviceId) {
+    const response = await api.post(`/docker/services/${serviceId}/redeploy`)
+    return response.data
+  },
+
   async deployProjectArchive(serviceId, { file, ...options }, onProgress) {
     if (!file) throw new Error('Selecione um arquivo para publicar')
     let lastProgress = 0
