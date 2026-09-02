@@ -3,6 +3,7 @@
 const Docker = require('dockerode');
 const fs = require('fs');
 const path = require('path');
+const https = require('https');
 const ProjectTemplateManager = require('./ProjectTemplateManager');
 
 const ALLOWED_PULL_IMAGES = new Set([
@@ -90,6 +91,169 @@ class DockerManager {
       return existing;
     }
     return this.docker.createNetwork({ Name: name, Driver: 'bridge' });
+  }
+
+  /**
+   * Verifica credenciais de um registry Docker (v2) e, opcionalmente, o acesso
+   * de pull a um repositorio especifico.
+   *
+   * Usa o fluxo padrao do Registry v2:
+   *  1. GET https://<host>/v2/  -> le o header WWW-Authenticate
+   *  2. Solicita um token no realm indicado usando Basic auth (username:password)
+   *  3. Se o token for concedido, as credenciais (e o escopo pedido) sao validos
+   *
+   * @param {Object} params
+   * @param {string} params.serverAddress host do registry (ex: ghcr.io)
+   * @param {string} [params.username]
+   * @param {string} [params.password]
+   * @param {string} [params.repository] repositorio para testar pull (ex: provircloud/vanguardos)
+   * @returns {Promise<{ok:boolean, status:string, message:string, scope?:string}>}
+   */
+  async verifyRegistryAuth({ serverAddress, username = '', password = '', repository = '' } = {}) {
+    const host = String(serverAddress || '').trim().replace(/^https?:\/\//, '').replace(/\/.*$/, '');
+    if (!host) {
+      return { ok: false, status: 'invalid', message: 'Endereco do repositorio invalido' };
+    }
+
+    // Docker Hub usa registry-1.docker.io como endpoint de API v2
+    const apiHost = /^(docker\.io|index\.docker\.io|registry\.docker\.io)$/i.test(host)
+      ? 'registry-1.docker.io'
+      : host;
+
+    const httpsRequest = (url, options = {}) =>
+      new Promise((resolve, reject) => {
+        const req = https.request(url, options, (res) => {
+          let body = '';
+          res.on('data', (chunk) => {
+            body += chunk;
+            if (body.length > 1_000_000) req.destroy();
+          });
+          res.on('end', () => resolve({ statusCode: res.statusCode, headers: res.headers, body }));
+        });
+        req.setTimeout(15000, () => req.destroy(new Error('Tempo esgotado ao contatar o repositorio')));
+        req.on('error', reject);
+        req.end();
+      });
+
+    try {
+      // Passo 1: descobrir o esquema de autenticacao
+      const baseUrl = `https://${apiHost}/v2/`;
+      const probe = await httpsRequest(baseUrl, { method: 'GET' });
+
+      // Registry aberto sem autenticacao
+      if (probe.statusCode === 200) {
+        return { ok: true, status: 'ok', message: 'Repositorio acessivel (sem autenticacao exigida)' };
+      }
+
+      const wwwAuth = probe.headers['www-authenticate'] || '';
+
+      // Basic auth direto (sem servidor de token)
+      if (/^Basic/i.test(wwwAuth)) {
+        if (!username && !password) {
+          return { ok: false, status: 'unauthorized', message: 'Este repositorio exige usuario e senha' };
+        }
+        const basic = Buffer.from(`${username}:${password}`).toString('base64');
+        const check = await httpsRequest(baseUrl, { method: 'GET', headers: { Authorization: `Basic ${basic}` } });
+        if (check.statusCode === 200) {
+          return { ok: true, status: 'ok', message: 'Autenticacao valida' };
+        }
+        return { ok: false, status: 'unauthorized', message: 'Usuario ou senha invalidos' };
+      }
+
+      // Bearer token (ghcr.io, Docker Hub, GitLab, etc.)
+      const bearerMatch = /^Bearer\s+(.*)$/i.exec(wwwAuth);
+      if (!bearerMatch) {
+        return {
+          ok: false,
+          status: 'unknown',
+          message: `Nao foi possivel determinar o metodo de autenticacao (HTTP ${probe.statusCode})`
+        };
+      }
+
+      const params = {};
+      bearerMatch[1].split(',').forEach((part) => {
+        const [k, v] = part.split('=');
+        if (k && v) params[k.trim()] = v.trim().replace(/^"|"$/g, '');
+      });
+
+      const realm = params.realm;
+      if (!realm) {
+        return { ok: false, status: 'unknown', message: 'Servidor de token nao informado pelo repositorio' };
+      }
+
+      const scope = repository
+        ? `repository:${repository.replace(/^\/+|\/+$/g, '')}:pull`
+        : params.scope || '';
+
+      const tokenUrl = new URL(realm);
+      if (params.service) tokenUrl.searchParams.set('service', params.service);
+      if (scope) tokenUrl.searchParams.set('scope', scope);
+
+      const tokenHeaders = {};
+      if (username || password) {
+        tokenHeaders.Authorization = `Basic ${Buffer.from(`${username}:${password}`).toString('base64')}`;
+      }
+
+      const tokenResp = await httpsRequest(tokenUrl.toString(), { method: 'GET', headers: tokenHeaders });
+
+      if (tokenResp.statusCode === 401 || tokenResp.statusCode === 403) {
+        if (!username && !password) {
+          return { ok: false, status: 'unauthorized', message: 'Este repositorio e privado e exige credenciais' };
+        }
+        return {
+          ok: false,
+          status: 'unauthorized',
+          message: 'Credenciais invalidas ou sem permissao de pull neste repositorio'
+        };
+      }
+
+      if (tokenResp.statusCode !== 200) {
+        return {
+          ok: false,
+          status: 'error',
+          message: `Falha ao validar credenciais (HTTP ${tokenResp.statusCode})`
+        };
+      }
+
+      let tokenBody = {};
+      try {
+        tokenBody = JSON.parse(tokenResp.body || '{}');
+      } catch (err) {
+        tokenBody = {};
+      }
+      const token = tokenBody.token || tokenBody.access_token;
+      if (!token) {
+        return { ok: false, status: 'error', message: 'Servidor de token nao retornou um token valido' };
+      }
+
+      // Se um repositorio foi informado, confirma que o token realmente cobre o escopo de pull.
+      // ghcr.io retorna token vazio de escopo quando nao ha acesso ao repositorio privado.
+      if (repository) {
+        const grantedScope = tokenBody.scope || '';
+        if (grantedScope && !/(:pull|:\*|,pull|pull,|:pull,)/i.test(grantedScope) && !grantedScope.includes('pull')) {
+          return {
+            ok: false,
+            status: 'unauthorized',
+            message: 'As credenciais nao tem permissao de pull neste repositorio'
+          };
+        }
+      }
+
+      return {
+        ok: true,
+        status: 'ok',
+        message: repository
+          ? `Acesso de pull confirmado para ${repository}`
+          : 'Autenticacao valida',
+        scope: scope || undefined
+      };
+    } catch (err) {
+      return {
+        ok: false,
+        status: 'error',
+        message: err.message || 'Erro ao contatar o repositorio'
+      };
+    }
   }
 
   async pullImage(imageName, onProgress, options = {}) {

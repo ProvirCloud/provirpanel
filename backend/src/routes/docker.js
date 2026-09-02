@@ -3092,15 +3092,95 @@ router.get('/registries', (req, res) => {
   res.json({ registries });
 });
 
-router.post('/registries', (req, res, next) => {
+// Extrai o "repositorio" (namespace/imagem) a partir de um nome de imagem completo.
+// Ex: ghcr.io/provircloud/vanguardos:latest -> provircloud/vanguardos
+const extractRepositoryFromImage = (imageName, host) => {
+  let ref = String(imageName || '').trim();
+  if (!ref) return '';
+  // remove digest e tag
+  ref = ref.split('@')[0];
+  const lastColon = ref.lastIndexOf(':');
+  const lastSlash = ref.lastIndexOf('/');
+  if (lastColon > lastSlash) {
+    ref = ref.slice(0, lastColon);
+  }
+  // remove host se presente
+  const firstSegment = ref.split('/')[0];
+  const looksLikeHost = firstSegment.includes('.') || firstSegment.includes(':') || firstSegment === 'localhost';
+  if (host && ref.startsWith(`${host}/`)) {
+    ref = ref.slice(host.length + 1);
+  } else if (looksLikeHost) {
+    ref = ref.split('/').slice(1).join('/');
+  }
+  return ref;
+};
+
+// Valida credenciais de um repositorio SEM persistir.
+// Aceita { serverAddress, username, password, repository|imageName }
+// ou { registryId, repository|imageName } para validar um repositorio ja salvo.
+router.post('/registries/validate', async (req, res, next) => {
   try {
-    const { name, serverAddress, username, password, certPem } = req.body || {};
+    const { serverAddress, username, password, repository, imageName, registryId } = req.body || {};
+    let host = serverAddress;
+    let user = username;
+    let pass = password;
+
+    if (registryId) {
+      const registry = readRegistries().find((reg) => reg.id === registryId);
+      if (!registry) {
+        return res.status(404).json({ ok: false, message: 'Repositorio nao encontrado' });
+      }
+      host = registry.serverAddress;
+      user = username ?? registry.username;
+      // se a senha nao for reenviada, usa a persistida
+      pass = (password === undefined || password === null || password === '') ? registry.password : password;
+    }
+
+    const normalizedHost = normalizeRegistryHost(host);
+    if (!normalizedHost) {
+      return res.status(400).json({ ok: false, message: 'Endereco do repositorio e obrigatorio' });
+    }
+
+    const repo = repository || (imageName ? extractRepositoryFromImage(imageName, normalizedHost) : '');
+    const result = await dockerManager.verifyRegistryAuth({
+      serverAddress: normalizedHost,
+      username: user || '',
+      password: pass || '',
+      repository: repo || ''
+    });
+
+    return res.status(result.ok ? 200 : 400).json(result);
+  } catch (err) {
+    next(err);
+  }
+});
+
+router.post('/registries', async (req, res, next) => {
+  try {
+    const { name, serverAddress, username, password, certPem, skipValidation, repository } = req.body || {};
     if (!name || !serverAddress) {
       return res.status(400).json({ message: 'Nome e endereco do repositorio sao obrigatorios' });
     }
+    const host = normalizeRegistryHost(serverAddress);
+
+    // Valida o acesso antes de salvar (a menos que o cliente peca para pular).
+    if (!skipValidation) {
+      const validation = await dockerManager.verifyRegistryAuth({
+        serverAddress: host,
+        username: username || '',
+        password: password || '',
+        repository: repository || ''
+      });
+      if (!validation.ok) {
+        return res.status(400).json({
+          message: `Nao foi possivel autenticar no repositorio: ${validation.message}`,
+          validation
+        });
+      }
+    }
+
     const registries = readRegistries();
     const id = crypto.randomUUID();
-    const host = normalizeRegistryHost(serverAddress);
     const certPath = certPem ? persistRegistryCert(host, certPem) : null;
     const registry = {
       id,
@@ -3118,9 +3198,9 @@ router.post('/registries', (req, res, next) => {
   }
 });
 
-router.put('/registries/:id', (req, res, next) => {
+router.put('/registries/:id', async (req, res, next) => {
   try {
-    const { name, serverAddress, username, password, certPem } = req.body || {};
+    const { name, serverAddress, username, password, certPem, skipValidation, repository } = req.body || {};
     const registries = readRegistries();
     const idx = registries.findIndex((reg) => reg.id === req.params.id);
     if (idx === -1) {
@@ -3128,6 +3208,25 @@ router.put('/registries/:id', (req, res, next) => {
     }
     const current = registries[idx];
     const host = serverAddress ? normalizeRegistryHost(serverAddress) : current.serverAddress;
+    const nextUsername = username ?? current.username;
+    // Se a senha nao vier no payload, mantem a atual.
+    const nextPassword = (password === undefined || password === null) ? current.password : password;
+
+    if (!skipValidation) {
+      const validation = await dockerManager.verifyRegistryAuth({
+        serverAddress: host,
+        username: nextUsername || '',
+        password: nextPassword || '',
+        repository: repository || ''
+      });
+      if (!validation.ok) {
+        return res.status(400).json({
+          message: `Nao foi possivel autenticar no repositorio: ${validation.message}`,
+          validation
+        });
+      }
+    }
+
     let certPath = current.certPath || null;
     if (certPem) {
       certPath = persistRegistryCert(host, certPem);
@@ -3136,8 +3235,8 @@ router.put('/registries/:id', (req, res, next) => {
       ...current,
       name: name || current.name,
       serverAddress: host,
-      username: username ?? current.username,
-      password: password ?? current.password,
+      username: nextUsername,
+      password: nextPassword,
       certPath
     };
     registries[idx] = updated;
@@ -3162,26 +3261,73 @@ router.delete('/registries/:id', (req, res, next) => {
 router.post('/images/pull', async (req, res, next) => {
   try {
     const { imageName, registryId, allowAny } = req.body || {};
-    let authconfig = null;
+    if (!imageName) {
+      return res.status(400).json({ message: 'imageName e obrigatorio' });
+    }
+
+    const registries = readRegistries();
+    let registry = null;
+
+    // Host real da imagem (ex: ghcr.io a partir de ghcr.io/org/img:tag).
+    // Se a imagem nao trouxer host, assume Docker Hub.
+    const rawImageHost = normalizeRegistryHost(imageName);
+    const imageHasHost = Boolean(rawImageHost && (rawImageHost.includes('.') || rawImageHost.includes(':') || rawImageHost === 'localhost'));
+    const imageHost = imageHasHost ? rawImageHost : 'docker.io';
+
     if (registryId) {
-      const registries = readRegistries();
-      const registry = registries.find((reg) => reg.id === registryId);
+      registry = registries.find((reg) => reg.id === registryId);
       if (!registry) {
         return res.status(404).json({ message: 'Repositorio nao encontrado' });
       }
-      if (registry.username || registry.password) {
-        authconfig = {
-          username: registry.username || '',
-          password: registry.password || '',
-          serveraddress: registry.serverAddress
-        };
+    } else {
+      // Tenta casar automaticamente um repositorio salvo pelo host da imagem.
+      // Aceita tanto o host exato quanto o engano comum github.com <-> ghcr.io.
+      if (imageHasHost) {
+        registry =
+          registries.find((reg) => reg.serverAddress === imageHost) ||
+          registries.find(
+            (reg) =>
+              (imageHost === 'ghcr.io' && reg.serverAddress === 'github.com') ||
+              (imageHost === 'github.com' && reg.serverAddress === 'ghcr.io')
+          ) ||
+          null;
       }
     }
+
+    let authconfig = null;
+    if (registry && (registry.username || registry.password)) {
+      // IMPORTANTE: o daemon Docker casa o authconfig pelo host da IMAGEM,
+      // nao pelo serverAddress salvo. Usamos o host da imagem aqui para evitar
+      // erro 500/unauthorized quando o registry foi salvo com host divergente
+      // (ex: github.com salvo, mas a imagem e ghcr.io).
+      authconfig = {
+        username: registry.username || '',
+        password: registry.password || '',
+        serveraddress: imageHost === 'docker.io' ? 'https://index.docker.io/v1/' : imageHost
+      };
+
+      // Pre-valida credenciais/acesso para dar um erro claro ao inves de uma
+      // falha generica de pull. Valida contra o host da IMAGEM.
+      const repo = extractRepositoryFromImage(imageName, imageHost);
+      const validation = await dockerManager.verifyRegistryAuth({
+        serverAddress: imageHost,
+        username: registry.username,
+        password: registry.password,
+        repository: repo
+      });
+      if (!validation.ok) {
+        return res.status(400).json({
+          message: `Falha de autenticacao no repositorio (${imageHost}): ${validation.message}`,
+          validation
+        });
+      }
+    }
+
     const result = await dockerManager.pullImage(imageName, null, {
-      allowAny: Boolean(allowAny || registryId),
+      allowAny: Boolean(allowAny || registry),
       authconfig
     });
-    res.json({ result });
+    res.json({ result, registryId: registry?.id || null });
   } catch (err) {
     next(err);
   }

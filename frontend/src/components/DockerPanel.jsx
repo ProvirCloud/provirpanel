@@ -168,27 +168,74 @@ const Toast = ({ message, type, onClose }) => (
   </div>
 )
 
-const RegistryModal = ({ initialValue, onSave, onCancel }) => {
+const RegistryModal = ({ initialValue, onSave, onCancel, onValidate }) => {
+  const isEditing = Boolean(initialValue?.id)
   const [form, setForm] = useState({
     name: '',
     serverAddress: '',
     username: '',
     password: '',
     certPem: '',
+    repository: '',
     ...initialValue
   })
+  const [testing, setTesting] = useState(false)
+  const [testResult, setTestResult] = useState(null)
+  const [saving, setSaving] = useState(false)
+
+  const update = (patch) => {
+    setForm((prev) => ({ ...prev, ...patch }))
+    setTestResult(null)
+  }
+
+  const handleTest = async () => {
+    if (!form.serverAddress?.trim()) {
+      setTestResult({ ok: false, message: 'Informe o endereco do repositorio' })
+      return
+    }
+    setTesting(true)
+    setTestResult(null)
+    try {
+      const result = await onValidate({
+        id: form.id,
+        serverAddress: form.serverAddress.trim(),
+        username: form.username || '',
+        // Ao editar, senha em branco = manter a atual (nao reenviar)
+        password: form.password || (isEditing ? undefined : ''),
+        repository: form.repository?.trim() || ''
+      })
+      setTestResult(result)
+    } catch (err) {
+      setTestResult({ ok: false, message: err?.message || 'Falha ao validar' })
+    } finally {
+      setTesting(false)
+    }
+  }
+
+  const handleSave = async () => {
+    setSaving(true)
+    try {
+      await onSave({
+        ...form,
+        serverAddress: form.serverAddress?.trim(),
+        repository: form.repository?.trim() || undefined
+      })
+    } finally {
+      setSaving(false)
+    }
+  }
 
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 p-4">
       <div className="w-full max-w-xl rounded-2xl border border-slate-800 bg-slate-900/90 p-6 text-slate-100">
-        <h3 className="text-lg font-semibold">Novo repositorio</h3>
+        <h3 className="text-lg font-semibold">{isEditing ? 'Editar repositorio' : 'Novo repositorio'}</h3>
         <div className="mt-4 grid grid-cols-2 gap-3">
           <div className="col-span-2">
             <label className="text-xs text-slate-400">Nome</label>
             <input
               className="mt-1 w-full rounded-xl border border-slate-800 bg-slate-950 px-3 py-2 text-sm"
               value={form.name}
-              onChange={(e) => setForm({ ...form, name: e.target.value })}
+              onChange={(e) => update({ name: e.target.value })}
               placeholder="Meu Registry"
             />
           </div>
@@ -197,8 +244,8 @@ const RegistryModal = ({ initialValue, onSave, onCancel }) => {
             <input
               className="mt-1 w-full rounded-xl border border-slate-800 bg-slate-950 px-3 py-2 text-sm"
               value={form.serverAddress}
-              onChange={(e) => setForm({ ...form, serverAddress: e.target.value })}
-              placeholder="registry.exemplo.com:5000"
+              onChange={(e) => update({ serverAddress: e.target.value })}
+              placeholder="ghcr.io ou registry.exemplo.com:5000"
             />
           </div>
           <div>
@@ -206,36 +253,72 @@ const RegistryModal = ({ initialValue, onSave, onCancel }) => {
             <input
               className="mt-1 w-full rounded-xl border border-slate-800 bg-slate-950 px-3 py-2 text-sm"
               value={form.username}
-              onChange={(e) => setForm({ ...form, username: e.target.value })}
+              onChange={(e) => update({ username: e.target.value })}
               placeholder="usuario"
             />
           </div>
           <div>
-            <label className="text-xs text-slate-400">Senha</label>
+            <label className="text-xs text-slate-400">
+              {isEditing ? 'Senha / Token (deixe em branco para manter)' : 'Senha / Token'}
+            </label>
             <input
               type="password"
               className="mt-1 w-full rounded-xl border border-slate-800 bg-slate-950 px-3 py-2 text-sm"
               value={form.password}
-              onChange={(e) => setForm({ ...form, password: e.target.value })}
-              placeholder="senha"
+              onChange={(e) => update({ password: e.target.value })}
+              placeholder={isEditing ? '••••••• (inalterado)' : 'senha ou token de acesso'}
             />
+          </div>
+          <div className="col-span-2">
+            <label className="text-xs text-slate-400">Repositorio para testar acesso (opcional)</label>
+            <input
+              className="mt-1 w-full rounded-xl border border-slate-800 bg-slate-950 px-3 py-2 text-sm"
+              value={form.repository}
+              onChange={(e) => update({ repository: e.target.value })}
+              placeholder="ex: provircloud/vanguardos"
+            />
+            <p className="mt-1 text-[11px] text-slate-500">
+              Informe o repositorio para validar tambem a permissao de pull (nao apenas o login).
+            </p>
           </div>
           <div className="col-span-2">
             <label className="text-xs text-slate-400">Certificado (ca.crt opcional)</label>
             <textarea
               className="mt-1 h-24 w-full rounded-xl border border-slate-800 bg-slate-950 px-3 py-2 text-xs"
               value={form.certPem}
-              onChange={(e) => setForm({ ...form, certPem: e.target.value })}
+              onChange={(e) => update({ certPem: e.target.value })}
               placeholder="Cole o certificado PEM se necessario"
             />
           </div>
         </div>
-        <div className="mt-5 flex gap-2 justify-end">
-          <button
-            onClick={() => onSave(form)}
-            className="rounded-xl bg-blue-500 px-4 py-2 text-xs font-semibold text-slate-950"
+
+        {testResult && (
+          <div
+            className={`mt-4 rounded-xl border px-3 py-2 text-xs ${
+              testResult.ok
+                ? 'border-emerald-800 bg-emerald-950/60 text-emerald-200'
+                : 'border-rose-800 bg-rose-950/60 text-rose-200'
+            }`}
           >
-            Salvar
+            {testResult.ok ? '✅ ' : '⚠️ '}
+            {testResult.message}
+          </div>
+        )}
+
+        <div className="mt-5 flex flex-wrap gap-2 justify-end">
+          <button
+            onClick={handleTest}
+            disabled={testing}
+            className="rounded-xl border border-slate-700 bg-slate-950 px-4 py-2 text-xs font-semibold text-slate-100 hover:bg-slate-800 disabled:opacity-50"
+          >
+            {testing ? 'Testando...' : 'Testar conexao'}
+          </button>
+          <button
+            onClick={handleSave}
+            disabled={saving}
+            className="rounded-xl bg-blue-500 px-4 py-2 text-xs font-semibold text-slate-950 hover:bg-blue-400 disabled:opacity-50"
+          >
+            {saving ? 'Salvando...' : isEditing ? 'Salvar alteracoes' : 'Validar e salvar'}
           </button>
           <button
             onClick={onCancel}
@@ -2356,13 +2439,66 @@ const DockerPanel = ({ showPageIntro = true }) => {
 
   const saveRegistry = async (payload) => {
     try {
-      await api.post('/docker/registries', payload)
-      addToast('Repositorio salvo')
+      const isEditing = Boolean(payload?.id)
+      const body = {
+        name: payload.name,
+        serverAddress: payload.serverAddress,
+        username: payload.username,
+        certPem: payload.certPem || undefined,
+        repository: payload.repository || undefined
+      }
+      // Senha: no create sempre envia; no edit so envia se preenchida (branco = manter)
+      if (!isEditing || (payload.password && payload.password.length > 0)) {
+        body.password = payload.password || ''
+      }
+      if (isEditing) {
+        await api.put(`/docker/registries/${payload.id}`, body)
+        addToast('Repositorio atualizado')
+      } else {
+        await api.post('/docker/registries', body)
+        addToast('Repositorio salvo')
+      }
       setRegistryDialog(null)
       loadRegistries()
     } catch (err) {
       addToast(err.response?.data?.message || 'Erro ao salvar repositorio', 'error')
     }
+  }
+
+  // Valida credenciais sem persistir. Retorna { ok, message }.
+  const validateRegistry = async (payload) => {
+    try {
+      const body = payload.id
+        ? {
+            registryId: payload.id,
+            username: payload.username,
+            password: payload.password,
+            repository: payload.repository || undefined
+          }
+        : {
+            serverAddress: payload.serverAddress,
+            username: payload.username,
+            password: payload.password,
+            repository: payload.repository || undefined
+          }
+      const response = await api.post('/docker/registries/validate', body)
+      return response.data
+    } catch (err) {
+      return err.response?.data || { ok: false, message: 'Falha ao validar repositorio' }
+    }
+  }
+
+  const updateRegistry = async (registryId) => {
+    const registry = registries.find((reg) => reg.id === registryId)
+    if (!registry) return
+    setRegistryDialog({
+      id: registry.id,
+      name: registry.name,
+      serverAddress: registry.serverAddress,
+      username: registry.username || '',
+      password: '',
+      certPem: ''
+    })
   }
 
   const removeRegistry = async (registryId) => {
@@ -4320,7 +4456,36 @@ const DockerPanel = ({ showPageIntro = true }) => {
                       </option>
                     ))}
                   </select>
+                  {selectedRegistry && (
+                    <button
+                      className="rounded-xl border border-slate-700 bg-slate-900 px-3 py-2 text-xs text-slate-200 hover:bg-slate-800"
+                      onClick={() => {
+                        const reg = registries.find((r) => r.id === selectedRegistry)
+                        if (!reg?.serverAddress) return
+                        const host = reg.serverAddress
+                        let current = customImageName.trim()
+                        if (current.startsWith(`${host}/`)) return
+                        // remove um host anterior (primeiro segmento com ponto/porta) se houver
+                        const first = current.split('/')[0]
+                        if (current.includes('/') && (first.includes('.') || first.includes(':'))) {
+                          current = current.split('/').slice(1).join('/')
+                        }
+                        setCustomImageName(`${host}/${current}`)
+                      }}
+                      title="Preenche o campo da imagem com o host deste repositorio"
+                    >
+                      Usar host
+                    </button>
+                  )}
                 </div>
+                {selectedRegistry && (
+                  <p className="mt-2 text-[11px] text-slate-500">
+                    A imagem sera baixada usando as credenciais deste repositorio. Ex:{' '}
+                    <span className="text-slate-300">
+                      {(registries.find((r) => r.id === selectedRegistry)?.serverAddress || 'ghcr.io')}/usuario/imagem:tag
+                    </span>
+                  </p>
+                )}
                 {registries.length > 0 && (
                   <div className="mt-3 space-y-2">
                     {registries.map((reg) => (
@@ -4329,12 +4494,20 @@ const DockerPanel = ({ showPageIntro = true }) => {
                           <p className="text-sm text-white">{reg.name}</p>
                           <p className="text-xs text-slate-500">{reg.serverAddress}</p>
                         </div>
-                        <button
-                          className="rounded-lg border border-rose-800 px-2 py-1 text-xs text-rose-200 hover:bg-rose-900"
-                          onClick={() => removeRegistry(reg.id)}
-                        >
-                          Remover
-                        </button>
+                        <div className="flex gap-2">
+                          <button
+                            className="rounded-lg border border-slate-700 px-2 py-1 text-xs text-slate-200 hover:bg-slate-800"
+                            onClick={() => updateRegistry(reg.id)}
+                          >
+                            Editar
+                          </button>
+                          <button
+                            className="rounded-lg border border-rose-800 px-2 py-1 text-xs text-rose-200 hover:bg-rose-900"
+                            onClick={() => removeRegistry(reg.id)}
+                          >
+                            Remover
+                          </button>
+                        </div>
                       </div>
                     ))}
                   </div>
@@ -5504,6 +5677,7 @@ const DockerPanel = ({ showPageIntro = true }) => {
         <RegistryModal
           initialValue={registryDialog}
           onSave={saveRegistry}
+          onValidate={validateRegistry}
           onCancel={() => setRegistryDialog(null)}
         />
       )}
