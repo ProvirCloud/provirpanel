@@ -35,6 +35,25 @@ async function localGet(pathname, token) {
   return body;
 }
 
+// ─────────────────────────────────────────────────────────────────────────────
+// Catálogo de templates de serviço (espelha SERVICE_TEMPLATES em routes/docker.js).
+// Serve para dar ao modelo o mapa de "pedido → imagem/template correto" e as
+// portas padrão de cada um. Mantido compacto de propósito (só o que o agente
+// precisa para escolher/preencher). Para imagens fora deste catálogo, o modelo
+// deve usar templateId "custom-image" + imageName + containerPort.
+// ─────────────────────────────────────────────────────────────────────────────
+const SERVICE_TEMPLATE_CATALOG = [
+  { id: 'nginx-static', label: 'Nginx (site estático)', image: 'nginx:latest', containerPort: 80, keywords: 'site estático, html, spa, nginx', description: 'Serve arquivos estáticos (HTML/SPA) via Nginx.' },
+  { id: 'node-app', label: 'Node.js (app)', image: 'node:20', containerPort: 3000, keywords: 'node, nodejs, express, api', description: 'Aplicação Node.js com build automático e versões/rollback.' },
+  { id: 'nextjs-app', label: 'Next.js (app)', image: 'node:20-slim', containerPort: 3000, keywords: 'next, nextjs, react ssr', description: 'Aplicação Next.js (node:20-slim) com build automático.' },
+  { id: 'postgres-db', label: 'PostgreSQL', image: 'postgres:16', containerPort: 5432, keywords: 'postgres, postgresql, banco, database', description: 'Banco PostgreSQL com volume dedicado. Aceita createManager=true para instalar pgAdmin junto.' },
+  { id: 'mysql-db', label: 'MySQL', image: 'mysql:8', containerPort: 3306, keywords: 'mysql, mariadb, banco, database', description: 'Banco MySQL com volume persistente.' },
+  { id: 'redis-cache', label: 'Redis', image: 'redis:7', containerPort: 6379, keywords: 'redis, cache, fila', description: 'Cache Redis com volume /data opcional.' },
+  { id: 'pgadmin', label: 'pgAdmin', image: 'dpage/pgadmin4:latest', containerPort: 80, keywords: 'pgadmin, gerenciador postgres', description: 'Interface web para administrar um PostgreSQL existente.' },
+  { id: 'n8n', label: 'n8n (automação)', image: 'n8nio/n8n:latest', containerPort: 5678, keywords: 'n8n, automação, workflow, webhook', description: 'Plataforma de automação de workflows.' },
+  { id: 'custom-image', label: 'Imagem customizada (qualquer imagem Docker)', image: '(informe imageName)', containerPort: null, keywords: 'imagem, docker hub, grafana, wordpress, mongo, qualquer outra', description: 'Use para QUALQUER imagem Docker que não esteja nos templates acima (ex.: grafana/grafana, mongo, rabbitmq). Exige imageName e containerPort.' },
+];
+
 const fmtBytes = (b) => {
   if (b == null) return '?';
   if (b >= 1073741824) return `${(b / 1073741824).toFixed(1)}GB`;
@@ -93,8 +112,21 @@ const TOOL_DEFS = [
   {
     name: 'list_nginx',
     description:
-      'Lista os virtual hosts do Nginx configurados (domínios, se está ativo e SSL).',
+      'Lista os virtual hosts do Nginx (apenas METADADOS: id, domínios, ativo, SSL). NÃO retorna o conteúdo/texto dos arquivos .conf. Se o usuário quiser VER o conteúdo da configuração, use get_nginx_config em vez desta.',
     inputSchema: { type: 'object', properties: {}, required: [] },
+  },
+  {
+    name: 'get_nginx_config',
+    description:
+      'Retorna o CONTEÚDO da(s) configuração(ões) do Nginx (o texto do arquivo .conf renderizado), não só os metadados. Use quando o usuário pedir para "mostrar/ver/exibir as configs do nginx", "o conteúdo do vhost", "o arquivo .conf" de um domínio/servidor. Sem parâmetros: retorna o conteúdo de TODOS os vhosts. Com id OU domain: retorna apenas o daquele vhost. É somente leitura.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        id: { type: 'string', description: 'ID do vhost Nginx (campo id de list_nginx). Opcional.' },
+        domain: { type: 'string', description: 'Domínio do vhost (ex.: "app.exemplo.com"). Opcional — alternativa ao id.' },
+      },
+      required: [],
+    },
   },
   {
     name: 'inspect_service_config',
@@ -107,6 +139,12 @@ const TOOL_DEFS = [
       },
       required: ['serviceId'],
     },
+  },
+  {
+    name: 'list_service_templates',
+    description:
+      'Lista os TEMPLATES de serviço disponíveis para CRIAR um novo serviço (id, label, imagem padrão, porta interna e para que serve). Use ANTES de create_service para escolher o template correto a partir do que o usuário pediu (ex.: "quero um Redis" → redis-cache; "um banco Postgres" → postgres-db; "um Grafana" → custom-image com imageName grafana/grafana). Também serve para responder "o que posso criar/instalar".',
+    inputSchema: { type: 'object', properties: {}, required: [] },
   },
 ];
 
@@ -278,6 +316,73 @@ const IMPLS = {
     };
   },
 
+  // Retorna o CONTEÚDO (texto renderizado) das configs do Nginx. Somente leitura.
+  // Sem id/domain: devolve todos os vhosts (limitado). Com id OU domain: só aquele.
+  async get_nginx_config(input, token) {
+    const data = await localGet('/nginx/servers', token);
+    let servers = Array.isArray(data) ? data : (data.servers || []);
+
+    // Filtro opcional por id ou domínio (case-insensitive).
+    const wantedId = input.id != null ? String(input.id).trim() : '';
+    const wantedDomain = input.domain ? String(input.domain).trim().toLowerCase() : '';
+    if (wantedId || wantedDomain) {
+      servers = servers.filter((s) => {
+        if (wantedId && String(s.id) === wantedId) return true;
+        if (!wantedDomain) return false;
+        const domains = []
+          .concat(s.primary_domain || [])
+          .concat(s.additional_domains || [])
+          .concat(s.domains || [])
+          .concat(s.serverNames || [])
+          .concat(s.name || [])
+          .map((d) => String(d).toLowerCase());
+        return domains.includes(wantedDomain);
+      });
+      if (!servers.length) {
+        throw new Error(`Nenhum vhost do Nginx encontrado para ${wantedId ? `id "${wantedId}"` : `domínio "${input.domain}"`}.`);
+      }
+    }
+
+    // Protege o contexto do modelo: limita o número de vhosts e o tamanho total.
+    const MAX_VHOSTS = wantedId || wantedDomain ? servers.length : 8;
+    let budget = 40000; // ~ caracteres totais de config
+    const configs = [];
+    let truncated = false;
+
+    for (const s of servers.slice(0, MAX_VHOSTS)) {
+      let content = '';
+      try {
+        // Renderiza a config canônica a partir do registro (mesmo texto do .conf).
+        const prev = await localPost(`/nginx/servers/${encodeURIComponent(s.id)}/generate-preview`, {}, token);
+        content = typeof prev === 'string' ? prev : (prev?.config || '');
+      } catch (e) {
+        content = `# (falha ao renderizar a config: ${e.message})`;
+      }
+      if (budget - content.length < 0) {
+        content = content.slice(0, Math.max(0, budget));
+        truncated = true;
+      }
+      budget -= content.length;
+      configs.push({
+        id: s.id,
+        name: s.name,
+        primaryDomain: s.primary_domain || null,
+        domains: s.additional_domains || s.domains || s.serverNames || [],
+        enabled: s.is_active !== false && s.enabled !== false,
+        configFilePath: s.config_file_path || null,
+        config: content,
+      });
+      if (budget <= 0) { truncated = true; break; }
+    }
+
+    return {
+      count: configs.length,
+      totalVhosts: servers.length,
+      truncated: truncated || servers.length > configs.length,
+      configs,
+    };
+  },
+
   // Inspeção profunda de UM serviço: config do painel + inspeção da imagem
   // Docker + artefato publicado + estrutura/source. Tudo LIMITADO ao serviceId.
   async inspect_service_config(input, token) {
@@ -416,6 +521,23 @@ const IMPLS = {
 
     return out;
   },
+
+  // Lista os templates de criação disponíveis (catálogo estático + guia de uso).
+  // Somente leitura; não toca no Docker. Ajuda o modelo a escolher o template
+  // certo antes de chamar create_service.
+  async list_service_templates() {
+    return {
+      count: SERVICE_TEMPLATE_CATALOG.length,
+      note: 'Para imagens fora deste catálogo, use templateId "custom-image" com imageName (ex.: "grafana/grafana") e containerPort.',
+      templates: SERVICE_TEMPLATE_CATALOG.map((t) => ({
+        id: t.id,
+        label: t.label,
+        image: t.image,
+        containerPort: t.containerPort,
+        description: t.description,
+      })),
+    };
+  },
 };
 
 /**
@@ -503,8 +625,46 @@ const WRITE_TOOL_DEFS = [
   },
   {
     name: 'create_service',
-    description: 'Cria um novo serviço Docker. Requer ao menos name e imagem/template. Confirmação obrigatória (somente admin). Se faltar informação essencial, pergunte ao usuário em vez de assumir.',
-    inputSchema: { type: 'object', properties: { name: { type: 'string' }, config: { type: 'object', description: 'templateId/imageName, hostPort, volumeMappings, envVars, etc.' } }, required: ['name'] },
+    description:
+      'Cria um NOVO serviço Docker (o backend BAIXA a imagem automaticamente, cria o container, aguarda o healthcheck e registra o serviço). Confirmação obrigatória (somente admin). '
+      + 'FLUXO: (1) entenda o que o usuário quer; (2) escolha o template certo — use list_service_templates se tiver dúvida — casando o pedido com um id do catálogo (ex.: Redis→redis-cache, PostgreSQL→postgres-db, MySQL→mysql-db, Node→node-app, Next.js→nextjs-app, site estático→nginx-static, n8n→n8n); '
+      + '(3) para QUALQUER imagem que NÃO esteja no catálogo (ex.: grafana/grafana, mongo, rabbitmq, wordpress), use config.templateId="custom-image" e informe config.imageName (o nome da imagem no Docker Hub/registry, com tag opcional) e config.containerPort (a porta que a imagem expõe internamente). '
+      + 'Se faltar algo essencial (qual imagem/serviço, ou a porta interna de uma imagem custom desconhecida), PERGUNTE ao usuário em vez de assumir. Não invente imageName nem porta.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        name: { type: 'string', description: 'Nome do serviço (curto, sem espaços; ex.: "redis-prod", "meu-grafana").' },
+        config: {
+          type: 'object',
+          description: 'Configuração do serviço. Obrigatório: templateId. Para custom-image, também imageName e containerPort.',
+          properties: {
+            templateId: {
+              type: 'string',
+              description: 'Template de origem. Um dos ids do catálogo (list_service_templates) OU "custom-image" para qualquer outra imagem Docker.',
+              enum: ['nginx-static', 'node-app', 'nextjs-app', 'postgres-db', 'mysql-db', 'redis-cache', 'pgadmin', 'n8n', 'custom-image'],
+            },
+            imageName: { type: 'string', description: 'SOMENTE para templateId="custom-image": nome da imagem Docker (ex.: "grafana/grafana:latest", "mongo:7").' },
+            containerPort: { type: 'number', description: 'SOMENTE para templateId="custom-image": porta que a imagem expõe internamente (ex.: 3000 para grafana). Nos demais templates a porta interna já é conhecida.' },
+            hostPort: { type: 'number', description: 'Porta no host para publicar o serviço. Opcional — se omitida, o painel escolhe uma porta livre a partir do padrão do template.' },
+            envVars: {
+              type: 'array',
+              description: 'Variáveis de ambiente adicionais/override (ex.: senha do banco). Cada item {key,value}. Os defaults do template já são aplicados.',
+              items: { type: 'object', properties: { key: { type: 'string' }, value: { type: 'string' } }, required: ['key', 'value'] },
+            },
+            volumeMappings: {
+              type: 'array',
+              description: 'Mapeamentos de volume host→container. Cada item {hostPath,containerPath}. Opcional — o template já define o volume padrão quando aplicável.',
+              items: { type: 'object', properties: { hostPath: { type: 'string' }, containerPath: { type: 'string' } } },
+            },
+            command: { type: 'string', description: 'Comando de inicialização customizado (opcional; sobrescreve o comando padrão da imagem/template).' },
+            createManager: { type: 'boolean', description: 'SOMENTE para postgres-db: se true, instala também um pgAdmin apontando para este banco.' },
+            bindLocalOnly: { type: 'boolean', description: 'Se true (padrão), publica a porta apenas em 127.0.0.1 (acesso local). false expõe em todas as interfaces.' },
+          },
+          required: ['templateId'],
+        },
+      },
+      required: ['name', 'config'],
+    },
   },
   {
     name: 'delete_service',
@@ -601,10 +761,28 @@ const WRITE_IMPLS = {
     };
   },
   async create_service(input, token) {
-    const payload = { name: input.name, ...(input.config || {}) };
+    const config = input.config || {};
+    // Validação de pré-requisitos: dá um erro claro em vez de um 400 genérico do
+    // backend (que só o desenvolvedor entenderia). Também evita criar algo errado.
+    if (!config.templateId) {
+      throw new Error('Faltou config.templateId. Escolha um template (veja list_service_templates) ou use "custom-image" com imageName e containerPort.');
+    }
+    if (config.templateId === 'custom-image') {
+      if (!config.imageName) {
+        throw new Error('Para templateId "custom-image" é obrigatório informar config.imageName (ex.: "grafana/grafana:latest").');
+      }
+      if (!config.containerPort) {
+        throw new Error('Para templateId "custom-image" é obrigatório informar config.containerPort (a porta que a imagem expõe internamente).');
+      }
+    }
+    const payload = { name: input.name, ...config };
     const r = await localPost('/docker/services', payload, token);
     const newId = r?.service?.id || r?.id || null;
-    return { result: { action: 'create', status: 'ok', service: input.name, id: newId }, rollback: { type: 'manual_delete', ref: newId, note: 'Reverter um create = remover o serviço (delete não é automático).' } };
+    const image = config.templateId === 'custom-image' ? config.imageName : config.templateId;
+    return {
+      result: { action: 'create', status: 'ok', service: input.name, template: config.templateId, image, hostPort: r?.service?.hostPort ?? config.hostPort ?? null, id: newId },
+      rollback: { type: 'manual_delete', ref: newId, note: 'Reverter um create = remover o serviço (delete não é automático).' },
+    };
   },
 };
 
@@ -635,6 +813,7 @@ async function runWriteTool(name, input, token) {
 
 module.exports = {
   TOOL_DEFS,
+  SERVICE_TEMPLATE_CATALOG,
   runTool,
   WRITE_TOOL_DEFS,
   WRITE_TOOL_META,

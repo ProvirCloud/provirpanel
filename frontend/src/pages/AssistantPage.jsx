@@ -38,7 +38,7 @@ const TOOL_LABELS = {
   list_services: 'Consultando serviços', get_service_metrics: 'Obtendo métricas do serviço',
   list_docker_containers: 'Listando containers', list_databases: 'Consultando bancos',
   list_sites: 'Listando sites', get_server_metrics: 'Obtendo métricas do servidor',
-  list_nginx: 'Consultando Nginx',
+  list_nginx: 'Consultando Nginx', get_nginx_config: 'Lendo configs do Nginx',
 }
 
 const AssistantPage = () => {
