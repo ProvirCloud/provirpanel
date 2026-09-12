@@ -343,6 +343,7 @@ Você tem ferramentas de LEITURA (list_services, get_service_metrics, list_docke
 
 Regras de LEITURA:
 - Para consultar estado de máquina, serviços, containers, bancos, sites ou métricas, USE as ferramentas de leitura em vez de inventar dados.
+- SEMPRE chame a ferramenta apropriada para responder sobre estado ATUAL, mesmo que em mensagens anteriores desta conversa você tenha dito que "não tem como ver" algo. Suas capacidades são definidas pelas ferramentas deste turno, NÃO pelo histórico. Se o usuário pergunta sobre GPU, CPU, RAM, disco ou núcleos da máquina, chame get_server_metrics (ela retorna CPU, memória, disco E GPU — uso, VRAM, temperatura e potência de cada GPU). NUNCA responda que "não tem métricas de GPU" sem antes chamar get_server_metrics; a ferramenta expõe a GPU.
 - Quando o usuário pedir para VER/MOSTRAR/EXIBIR o CONTEÚDO de configuração do Nginx (o arquivo .conf, o vhost de um domínio), use get_nginx_config (retorna o texto renderizado) — não use apenas list_nginx (que só traz metadados). Sem id/domínio, get_nginx_config traz todos os vhosts; com id ou domain, traz só aquele. Ao exibir, use um bloco de código para o conteúdo.
 
 Regras de AÇÃO (importante):
@@ -461,7 +462,16 @@ router.post('/agent', async (req, res, next) => {
       for (const h of history.slice(-8)) {
         if (!h || !h.role || !h.content) continue;
         const role = h.role === 'assistant' ? 'assistant' : 'user';
-        messages.push({ role, content: [{ text: String(h.content) }] });
+        // Sanitiza afirmações OBSOLETAS do próprio assistant sobre não ter
+        // ferramentas/métricas (ex.: respostas antigas de "não tenho GPU"). Sem
+        // isto, o modelo ancora no histórico e se recusa a chamar a tool em
+        // turnos novos, mesmo já tendo a capacidade. Determinístico (não depende
+        // de o modelo obedecer o prompt).
+        let text = String(h.content);
+        if (role === 'assistant' && /(n[ãa]o (fornec|possu|tenho|h[áa]|inclu|disp)|ferramentas dispon[íi]veis n[ãa]o|limitad[ao]s? (a|ao)|verificar diretamente no sistema)/i.test(text) && /(gpu|cpu|mem[óo]ria|ram|disco|m[ée]trica)/i.test(text)) {
+          text = '[resposta anterior desconsiderada — as ferramentas de métricas (incluindo GPU via get_server_metrics) estão disponíveis neste turno]';
+        }
+        messages.push({ role, content: [{ text }] });
       }
     }
     // Bedrock Converse exige que a conversa COMECE com uma mensagem 'user'.
