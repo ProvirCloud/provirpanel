@@ -94,8 +94,13 @@ const ZeusChat = () => {
                 setMessages(prev => { const u = [...prev]; if (u[idx]) u[idx] = { ...u[idx], content: c }; return u })
               }
             } else if (ev.type === 'token') {
-              // Resposta final do agente (texto completo)
-              contentRef.current = ev.content
+              // O backend tem dois modos: caminho trivial/Ollama envia MUITOS
+              // eventos token incrementais (deltas); o caminho Bedrock envia UM
+              // token com o texto final completo. Acumular (+=) funciona para os
+              // dois: no Bedrock é um único delta somado à string vazia; no
+              // Ollama concatena os pedaços (antes usava '=', que descartava tudo
+              // menos o último caractere).
+              contentRef.current += ev.content || ''
               const c = contentRef.current
               setMessages(prev => { const u = [...prev]; if (u[idx]) u[idx] = { ...u[idx], content: c }; return u })
             } else if (ev.type === 'action_proposal') {

@@ -61,3 +61,6 @@ Thumbs.db
 
 # Kiro CLI (arquivos do agente, não versionar)
 .kiro/
+
+# Repositório do Vanguard OS clonado localmente (repo git próprio — não aninhar aqui)
+vanguardos-repo/
