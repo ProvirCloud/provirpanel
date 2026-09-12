@@ -767,7 +767,37 @@ const WRITE_IMPLS = {
     if (!config.templateId) {
       throw new Error('Faltou config.templateId. Escolha um template (veja list_service_templates) ou use "custom-image" com imageName e containerPort.');
     }
-    if (config.templateId === 'custom-image') {
+
+    // Conjunto de templateIds VÁLIDOS. Espelha os ids de SERVICE_TEMPLATES em
+    // routes/docker.js (inclui pnpm-monorepo, que não está no catálogo compacto
+    // exposto ao modelo) + "custom-image". Sem esta checagem, um templateId
+    // alucinado pelo modelo (ex.: "node-slim-22", "node:22") chegava cru ao
+    // backend e voltava como "Template not found" — erro opaco que o usuário via.
+    const CATALOG_IDS = new Set(SERVICE_TEMPLATE_CATALOG.map((t) => t.id));
+    const VALID_TEMPLATE_IDS = new Set([...CATALOG_IDS, 'pnpm-monorepo']);
+    const rawId = String(config.templateId).trim();
+
+    if (rawId !== 'custom-image' && !VALID_TEMPLATE_IDS.has(rawId)) {
+      // Heurística: o valor tem cara de NOME DE IMAGEM Docker (ex.: "node:22",
+      // "node-slim-22", "grafana/grafana", "mongo:7") e não de um id de template
+      // do catálogo. Nesse caso o caminho correto é custom-image + imageName,
+      // não inventar um template. Damos um erro acionável para o modelo/usuário.
+      const looksLikeImage = /[:/]/.test(rawId) || /\d/.test(rawId) || /slim|alpine|bookworm|bullseye/i.test(rawId);
+      const validList = [...VALID_TEMPLATE_IDS].filter((id) => id !== 'custom-image').join(', ');
+      if (looksLikeImage) {
+        throw new Error(
+          `"${rawId}" não é um template do catálogo — parece um nome de imagem Docker. `
+          + `Para uma imagem específica (ex.: Node 22, Next.js custom), use config.templateId="custom-image" com config.imageName="${rawId.includes(':') || rawId.includes('/') ? rawId : 'node:22'}" e config.containerPort (a porta interna, ex.: 3000). `
+          + `Para um projeto Next.js padrão, use o template "nextjs-app". Templates válidos: ${validList}.`
+        );
+      }
+      throw new Error(
+        `templateId "${rawId}" não existe. Use um destes templates: ${validList} `
+        + `— ou "custom-image" (com imageName e containerPort) para qualquer outra imagem Docker.`
+      );
+    }
+
+    if (rawId === 'custom-image') {
       if (!config.imageName) {
         throw new Error('Para templateId "custom-image" é obrigatório informar config.imageName (ex.: "grafana/grafana:latest").');
       }
