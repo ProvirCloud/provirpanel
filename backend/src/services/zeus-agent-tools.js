@@ -106,7 +106,7 @@ const TOOL_DEFS = [
   {
     name: 'get_server_metrics',
     description:
-      'Retorna métricas gerais da máquina/servidor: uso de CPU, memória (RAM) e disco. Use para "como está o servidor", "uso de CPU/RAM/disco da máquina".',
+      'Retorna métricas gerais da máquina/servidor: uso de CPU (total e por núcleo), memória (RAM), disco e GPU (uso, memória de vídeo/VRAM, temperatura e potência de cada GPU NVIDIA). Use para "como está o servidor", "uso de CPU/RAM/disco da máquina", "uso/temperatura/memória da GPU", "as GPUs estão ociosas?".',
     inputSchema: { type: 'object', properties: {}, required: [] },
   },
   {
@@ -291,13 +291,41 @@ const IMPLS = {
   async get_server_metrics(_input, token) {
     const m = await localGet('/api/metrics', token);
     const disk = Array.isArray(m.disk) ? m.disk[0] : m.disk;
+    // GPU: resume cada dispositivo de forma legível para o modelo. Se não houver
+    // GPU/driver, gpu.available = false e o modelo deve dizer que não há GPU.
+    const gpu = m.gpu && typeof m.gpu === 'object'
+      ? {
+          available: !!m.gpu.available,
+          count: Array.isArray(m.gpu.devices) ? m.gpu.devices.length : 0,
+          devices: (m.gpu.devices || []).map((d) => ({
+            index: d.index,
+            name: d.name,
+            usagePercent: d.utilization,
+            vramUsedGB: d.memoryUsedMB != null ? Number((d.memoryUsedMB / 1024).toFixed(1)) : null,
+            vramTotalGB: d.memoryTotalMB != null ? Number((d.memoryTotalMB / 1024).toFixed(1)) : null,
+            vramPercent: d.memoryPercent,
+            temperatureC: d.temperature,
+            powerW: d.powerDraw,
+            powerLimitW: d.powerLimit,
+          })),
+        }
+      : { available: false, count: 0, devices: [] };
     return {
-      cpu: m.cpu?.usage ?? m.cpu ?? null,
+      cpu: typeof m.cpu === 'number' ? Number(m.cpu.toFixed(1)) : (m.cpu?.usage ?? null),
+      cpuCores: Array.isArray(m.cpuCores) ? m.cpuCores : null,
+      cores: m.system?.cores ?? null,
+      loadavg: m.system?.loadavg ?? null,
       memory: {
-        usedPercent: m.memory?.usedPercent ?? m.memory?.used ?? null,
-        total: m.memory?.total ?? null,
+        usedPercent: m.memory?.total ? Number(((m.memory.used / m.memory.total) * 100).toFixed(1)) : null,
+        usedGB: m.memory?.used != null ? Number((m.memory.used / 1024 ** 3).toFixed(1)) : null,
+        totalGB: m.memory?.total != null ? Number((m.memory.total / 1024 ** 3).toFixed(1)) : null,
       },
-      disk: disk ? { usedPercent: disk.usedPercent ?? disk.use ?? null, total: disk.total ?? null } : null,
+      disk: disk ? {
+        usedPercent: disk.total ? Number(((disk.used / disk.total) * 100).toFixed(1)) : (disk.usedPercent ?? null),
+        usedGB: disk.used != null ? Number((disk.used / 1024 ** 3).toFixed(1)) : null,
+        totalGB: disk.total != null ? Number((disk.total / 1024 ** 3).toFixed(1)) : null,
+      } : null,
+      gpu,
     };
   },
 
