@@ -31,6 +31,7 @@ const zeusRoutes = require('./routes/zeus');
 const aiChatRoutes = require('./routes/ai-chat');
 const dbConnectionsRoutes = require('./routes/database-connections');
 const workspacesRoutes = require('./routes/workspaces');
+const buildRoutes = require('./routes/build');
 const authMiddleware = require('./middleware/auth');
 const errorHandler = require('./middleware/errorHandler');
 const MetricsCollector = require('./services/MetricsCollector');
@@ -77,6 +78,10 @@ app.use('/public/storage', publicStorageRoutes);
 app.use('/api/public/storage', publicStorageRoutes);
 app.use('/auth', authRoutes);
 app.use('/api/auth', authRoutes);
+// Imagens geradas pelo Zeus (ComfyUI): self-auth (aceita ?token= p/ tag <img>).
+// DEVE vir antes do mount global de authMiddleware em '/' (abaixo).
+app.use('/zeus', zeusRoutes.imagesRouter);
+app.use('/api/zeus', zeusRoutes.imagesRouter);
 app.use('/api/metrics', authMiddleware, metricsRoutes);
 app.use('/api', authMiddleware, logsRoutes);
 app.use('/', authMiddleware, logsRoutes);
@@ -106,6 +111,8 @@ app.use('/ai', authMiddleware, aiChatRoutes);
 app.use('/api/ai', authMiddleware, aiChatRoutes);
 app.use('/api', authMiddleware, dbConnectionsRoutes);
 app.use('/api', authMiddleware, workspacesRoutes);
+app.use('/', authMiddleware, buildRoutes);
+app.use('/api', authMiddleware, buildRoutes);
 app.use('/nginx', authMiddleware, nginxServersRoutes);
 app.use('/nginx', authMiddleware, nginxRoutes);
 app.use('/api/nginx', authMiddleware, nginxServersRoutes);

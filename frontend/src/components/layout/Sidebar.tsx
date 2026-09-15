@@ -1,4 +1,4 @@
-import { Activity, Boxes, Brain, Database, Files, FileText, Globe, KeyRound, Layers3, Route, SearchCheck, Sparkles, Terminal, X } from 'lucide-react'
+import { Activity, Boxes, Brain, Database, Files, FileText, Globe, Hammer, KeyRound, Layers3, Route, SearchCheck, Sparkles, Terminal, X } from 'lucide-react'
 import { useEffect, useState } from 'react'
 import logoNameDark from '../../assets/images/logoname.webp'
 import logoNameLight from '../../assets/images/logoname_w.webp'
@@ -75,6 +75,7 @@ const sections = [
     label: 'Inteligência',
     items: [
       { to: '/zeus-panels', label: 'Zeus AI', icon: Brain },
+      { to: '/builder', label: 'Zeus Builder', icon: Hammer },
     ],
   },
 ]

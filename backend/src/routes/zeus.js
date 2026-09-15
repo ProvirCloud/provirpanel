@@ -8,6 +8,53 @@ const aiBlocksMapper = require('../services/ai-blocks-mapper');
 const serviceDoctor = require('../services/service-doctor');
 const router = Router();
 
+// URL do ComfyUI local (geração de imagem). Mesma usada em zeus-agent-tools.
+const COMFYUI_URL = process.env.COMFYUI_URL || 'http://127.0.0.1:8267';
+
+// Router separado para servir imagens geradas. NÃO usa o authMiddleware padrão
+// porque a tag <img src> do navegador não envia header Authorization; então
+// aceitamos o JWT também via ?token= (além de header/cookie) e validamos aqui.
+// Montado em server.js ANTES do mount protegido de /zeus.
+const jwt = require('jsonwebtoken');
+const imagesRouter = Router();
+imagesRouter.get('/images/:file', async (req, res) => {
+  // Auth: header Bearer, cookie ou ?token= (necessário para <img>).
+  const authHeader = req.headers.authorization || '';
+  const [scheme, headerToken] = authHeader.split(' ');
+  const cookieMatch = (req.headers.cookie || '').match(/(?:^|;\s*)(?:provirpanel_token|token)=([^;]+)/);
+  const token = (scheme === 'Bearer' && headerToken)
+    || (typeof req.query.token === 'string' ? req.query.token : null)
+    || (cookieMatch ? decodeURIComponent(cookieMatch[1]) : null);
+  if (!token) return res.status(401).json({ error: 'Unauthorized' });
+  try {
+    jwt.verify(token, process.env.JWT_SECRET || 'change-me');
+  } catch {
+    return res.status(401).json({ error: 'Invalid token' });
+  }
+
+  try {
+    const file = String(req.params.file || '');
+    if (!file || /[\\/]/.test(file) || file.includes('..')) {
+      return res.status(400).json({ error: 'Nome de arquivo inválido' });
+    }
+    const subfolder = typeof req.query.subfolder === 'string' ? req.query.subfolder : '';
+    const qs = new URLSearchParams({ filename: file, type: 'output' });
+    if (subfolder) qs.set('subfolder', subfolder);
+    const upstream = await fetch(`${COMFYUI_URL}/view?${qs.toString()}`, {
+      signal: AbortSignal.timeout(15000),
+    });
+    if (!upstream.ok) {
+      return res.status(upstream.status).json({ error: `ComfyUI /view retornou HTTP ${upstream.status}` });
+    }
+    res.setHeader('Content-Type', upstream.headers.get('content-type') || 'image/png');
+    res.setHeader('Cache-Control', 'private, max-age=86400');
+    const buf = Buffer.from(await upstream.arrayBuffer());
+    return res.send(buf);
+  } catch (err) {
+    return res.status(502).json({ error: `Falha ao obter imagem do ComfyUI: ${err.message}` });
+  }
+});
+
 // Allow self-signed certs for server-to-server communication
 process.env.NODE_TLS_REJECT_UNAUTHORIZED = '0';
 
@@ -339,12 +386,13 @@ router.post('/chat/smart/confirm', async (req, res, next) => {
 // Loop: modelo → toolUse → executa tool localmente (JWT do user) → toolResult → repete.
 // Streama eventos SSE: tool_call, tool_result, token (resposta final), end, error.
 const AGENT_SYSTEM_PROMPT = `Você é o Zeus, assistente de infraestrutura do Provir Cloud Panel.
-Você tem ferramentas de LEITURA (list_services, get_service_metrics, list_docker_containers, list_databases, list_sites, get_server_metrics, list_nginx, get_nginx_config, list_service_templates) e ferramentas de AÇÃO (restart_service, start_service, stop_service, update_service, create_service, delete_service).
+Você tem ferramentas de LEITURA (list_services, get_service_metrics, list_docker_containers, list_databases, list_sites, get_server_metrics, list_nginx, get_nginx_config, list_service_templates, generate_image) e ferramentas de AÇÃO (restart_service, start_service, stop_service, update_service, create_service, delete_service).
 
 Regras de LEITURA:
 - Para consultar estado de máquina, serviços, containers, bancos, sites ou métricas, USE as ferramentas de leitura em vez de inventar dados.
 - SEMPRE chame a ferramenta apropriada para responder sobre estado ATUAL, mesmo que em mensagens anteriores desta conversa você tenha dito que "não tem como ver" algo. Suas capacidades são definidas pelas ferramentas deste turno, NÃO pelo histórico. Se o usuário pergunta sobre GPU, CPU, RAM, disco ou núcleos da máquina, chame get_server_metrics (ela retorna CPU, memória, disco E GPU — uso, VRAM, temperatura e potência de cada GPU). NUNCA responda que "não tem métricas de GPU" sem antes chamar get_server_metrics; a ferramenta expõe a GPU.
 - Quando o usuário pedir para VER/MOSTRAR/EXIBIR o CONTEÚDO de configuração do Nginx (o arquivo .conf, o vhost de um domínio), use get_nginx_config (retorna o texto renderizado) — não use apenas list_nginx (que só traz metadados). Sem id/domínio, get_nginx_config traz todos os vhosts; com id ou domain, traz só aquele. Ao exibir, use um bloco de código para o conteúdo.
+- GERAR IMAGEM: quando o usuário pedir para "gerar/criar/desenhar/fazer/produzir uma imagem/foto/ilustração/arte/desenho de algo", CHAME generate_image. Traduza o pedido para um prompt DESCRITIVO em INGLÊS (o modelo Flux entende melhor inglês). A ferramenta retorna um campo imageUrl e um campo markdown — na sua resposta ao usuário, EXIBA a imagem inserindo a sintaxe de imagem markdown ![descrição](imageUrl) (use o campo markdown que a ferramenta devolve). NÃO descreva a imagem em texto no lugar de mostrá-la; mostre-a. A geração leva ~30s, então é normal demorar um pouco.
 
 Regras de AÇÃO (importante):
 - Para QUALQUER alteração de configuração (healthcheck, portas, envs, imagem, comando, etc.), você DEVE CHAMAR a ferramenta correspondente (ex.: update_service). NUNCA escreva o JSON/YAML da configuração, um "exemplo de configuração" ou instruções de "vá em settings e cole isto" como texto na resposta — isso é considerado ERRO. Quem aplica a mudança é a ferramenta; o próprio painel mostra ao usuário o card de confirmação. Se você se pegar prestes a escrever um bloco de configuração, PARE e chame a ferramenta em vez disso.
@@ -1168,3 +1216,4 @@ router.get('/storage/status/:jobId', async (req, res, next) => {
 });
 
 module.exports = router;
+module.exports.imagesRouter = imagesRouter;

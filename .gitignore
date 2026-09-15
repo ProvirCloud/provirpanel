@@ -64,3 +64,10 @@ Thumbs.db
 
 # Repositório do Vanguard OS clonado localmente (repo git próprio — não aninhar aqui)
 vanguardos-repo/
+
+# Backups de .env e dumps de banco (contêm segredos/dados — nunca versionar)
+.env.bak*
+*.env.bak*
+backups/
+*.db.bak-*
+*.db.bak*

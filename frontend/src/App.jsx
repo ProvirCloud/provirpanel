@@ -26,6 +26,7 @@ import InfrastructureCanvasPage from './pages/InfrastructureCanvasPage'
 import GitHubServiceWizardPage from './pages/GitHubServiceWizardPage.jsx'
 import ServiceDetailsPage from './pages/ServiceDetailsPage.jsx'
 import StacksPanel from './components/StacksPanel.jsx'
+import BuilderPanel from './components/BuilderPanel.jsx'
 import ZeusChat from './components/ZeusChat.jsx'
 import FloatingTerminal from './components/FloatingTerminal.jsx'
 import TerminalPage from './components/TerminalPage.jsx'
@@ -157,6 +158,7 @@ const App = () => {
           <Route path="security" element={<ModulePage title="Auditoria" subtitle="Governança, trilhas críticas e segurança"><SecurityAuditPanel showPageIntro={false} /></ModulePage>} />
           <Route path="logs" element={<ModulePage title="Logs" subtitle="Observabilidade, eventos e troubleshooting"><LogsPanel showPageIntro={false} /></ModulePage>} />
           <Route path="zeus-panels" element={<ModulePage title="Zeus AI" subtitle="Painéis conectados e inteligência centralizada"><ZeusPanels /></ModulePage>} />
+          <Route path="builder" element={<ModulePage showHeader={false} title="Zeus Builder" subtitle="Do pedido ao software: plano, wireframe, build e link"><BuilderPanel /></ModulePage>} />
           <Route path="databases" element={<ModulePage title="Database Connections" subtitle="Conexões, schemas e indexação para AI"><DatabaseConnectionsPanel /></ModulePage>} />
           <Route path="workspaces" element={<ModulePage title="Workspaces" subtitle="Grupos, empresas, projetos e painéis filhos"><WorkspacesPage /></ModulePage>} />
           <Route path="integrations" element={<ModulePage title="Integrações" subtitle="Tokens de integração (Open WebUI / OpenAI-compatível)"><IntegrationTokensPanel /></ModulePage>} />

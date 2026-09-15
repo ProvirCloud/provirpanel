@@ -12,6 +12,9 @@
 
 const BASE_URL = `http://localhost:${process.env.PORT || 3000}`;
 
+// ComfyUI local (geração de imagem via Flux). Porta 8267 (ver PM2 "comfyui").
+const COMFYUI_URL = process.env.COMFYUI_URL || 'http://127.0.0.1:8267';
+
 /**
  * Faz um GET autenticado numa rota local do painel.
  * @param {string} pathname - caminho (ex.: '/docker/services')
@@ -145,6 +148,23 @@ const TOOL_DEFS = [
     description:
       'Lista os TEMPLATES de serviço disponíveis para CRIAR um novo serviço (id, label, imagem padrão, porta interna e para que serve). Use ANTES de create_service para escolher o template correto a partir do que o usuário pediu (ex.: "quero um Redis" → redis-cache; "um banco Postgres" → postgres-db; "um Grafana" → custom-image com imageName grafana/grafana). Também serve para responder "o que posso criar/instalar".',
     inputSchema: { type: 'object', properties: {}, required: [] },
+  },
+  {
+    name: 'generate_image',
+    description:
+      'Gera uma IMAGEM a partir de uma descrição em texto (prompt), usando o modelo Flux rodando localmente nas GPUs (ComfyUI). CHAME esta ferramenta sempre que o usuário pedir para "gerar/criar/desenhar/fazer uma imagem/foto/ilustração/arte de ...". O prompt deve ser em INGLÊS e descritivo (traduza o pedido do usuário se necessário). Retorna a URL da imagem gerada para você exibir ao usuário em markdown: ![descricao](url). A geração leva ~20-30s.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        prompt: {
+          type: 'string',
+          description: 'Descrição da imagem em INGLÊS, detalhada (ex.: "a photorealistic red sports car on a mountain road at sunset, highly detailed"). Traduza o pedido do usuário para inglês.',
+        },
+        width: { type: 'number', description: 'Largura em pixels (padrão 1024). Use múltiplos de 64.' },
+        height: { type: 'number', description: 'Altura em pixels (padrão 1024). Use múltiplos de 64.' },
+      },
+      required: ['prompt'],
+    },
   },
 ];
 
@@ -565,6 +585,85 @@ const IMPLS = {
         description: t.description,
       })),
     };
+  },
+
+  // Gera uma imagem via ComfyUI (Flux Q8 distribuído entre GPU 0 e GPU 1).
+  // Submete o workflow validado, faz polling do /history e devolve a URL
+  // servida pelo próprio painel (/zeus/images/:file), que respeita a auth.
+  async generate_image(input, token) {
+    const prompt = String(input.prompt || '').trim();
+    if (!prompt) throw new Error('Faltou o prompt (descrição da imagem em inglês).');
+    const width = Number.isInteger(input.width) ? input.width : 1024;
+    const height = Number.isInteger(input.height) ? input.height : 1024;
+    const seed = Math.floor(Math.random() * 2 ** 31);
+
+    // Workflow Flux distribuído (o mesmo validado E2E): Flux->cuda:0, T5->cuda:1, VAE->cuda:0.
+    const wf = {
+      '12': { class_type: 'UnetLoaderGGUFMultiGPU', inputs: { unet_name: 'flux1-dev-Q8_0.gguf', device: 'cuda:0' } },
+      '11': { class_type: 'DualCLIPLoaderMultiGPU', inputs: { clip_name1: 't5xxl_fp16.safetensors', clip_name2: 'clip_l.safetensors', type: 'flux', device: 'cuda:1' } },
+      '10': { class_type: 'VAELoaderMultiGPU', inputs: { vae_name: 'ae.safetensors', device: 'cuda:0' } },
+      '6': { class_type: 'CLIPTextEncode', inputs: { text: prompt, clip: ['11', 0] } },
+      '16': { class_type: 'CLIPTextEncode', inputs: { text: '', clip: ['11', 0] } },
+      '5': { class_type: 'EmptyLatentImage', inputs: { width, height, batch_size: 1 } },
+      '13': { class_type: 'KSampler', inputs: { seed, steps: 20, cfg: 1.0, sampler_name: 'euler', scheduler: 'simple', denoise: 1.0, model: ['12', 0], positive: ['6', 0], negative: ['16', 0], latent_image: ['5', 0] } },
+      '8': { class_type: 'VAEDecode', inputs: { samples: ['13', 0], vae: ['10', 0] } },
+      '9': { class_type: 'SaveImage', inputs: { filename_prefix: 'zeus_gen', images: ['8', 0] } },
+    };
+
+    const submit = await fetch(`${COMFYUI_URL}/prompt`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ prompt: wf }),
+      signal: AbortSignal.timeout(15000),
+    });
+    if (!submit.ok) {
+      const t = await submit.text().catch(() => '');
+      throw new Error(`Falha ao enfileirar geração no ComfyUI (HTTP ${submit.status}). ${t.slice(0, 300)}`);
+    }
+    const { prompt_id: promptId } = await submit.json();
+    if (!promptId) throw new Error('ComfyUI não retornou prompt_id.');
+
+    // Polling do histórico até concluir (timeout 180s).
+    const deadline = Date.now() + 180000;
+    while (Date.now() < deadline) {
+      await new Promise((r) => setTimeout(r, 2500));
+      let hist;
+      try {
+        const hr = await fetch(`${COMFYUI_URL}/history/${promptId}`, { signal: AbortSignal.timeout(10000) });
+        hist = await hr.json();
+      } catch { continue; }
+      const entry = hist && hist[promptId];
+      if (!entry) continue;
+      const status = entry.status || {};
+      if (status.status_str === 'error') {
+        const msg = JSON.stringify(status.messages || status).slice(0, 500);
+        throw new Error(`Geração falhou no ComfyUI: ${msg}`);
+      }
+      const outputs = entry.outputs || {};
+      for (const node of Object.values(outputs)) {
+        const imgs = node.images || [];
+        if (imgs.length) {
+          const img = imgs[0];
+          const file = img.filename;
+          const sub = img.subfolder || '';
+          const params = new URLSearchParams();
+          if (sub) params.set('subfolder', sub);
+          if (token) params.set('token', token);
+          const q = params.toString();
+          const url = `/zeus/images/${encodeURIComponent(file)}${q ? `?${q}` : ''}`;
+          return {
+            status: 'ok',
+            prompt,
+            width,
+            height,
+            imageUrl: url,
+            markdown: `![${prompt.slice(0, 60)}](${url})`,
+            note: 'Exiba a imagem ao usuário usando o campo markdown (sintaxe de imagem markdown com a imageUrl).',
+          };
+        }
+      }
+    }
+    throw new Error('Tempo esgotado aguardando a geração da imagem (>180s).');
   },
 };
 

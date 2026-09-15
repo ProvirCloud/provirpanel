@@ -329,3 +329,176 @@ model AiUpload {
   @@index([conversationId], name: "idx_ai_upload_conv")
   @@map("ai_uploads")
 }
+
+// ==================== ZEUS BUILDER (agente arquiteto → dev) ====================
+// Multi-tenant: `clienteId` escopa por cliente (null = painel local), `userId` o dono.
+// Todo estado vive aqui (stateless no processo) para permitir múltiplas instâncias do
+// gateway atrás de um LB. Ver docs/PLANO-AGENTE-ARQUITETO.md e CONTEXTO-SESSAO-ZEUS-BUILDER.md.
+
+// Projeto do Builder: unidade de trabalho (um app novo ou um sistema existente trazido via git).
+model AgentProject {
+  id           String   @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  clienteId    String?  @map("cliente_id")            // escopo multi-cliente (null = painel local)
+  userId       String   @map("user_id") @db.Uuid       // dono
+  name         String
+  kind         String   @default("new")                // new | existing
+  gitUrl       String?  @map("git_url")                // repo do sistema existente, se houver
+  gitBranch    String?  @map("git_branch")
+  hosting      String?  @db.Text                        // onde está hospedado (texto livre do dev)
+  status       String   @default("discovery")           // discovery|studying|architecture|planning|awaiting_approval|approved|building|provisioned|done|error|cancelled
+  metadata     Json     @default("{}")                  // stack detectada, achados de auditoria, etc.
+  createdAt    DateTime @default(now()) @map("created_at")
+  updatedAt    DateTime @updatedAt @map("updated_at")
+
+  sessions   AgentSession[]
+  plans      AgentPlan[]
+  specs      AgentSpec[]
+  wireframes AgentWireframe[]
+  buildRuns  AgentBuildRun[]
+
+  @@index([clienteId, userId, updatedAt(sort: Desc)], name: "idx_agent_project_scope")
+  @@map("agent_projects")
+}
+
+// Sessão de conversa/pipeline. Guarda o estágio (state machine) e é retomável.
+model AgentSession {
+  id           String   @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  projectId    String   @map("project_id") @db.Uuid
+  project      AgentProject @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  clienteId    String?  @map("cliente_id")
+  userId       String   @map("user_id") @db.Uuid
+  channel      String   @default("panel")               // panel | cli
+  stage        String   @default("discovery")            // estágio atual da state machine
+  activePlanId String?  @map("active_plan_id") @db.Uuid  // ponteiro p/ plano corrente
+  metadata     Json     @default("{}")
+  createdAt    DateTime @default(now()) @map("created_at")
+  updatedAt    DateTime @updatedAt @map("updated_at")
+
+  events AgentSessionEvent[]
+
+  @@index([projectId, updatedAt(sort: Desc)], name: "idx_agent_session_project")
+  @@index([clienteId, userId], name: "idx_agent_session_scope")
+  @@map("agent_sessions")
+}
+
+// Log append-only da sessão (mensagens, decisões, transições). Fonte da verdade p/ retomar.
+model AgentSessionEvent {
+  id         String   @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  sessionId  String   @map("session_id") @db.Uuid
+  session    AgentSession @relation(fields: [sessionId], references: [id], onDelete: Cascade)
+  role       String                                       // user | assistant | system | tool | stage
+  agent      String?                                      // persona que gerou (arquiteto, planejador, dev...)
+  content    String?  @db.Text
+  data       Json?                                        // payloads estruturados (plano, tool result, etc.)
+  tokensIn   Int      @default(0) @map("tokens_in")
+  tokensOut  Int      @default(0) @map("tokens_out")
+  createdAt  DateTime @default(now()) @map("created_at")
+
+  @@index([sessionId, createdAt], name: "idx_agent_event_session")
+  @@map("agent_session_events")
+}
+
+// Plano versionado (atualizável). Cada mudança relevante cria nova versão; histórico preservado.
+model AgentPlan {
+  id         String   @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  projectId  String   @map("project_id") @db.Uuid
+  project    AgentProject @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  version    Int      @default(1)
+  title      String
+  summary    String?  @db.Text
+  content    Json     @default("{}")                      // plano estruturado (titulo, tasks, riscos, custo...)
+  status     String   @default("draft")                   // draft | proposed | approved | superseded
+  approvedAt DateTime? @map("approved_at")
+  approvedBy String?  @map("approved_by") @db.Uuid
+  createdAt  DateTime @default(now()) @map("created_at")
+
+  tasks AgentTask[]
+
+  @@unique([projectId, version], name: "uq_agent_plan_version")
+  @@index([projectId, createdAt(sort: Desc)], name: "idx_agent_plan_project")
+  @@map("agent_plans")
+}
+
+// Especificação técnica gerada (documento) — também versionável.
+model AgentSpec {
+  id         String   @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  projectId  String   @map("project_id") @db.Uuid
+  project    AgentProject @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  version    Int      @default(1)
+  title      String
+  content    String   @db.Text                            // markdown da spec
+  data       Json     @default("{}")                      // requisitos estruturados, contratos de API
+  createdAt  DateTime @default(now()) @map("created_at")
+
+  @@unique([projectId, version], name: "uq_agent_spec_version")
+  @@map("agent_specs")
+}
+
+// Wireframe/mockup gerado (imagem via Bedrock) — com prompt e feedback do usuário.
+model AgentWireframe {
+  id         String   @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  projectId  String   @map("project_id") @db.Uuid
+  project    AgentProject @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  version    Int      @default(1)
+  prompt     String   @db.Text                            // prompt usado p/ gerar
+  imagePath  String?  @map("image_path")                  // caminho/URL da imagem gerada
+  status     String   @default("generated")               // generated | approved | rejected
+  feedback   String?  @db.Text                            // pedido de alteração do usuário
+  createdAt  DateTime @default(now()) @map("created_at")
+
+  @@index([projectId, version], name: "idx_agent_wireframe_project")
+  @@map("agent_wireframes")
+}
+
+// Execução do build (após aprovação). Serve também como fila/lock p/ multi-instância:
+// uma instância "reivindica" um run com UPDATE ... WHERE status='queued'.
+model AgentBuildRun {
+  id            String   @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  projectId     String   @map("project_id") @db.Uuid
+  project       AgentProject @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  planId        String   @map("plan_id") @db.Uuid
+  clienteId     String?  @map("cliente_id")
+  userId        String   @map("user_id") @db.Uuid
+  status        String   @default("queued")               // queued|running|succeeded|failed|cancelled
+  claimedBy     String?  @map("claimed_by")               // id/host da instância que pegou o job
+  startedAt     DateTime? @map("started_at")
+  finishedAt    DateTime? @map("finished_at")
+  devStackUrl   String?  @map("dev_stack_url")            // link no domínio gerado
+  tokensIn      Int      @default(0) @map("tokens_in")
+  tokensOut     Int      @default(0) @map("tokens_out")
+  costUsd       Decimal  @default(0) @map("cost_usd") @db.Decimal(10, 4)
+  error         String?  @db.Text
+  createdAt     DateTime @default(now()) @map("created_at")
+  updatedAt     DateTime @updatedAt @map("updated_at")
+
+  tasks AgentTask[]
+
+  @@index([status, createdAt], name: "idx_agent_run_queue")
+  @@index([projectId, createdAt(sort: Desc)], name: "idx_agent_run_project")
+  @@map("agent_build_runs")
+}
+
+// Micro-task atômica (do planner) executada pelo Dev Executor Bedrock.
+model AgentTask {
+  id          String   @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  planId      String   @map("plan_id") @db.Uuid
+  plan        AgentPlan @relation(fields: [planId], references: [id], onDelete: Cascade)
+  buildRunId  String?  @map("build_run_id") @db.Uuid
+  buildRun    AgentBuildRun? @relation(fields: [buildRunId], references: [id], onDelete: SetNull)
+  seq         Int                                          // ordem de execução
+  descricao   String
+  tipo        String   @default("codigo")                 // codigo|config|comando|analise
+  prompt      String   @db.Text                            // prompt autocontido ("mastigado") p/ o dev
+  model       String?                                      // override de modelo, se houver
+  dependsOn   Int[]    @default([]) @map("depends_on")     // seqs das tasks das quais depende
+  status      String   @default("pending")                // pending|running|done|failed|skipped
+  result      String?  @db.Text                            // saída do dev (código/artefato)
+  tokensIn    Int      @default(0) @map("tokens_in")
+  tokensOut   Int      @default(0) @map("tokens_out")
+  createdAt   DateTime @default(now()) @map("created_at")
+  updatedAt   DateTime @updatedAt @map("updated_at")
+
+  @@index([planId, seq], name: "idx_agent_task_plan")
+  @@index([buildRunId, status], name: "idx_agent_task_run")
+  @@map("agent_tasks")
+}
